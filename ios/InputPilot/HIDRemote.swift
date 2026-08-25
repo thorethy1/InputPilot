@@ -33,15 +33,15 @@ enum HIDEvent: Codable, Equatable {
     var line: String {
         func button(_ b: MouseButton) -> String { String(describing: b) }
         switch self {
-        case let .mouseMove(x, y): "move \(x) \(y)"
-        case let .scroll(v): "move 0 0 \(v)"
-        case let .mouseDown(b): "button \(button(b)) down"
-        case let .mouseUp(b): "button \(button(b)) up"
-        case let .click(b): "click \(button(b))"
-        case let .typeText(t): "type \(t)"
-        case let .key(k), let .keyCombo(k): "key \(k)"
-        case .releaseAll: "release all"
-        case .ping: "ping"
+        case let .mouseMove(x, y): return "move \(x) \(y)"
+        case let .scroll(v): return "move 0 0 \(v)"
+        case let .mouseDown(b): return "button \(button(b)) down"
+        case let .mouseUp(b): return "button \(button(b)) up"
+        case let .click(b): return "click \(button(b))"
+        case let .typeText(t): return "type \(t)"
+        case let .key(k), let .keyCombo(k): return "key \(k)"
+        case .releaseAll: return "release all"
+        case .ping: return "ping"
         }
     }
 }
@@ -107,7 +107,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
     }
     private func sendLine(_ line: String) async throws {
         guard let connection else { throw TransportError.unavailable }
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: Data((line + "\n").utf8), completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             })
