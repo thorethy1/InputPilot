@@ -1,0 +1,49 @@
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Secrets & local machine config (never commit)
+**/config.env
+**/include/wifi_secrets.h
+**/.env
+**/*.pem
+**/*.p12
+**/credentials.json
+
+# Local lab notes (not published)
+**/docs/PHASE_LOG.md
+**/docs/ISSUES.md
+**/PROGRESS.md
+
+# Build / test artifacts
+**/.pio/
+**/.pioenvs/
+**/.piolibdeps/
+**/.pytest_cache/
+**/__pycache__/
+**/tests/output/
+*.pyc
+*.o
+*.elf
+*.bin
+!**/partitions/*.bin
+
+# Xcode / Android (future app folders)
+**/DerivedData/
+**/.build/
+**/Pods/
+**/xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+**/build/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+**/.gradle/
+**/local.properties
+**/captures/

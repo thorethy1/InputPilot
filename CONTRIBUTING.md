@@ -1,0 +1,86 @@
+# Contributing
+
+Thanks for helping improve **inputpilot** / `usb-hid-s3`.
+
+## Development setup
+
+```bash
+cd usb-hid-s3
+cp config.env.example config.env
+# Optional STA seed (never commit):
+cp include/wifi_secrets.h.example include/wifi_secrets.h
+```
+
+Requires [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation.html)
+and Python 3.11+ for host tools.
+
+## Checks to run before a PR
+
+```bash
+cd usb-hid-s3
+pio test -e native          # required — also runs in CI
+pio run -e esp32s3          # required — also runs in CI
+```
+
+Optional on-device (macOS + Waveshare ESP32-S3-Zero/Mini):
+
+```bash
+./scripts/e2e.sh            # needs board + Input Monitoring / Accessibility
+```
+
+Do **not** expect on-device pytest to pass in GitHub Actions.
+
+### iOS companion (`ios/`)
+
+Requires Xcode 15+ on macOS. From the repo root:
+
+```bash
+cd ios
+xcodebuild -project InputPilot.xcodeproj -scheme InputPilot \
+  -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Build-only (no tests):
+
+```bash
+xcodebuild -project InputPilot.xcodeproj -scheme InputPilot \
+  -destination 'platform=iOS Simulator,name=iPhone 17' build
+```
+
+CI runs the same `xcodebuild test` path on `macos-15` (skips gracefully if `ios/` is absent).
+
+See [`ios/README.md`](ios/README.md) for Simulator vs device notes (Hotspot Configuration entitlement for Soft-AP wizard).
+
+### Android companion (`android/`)
+
+Requires JDK 17 + Android SDK 35. From the repo root:
+
+```bash
+cd android
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug
+./gradlew :app:installDebug   # emulator or device
+```
+
+CI runs unit tests + `assembleDebug` on `ubuntu-latest` (skips if `android/` is absent). Soft-AP join needs a physical device; emulator uses Continue-after-manual Wi‑Fi.
+
+See [`android/README.md`](android/README.md).
+
+## What not to commit
+
+- `include/wifi_secrets.h`, `config.env`, `.env`, keys, PEM/P12 files
+- Local lab notes: `docs/PHASE_LOG.md`, `docs/ISSUES.md`, `**/PROGRESS.md` (gitignored)
+- `.pio/` build trees
+
+## Pull requests
+
+1. One focused change per PR when possible.
+2. Keep PRs mergeable against `main`; CI must stay green.
+3. Update `CHANGELOG.md` / docs when behavior or flash steps change.
+4. Never commit secrets.
+
+## Code style
+
+- Match existing C++ / Python style in the touched files.
+- Keep pure logic in `lib/` so `pio test -e native` can cover it.
+- Prefer small, reviewable diffs over drive-by refactors.
