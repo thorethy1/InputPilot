@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0] - 2026-08-25
+
+- Added first-class BLE binary control with versioned Control, Mouse, Keyboard, and Status characteristics.
+- Added simultaneous Wi-Fi and BLE operation, persistent TCP control, capabilities, button state, and central release-all safety.
+- Added the iOS adaptive connection manager, remote trackpad, live keyboard, QWERTZ/QWERTY selection, SwiftData presets, macro recording, timed playback, and emergency STOP.
+- Added reproducible GitHub-hosted macOS signing/export and tagged-release IPA publishing.
+- Preserved Android, REST, TCP line commands, Nordic UART compatibility, provisioning, and all existing discovery flows.
+
 All notable changes to **inputpilot** / `usb-hid-s3` are documented here.
 Firmware version is `FW_VERSION` in `usb-hid-s3/include/Config.h`.
 
