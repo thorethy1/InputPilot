@@ -238,9 +238,9 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: Unit tests + assembleDebug
+      - name: Unit tests + assembleDebug + lintDebug
         if: steps.guard.outputs.present == 'true'
         working-directory: android
         run: |
           set -euo pipefail
-          ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --no-daemon

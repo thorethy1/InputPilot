@@ -80,7 +80,7 @@
 #define BLE_NUS_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // host -> device (write)
 #define BLE_NUS_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // device -> host (notify)
 
-// HID Remote Control Service v1. NUS remains for backwards compatibility.
+// InputPilot Control Service v1. NUS remains for backwards compatibility.
 #define BLE_HID_SERVICE_UUID  "7d9f0001-4f4d-4f56-4552-484944000001"
 #define BLE_HID_CONTROL_UUID  "7d9f0002-4f4d-4f56-4552-484944000001"
 #define BLE_HID_MOUSE_UUID    "7d9f0003-4f4d-4f56-4552-484944000001"

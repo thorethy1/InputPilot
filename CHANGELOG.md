@@ -8,7 +8,7 @@
 - Added reproducible GitHub-hosted macOS signing/export and tagged-release IPA publishing.
 - Preserved Android, REST, TCP line commands, Nordic UART compatibility, provisioning, and all existing discovery flows.
 
-All notable changes to **inputpilot** / `usb-hid-s3` are documented here.
+All notable changes to **InputPilot** / `usb-hid-s3` are documented here.
 Firmware version is `FW_VERSION` in `usb-hid-s3/include/Config.h`.
 
 ## 0.4.0

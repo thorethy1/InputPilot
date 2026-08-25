@@ -67,9 +67,21 @@ jobs:
           app_identifier="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")"
           profile_team="${app_identifier%%.*}"
           profile_bundle="${app_identifier#*.}"
-          bundle="${IOS_BUNDLE_ID:-$profile_bundle}"
+          default_bundle="$(
+            xcodebuild -project ios/InputPilot.xcodeproj -scheme InputPilot \
+              -configuration Release -showBuildSettings CODE_SIGNING_ALLOWED=NO 2>/dev/null \
+              | awk -F ' = ' '/^[[:space:]]*PRODUCT_BUNDLE_IDENTIFIER = / { print $2; exit }'
+          )"
+          [[ -n "$default_bundle" ]] || { echo "::error::Could not resolve the project bundle identifier."; exit 1; }
+          bundle="${IOS_BUNDLE_ID:-$default_bundle}"
           team="${APPLE_TEAM_ID:-$profile_team}"
-          if [[ "$bundle" != "$profile_bundle" && "$profile_bundle" != *'*'* ]]; then echo "::error::Bundle ID mismatch between IOS_BUNDLE_ID and provisioning profile."; exit 1; fi
+          if [[ "$profile_bundle" == *'*'* ]]; then
+            profile_prefix="${profile_bundle%\*}"
+            if [[ "$bundle" != "$profile_prefix"* ]]; then echo "::error::Bundle ID is outside the provisioning profile wildcard."; exit 1; fi
+          elif [[ "$bundle" != "$profile_bundle" ]]; then
+            echo "::error::Bundle ID mismatch between the project/IOS_BUNDLE_ID and provisioning profile."
+            exit 1
+          fi
           if [[ "$team" != "$profile_team" ]]; then echo "::error::Team ID mismatch between APPLE_TEAM_ID and provisioning profile."; exit 1; fi
           if [[ "$(date -j -f '%a %b %d %T %Z %Y' "$expiration" '+%s')" -le "$(date '+%s')" ]]; then echo "::error::Provisioning profile expired."; exit 1; fi
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
@@ -80,13 +92,15 @@ jobs:
           fi
           if [[ "$method" != enterprise ]] && ! /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices:0' "$profile_plist" >/dev/null 2>&1; then echo "::error::Provisioning profile contains no registered devices."; exit 1; fi
           echo "Signing prerequisites valid: identity found, profile current, bundle/team match, export method=$method."
-          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
-          echo "uuid=$uuid" >> "$GITHUB_OUTPUT"
-          echo "profile_name=$profile_name" >> "$GITHUB_OUTPUT"
-          echo "identity=$identity" >> "$GITHUB_OUTPUT"
-          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
-          echo "team=$team" >> "$GITHUB_OUTPUT"
-          echo "method=$method" >> "$GITHUB_OUTPUT"
+          {
+            echo "keychain=$keychain"
+            echo "uuid=$uuid"
+            echo "profile_name=$profile_name"
+            echo "identity=$identity"
+            echo "bundle=$bundle"
+            echo "team=$team"
+            echo "method=$method"
+          } >> "$GITHUB_OUTPUT"
           trap - EXIT
 
       - name: Archive iOS app
@@ -95,7 +109,7 @@ jobs:
           set -euo pipefail
           xcodebuild archive -project InputPilot.xcodeproj -scheme InputPilot \
             -configuration Release -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/HIDRemote.xcarchive" \
+            -archivePath "$RUNNER_TEMP/InputPilot.xcarchive" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM='${{ steps.signing.outputs.team }}' \
@@ -115,18 +129,18 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Add :provisioningProfiles:${{ steps.signing.outputs.bundle }} string ${{ steps.signing.outputs.profile_name }}' "$export_options"
           /usr/libexec/PlistBuddy -c 'Add :signingCertificate string ${{ steps.signing.outputs.identity }}' "$export_options"
           mkdir -p "$RUNNER_TEMP/export"
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/HIDRemote.xcarchive" \
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/InputPilot.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" -exportOptionsPlist "$export_options" \
             OTHER_CODE_SIGN_FLAGS='--keychain ${{ steps.signing.outputs.keychain }}'
           ipa="$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' -print -quit)"
           [[ -n "$ipa" ]] || { echo "::error::Archive exported without an IPA."; exit 1; }
-          mv "$ipa" "$RUNNER_TEMP/HIDRemote.ipa"
+          mv "$ipa" "$RUNNER_TEMP/InputPilot.ipa"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HIDRemote-${{ github.ref_name }}
-          path: ${{ runner.temp }}/HIDRemote.ipa
+          name: InputPilot-${{ github.ref_name }}
+          path: ${{ runner.temp }}/InputPilot.ipa
           if-no-files-found: error
 
       - name: Attach IPA to GitHub Release
@@ -135,7 +149,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/HIDRemote.ipa#HIDRemote-$GITHUB_REF_NAME.ipa" --clobber
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/InputPilot.ipa#InputPilot-$GITHUB_REF_NAME.ipa" --clobber
 
       - name: Remove signing material
         if: always()

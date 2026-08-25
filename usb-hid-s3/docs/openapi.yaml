@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: inputpilot / usb-hid-s3 HTTP API
+  title: InputPilot / usb-hid-s3 HTTP API
   description: |
     REST control and WiFi provisioning for the ESP32-S3 USB HID helper.
 
@@ -23,8 +23,8 @@ info:
     authenticate with a line: `auth <token>`.
   version: 0.5.0
   contact:
-    name: inputpilot
-    url: https://github.com/thorethy1/inputpilot
+    name: InputPilot
+    url: https://github.com/thorethy1/InputPilot
 
 servers:
   - url: http://hid-helper-xxxx.local

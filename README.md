@@ -1,19 +1,19 @@
-# HID Remote / inputpilot
+# InputPilot
 
-[![CI](https://github.com/thorethy1/inputpilot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thorethy1/inputpilot/actions/workflows/ci.yml)
-[![Firmware + unit tests](https://img.shields.io/github/actions/workflow/status/thorethy1/inputpilot/ci.yml?branch=main&job=Native%20unit%20tests%20%2B%20firmware%20build&label=firmware%20%2B%20unit%20tests)](https://github.com/thorethy1/inputpilot/actions/workflows/ci.yml)
-[![OpenAPI](https://img.shields.io/github/actions/workflow/status/thorethy1/inputpilot/ci.yml?branch=main&job=OpenAPI%20lint&label=OpenAPI)](https://github.com/thorethy1/inputpilot/actions/workflows/ci.yml)
-[![iOS](https://img.shields.io/github/actions/workflow/status/thorethy1/inputpilot/ci.yml?branch=main&job=iOS%20build%20%2B%20unit%20tests&label=iOS)](https://github.com/thorethy1/inputpilot/actions/workflows/ci.yml)
-[![Android](https://img.shields.io/github/actions/workflow/status/thorethy1/inputpilot/ci.yml?branch=main&job=Android%20build%20%2B%20unit%20tests&label=Android)](https://github.com/thorethy1/inputpilot/actions/workflows/ci.yml)
+[![CI](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
+[![Firmware + unit tests](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Native%20unit%20tests%20%2B%20firmware%20build&label=firmware%20%2B%20unit%20tests)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
+[![OpenAPI](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=OpenAPI%20lint&label=OpenAPI)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
+[![iOS](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=iOS%20build%20%2B%20unit%20tests&label=iOS)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
+[![Android](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Android%20build%20%2B%20unit%20tests&label=Android)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 
-**HID Remote** is an ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a trackpad, live keyboard, shortcuts, local presets, and recordable/playable macros.
+**InputPilot** is an ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a trackpad, live keyboard, shortcuts, local presets, and recordable/playable macros.
 
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 
 | Name | Where you see it |
 |------|------------------|
-| **inputpilot** | GitHub repository |
+| **InputPilot** | GitHub repository |
 | **usb-hid-s3** | Firmware folder / USB product family name |
 | **hid-helper** | mDNS hostname prefix (`hid-helper-xxxx.local`; suffix from device MAC) |
 
@@ -49,7 +49,7 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 
 ### 3. Companions (optional)
 
-- **[iOS HID Remote](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
+- **[iOS InputPilot](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
 - **[Android InputPilot](android/)** — Kotlin + Jetpack Compose; NSD, Soft-AP, same REST. Firmware **0.4.0+**. See [`android/README.md`](android/README.md).
 
 <p align="center">
@@ -85,7 +85,7 @@ Badges above track the latest `main` workflow run
 - **esp32s3 firmware compile**
 - OpenAPI YAML sanity check
 - **InputPilot iOS** build + unit tests (`macos-15` Simulator)
-- **InputPilot Android** unit tests + `assembleDebug` (`ubuntu-latest`)
+- **InputPilot Android** unit tests + `assembleDebug` + `lintDebug` (`ubuntu-latest`)
 
 ## Using the iOS remote
 
@@ -104,7 +104,7 @@ Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+b
 
 No local Mac is required for development handoff or signed builds. GitHub Actions uses a hosted macOS runner for unsigned builds/tests and a manually triggered workflow for manual Apple signing.
 
-Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow** and download `HIDRemote.ipa` from the run artifacts. A `v*` tag can also attach the IPA to a GitHub Release.
+Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow** and download `InputPilot.ipa` from the run artifacts. A `v*` tag can also attach the IPA to a GitHub Release.
 
 Signing inputs are never committed or uploaded as artifacts and are reconstructed only under `$RUNNER_TEMP`. Detailed preparation, diagnostics, download and cleanup behavior are documented in [iOS CI/CD](docs/IOS_CICD.md).
 
@@ -116,7 +116,7 @@ pio test -e native
 pio run -e esp32s3
 
 cd ../android
-./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
+./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --no-daemon
 ```
 
 iOS build/tests run with `xcodebuild test` in CI on `macos-15`. OpenAPI validation and all three platform jobs run on pull requests and pushes to `main`. Hardware E2E suites require a connected ESP32-S3 and are documented under `usb-hid-s3/tests`.

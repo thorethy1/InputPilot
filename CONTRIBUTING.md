@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve **inputpilot** / `usb-hid-s3`.
+Thanks for helping improve **InputPilot** / `usb-hid-s3`.
 
 ## Development setup
 

@@ -16,9 +16,9 @@ On Linux/Windows, use a Base64 encoder that does not add line wrapping. Never ad
 
 ## Running and downloading
 
-Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and publishes `HIDRemote.ipa` in the run's Artifacts section. The iPhone must be covered by the supplied development/ad-hoc profile.
+Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and publishes `InputPilot.ipa` in the run's Artifacts section. The iPhone must be covered by the supplied development/ad-hoc profile.
 
-Pushing a `v*` tag runs the same job and attaches `HIDRemote-vX.Y.Z.ipa` to the matching GitHub Release. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
+Pushing a `v*` tag runs the same job and attaches `InputPilot-vX.Y.Z.ipa` to the matching GitHub Release. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
 
 All reconstructed inputs, derived data, archive, export options, and IPA staging live under `$RUNNER_TEMP`. The profile and temporary keychain are removed in an always-running cleanup step; GitHub also discards the hosted runner after the job.
 

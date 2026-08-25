@@ -1,6 +1,6 @@
 # InputPilot (iOS)
 
-SwiftUI companion app for discovering and controlling **inputpilot** ESP32-S3 devices over the local network.
+SwiftUI companion app for discovering and controlling **InputPilot** ESP32-S3 devices over the local network.
 
 <p align="center">
   <img src="../docs/images/ios-device-list.jpg" alt="Device list with two online hid-helpers" width="240">
