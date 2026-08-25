@@ -52,6 +52,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let staIp: String?
     let mdns: String?
     let authRequired: Bool
+    let protocolVersion: Int
+    let capabilities: [String]
 
     enum CodingKeys: String, CodingKey {
         case ok
@@ -63,6 +65,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case staIp = "sta_ip"
         case mdns
         case authRequired = "auth_required"
+        case protocolVersion = "protocol_version"
+        case capabilities
     }
 
     init(
@@ -74,7 +78,9 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         jiggleIntervalMs: Int,
         staIp: String? = nil,
         mdns: String? = nil,
-        authRequired: Bool = false
+        authRequired: Bool = false,
+        protocolVersion: Int = 0,
+        capabilities: [String] = []
     ) {
         self.ok = ok
         self.name = name
@@ -85,6 +91,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.staIp = staIp
         self.mdns = mdns
         self.authRequired = authRequired
+        self.protocolVersion = protocolVersion
+        self.capabilities = capabilities
     }
 
     init(from decoder: Decoder) throws {
@@ -99,6 +107,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         mdns = try container.decodeIfPresent(String.self, forKey: .mdns)
         // Older firmware (e.g. 0.3.3) omits auth_required.
         authRequired = try container.decodeIfPresent(Bool.self, forKey: .authRequired) ?? false
+        protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
+        capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
     }
 }
 

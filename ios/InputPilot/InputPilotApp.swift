@@ -7,6 +7,6 @@ struct InputPilotApp: App {
         WindowGroup {
             ContentView()
         }
-        .modelContainer(for: StoredDevice.self)
+        .modelContainer(for: StoredDevice.self, HIDPreset.self, HIDMacro.self)
     }
 }

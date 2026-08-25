@@ -30,6 +30,14 @@ struct DeviceDetailView: View {
                 .accessibilityLabel("Status \(presence.title)")
             }
 
+            Section("Remote Control") {
+                NavigationLink {
+                    HIDControlView(device: device)
+                } label: {
+                    Label("Open Trackpad & Keyboard", systemImage: "computermouse")
+                }
+            }
+
             Section("Device") {
                 LabeledContent("Device ID", value: device.deviceId)
                 if let version = device.firmwareVersion {

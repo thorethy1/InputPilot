@@ -34,6 +34,7 @@
 		A10000000000000000000025 /* SavedDeviceIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000028 /* SavedDeviceIndex.swift */; };
 		A10000000000000000000026 /* ConfirmDeviceForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* ConfirmDeviceForm.swift */; };
 		A10000000000000000000027 /* SavedDeviceIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000030 /* SavedDeviceIndexTests.swift */; };
+		A10000000000000000000028 /* HIDRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000031 /* HIDRemote.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -77,6 +78,7 @@
 		A20000000000000000000028 /* SavedDeviceIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedDeviceIndex.swift; sourceTree = "<group>"; };
 		A20000000000000000000029 /* ConfirmDeviceForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmDeviceForm.swift; sourceTree = "<group>"; };
 		A20000000000000000000030 /* SavedDeviceIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedDeviceIndexTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000031 /* HIDRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDRemote.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -111,6 +113,7 @@
 			children = (
 				A20000000000000000000001 /* InputPilotApp.swift */,
 				A20000000000000000000002 /* ContentView.swift */,
+				A20000000000000000000031 /* HIDRemote.swift */,
 				A70000000000000000000009 /* Views */,
 				A70000000000000000000005 /* Models */,
 				A70000000000000000000006 /* Services */,
@@ -313,6 +316,7 @@
 				A10000000000000000000023 /* DevicePresenceStatus.swift in Sources */,
 				A10000000000000000000025 /* SavedDeviceIndex.swift in Sources */,
 				A10000000000000000000026 /* ConfirmDeviceForm.swift in Sources */,
+				A10000000000000000000028 /* HIDRemote.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Connect to your authorized ESP32-S3 HID Remote.</string>
 	<key>CFBundleDisplayName</key>
 	<string>InputPilot</string>
 	<key>NSAppTransportSecurity</key>
