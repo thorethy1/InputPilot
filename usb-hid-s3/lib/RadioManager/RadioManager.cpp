@@ -32,6 +32,20 @@ volatile bool s_bleTearingDown = false;
 
 bool s_bleAuthed = false;
 bool s_tcpAuthed = false;
+WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
+WiFiClient s_tcpClient;
+std::string s_tcpLineBuf;
+
+void sendControlReply(const char *source, const char *reply) {
+  if (!reply) return;
+  if (strcmp(source, "ble") == 0 && s_bleTx && s_bleConnected) {
+    s_bleTx->setValue(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
+    s_bleTx->notify();
+  } else if (strcmp(source, "wifi") == 0 && s_tcpClient && s_tcpClient.connected()) {
+    s_tcpClient.print(reply);
+    s_tcpClient.print("\n");
+  }
+}
 
 void dispatchControlLine(const std::string &line, const char *source,
                          bool *authed) {
@@ -42,6 +56,7 @@ void dispatchControlLine(const std::string &line, const char *source,
   }
   if (gate == ControlLineGate::Consumed) {
     LOG_INFO("control auth %s src=%s", *authed ? "ok" : "failed", source);
+    sendControlReply(source, controlAuthReply(gate, *authed));
     return;
   }
   handleCommandLine(line, source);
@@ -127,11 +142,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 RxCallbacks s_rxCallbacks;
 BinaryCallbacks s_binaryCallbacks;
 ServerCallbacks s_serverCallbacks;
-
-// WiFi TCP line server
-WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
-WiFiClient s_tcpClient;
-std::string s_tcpLineBuf;
 
 }  // namespace
 

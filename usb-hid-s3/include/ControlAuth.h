@@ -21,6 +21,12 @@ enum class ControlLineGate {
   Accept     // pass to command parser
 };
 
+/** Public protocol reply for a consumed auth command. Never includes a token. */
+inline const char *controlAuthReply(ControlLineGate gate, bool authenticated) {
+  if (gate != ControlLineGate::Consumed) return nullptr;
+  return authenticated ? "auth ok" : "auth failed";
+}
+
 /**
  * Gate TCP/BLE control lines when CONTROL_API_TOKEN is set.
  * Clients authenticate once per session with: auth <token>
