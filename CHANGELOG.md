@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.4] - 2026-08-26
+
+- Simplified app icon to a clean paper-plane-only design. Removed the ESP32 antenna, wireless arcs, mouse and keyboard symbols. Just the plane.
+
 ## [0.6.3] - 2026-08-26
 
 - New app icon: flat bold-red paper plane with faceted shading, ESP32 PCB antenna, wireless transmission paths to mouse and keyboard. Transparent background for iOS Liquid Glass.

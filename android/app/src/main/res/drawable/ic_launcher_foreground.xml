@@ -4,29 +4,27 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-  <!-- Paper plane -->
   <group>
-    <!-- silhouette -->
+    <!-- Paper plane body -->
     <path
-        android:pathData="M54,20 L86,61 L63,56 L54,80 L45,56 L22,61 Z"
-        android:fillColor="#ff2438"/>
-    <!-- left facet -->
+        android:pathData="M54,22 C55,18 60,16 65,22 L83,57 C85,61 83,66 78,65 L63,61 L54,82 L45,61 L30,65 C25,66 23,61 25,57 Z"
+        android:fillColor="#D40E1E"/>
+    <!-- Left facet -->
     <path
-        android:pathData="M54,20 L45,56 L22,61 Z"
-        android:fillColor="#ff384b"/>
-    <!-- right facet -->
+        android:pathData="M54,22 L30,65 L54,82 Z"
+        android:fillColor="#C20C1A"
+        android:strokeAlpha="0.85"/>
+    <!-- Right facet -->
     <path
-        android:pathData="M54,20 L86,61 L63,56 Z"
-        android:fillColor="#d81029"/>
-    <!-- center lower facet -->
+        android:pathData="M54,22 L78,65 L54,82 Z"
+        android:fillColor="#B40B18"
+        android:strokeAlpha="0.85"/>
+    <!-- Center fold highlight -->
     <path
-        android:pathData="M54,20 L63,56 L54,80 L45,56 Z"
-        android:fillColor="#e30823"/>
-    <!-- center fold -->
-    <path
-        android:pathData="M54,21 L54,79"
+        android:pathData="M54,24 L54,80"
         android:strokeWidth="1"
-        android:strokeColor="#ff6472"
+        android:strokeColor="#FF4050"
+        android:strokeAlpha="0.4"
         android:fillColor="#00000000"/>
   </group>
 </vector>
