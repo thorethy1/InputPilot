@@ -4,7 +4,7 @@
 
 **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2):
 
-![Waveshare ESP32-S3-Zero with USB-C connected](../../docs/images/esp32-s3-zero.jpg)
+![Waveshare ESP32-S3-Zero with USB-C connected](../..https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp)
 
 - Dual-core Xtensa LX7 up to 240 MHz
 - 4 MB flash, 2 MB PSRAM
@@ -13,7 +13,7 @@
 - Ceramic antenna (WiFi + BLE)
 
 Purchase example (3-pack):  
-[Waveshare ESP32-S3 Mini on Amazon](https://a.co/d/0fwrWUFU)
+[Waveshare ESP32-S3 Mini on Aliexpress](https://a.aliexpress.com/_ExnnLN0)
 
 Official Waveshare wiki / product page is also fine if you buy elsewhere — match
 **ESP32-S3FH4R2**, **4 MB flash**, and the WS2812 on GPIO21 pinout.
