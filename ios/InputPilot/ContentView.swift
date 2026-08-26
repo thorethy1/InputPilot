@@ -66,7 +66,7 @@ struct ContentView: View {
         ContentUnavailableView {
             Label("No Devices Yet", systemImage: "computermouse")
         } description: {
-            Text("Add a HID helper on your local network to get started.")
+            Text("Add an InputPilot device on your local network to get started.")
         } actions: {
             Button("Add Device") {
                 showAddWizard = true

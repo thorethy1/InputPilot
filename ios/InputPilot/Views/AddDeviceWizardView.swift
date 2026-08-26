@@ -113,7 +113,7 @@ struct AddDeviceWizardView: View {
                     }
                 }
             } footer: {
-                Text("Scanning uses Bonjour to find InputPilots in your network")
+                Text("Scanning uses Bonjour to find InputPilot devices in your network")
             }
         }
     }
@@ -123,15 +123,15 @@ struct AddDeviceWizardView: View {
             candidates: viewModel.newCandidates,
             emptyTitle: viewModel.hasHiddenKnownCandidates ? "Already Added" : "Scanning…",
             emptyDescription: viewModel.hasHiddenKnownCandidates
-                ? "All InputPilots found on the network are already in your device list."
-                : "Looking for InputPilots on your local network."
+                ? "All InputPilot devices found on the network are already in your device list."
+                                : "Looking for InputPilot devices on your local network."
         )
     }
 
     private var softAPInstructionsStep: some View {
         List {
             Section {
-                Label("Power on the HID helper.", systemImage: "power")
+                            Label("Power on the InputPilot device.", systemImage: "power")
                 Label("Wait for the magenta setup LED.", systemImage: "light.max")
                 Label("The device broadcasts a setup Wi‑Fi network named like `usb-hid-s3-XXXX`.", systemImage: "wifi")
             } header: {
@@ -263,7 +263,7 @@ struct AddDeviceWizardView: View {
         List {
             Section {
                 Label("Reconnect this iPhone to your home Wi‑Fi.", systemImage: "iphone.gen3")
-                Label("The HID helper will join the same network.", systemImage: "wifi")
+                Label("The InputPilot device will join the same network.", systemImage: "wifi")
             } header: {
                 Text("Almost Done")
             }
@@ -288,7 +288,7 @@ struct AddDeviceWizardView: View {
             discoveryList(
                 candidates: viewModel.filteredCandidates,
                 emptyTitle: "Looking for device…",
-                emptyDescription: "Searching your home network for the provisioned HID helper."
+                emptyDescription: "Searching your home network for the provisioned InputPilot device."
             )
 
             Form {

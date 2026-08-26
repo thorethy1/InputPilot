@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.6.1"
+#define FW_VERSION      "0.6.2"
 #define FW_NAME         "usb-hid-s3"
 // USB bcdDevice (0x0400 = v4.00) reported to the host.
-#define FW_VERSION_BCD  0x0601
+#define FW_VERSION_BCD  0x0602
 
 // --- USB identity (custom VID/PID so the host drops the boot-time Espressif id) ---
 // Prefixed to avoid colliding with USB_VID/USB_PID/... from the S3 variant's
@@ -17,7 +17,7 @@
 #define HID_USB_VID          0xCAFE
 #define HID_USB_PID          0x4001
 #define HID_USB_MANUFACTURER "MKF Labs"
-#define HID_USB_PRODUCT      "S3 Mouse+Keyboard"
+#define HID_USB_PRODUCT      "InputPilot S3"
 
 // --- HID report IDs (composite descriptor) ---
 #define HID_RID_KEYBOARD 1

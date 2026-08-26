@@ -124,7 +124,7 @@ class AddByAddressViewModel(
             val id = status.deviceId
             if (!id.isNullOrEmpty() && id.length >= 4) return id.takeLast(4)
             if (status.name.isNotEmpty()) return status.name
-            return "HID Helper"
+            return "InputPilot"
         }
 
         fun factory(repository: DeviceRepository): ViewModelProvider.Factory =

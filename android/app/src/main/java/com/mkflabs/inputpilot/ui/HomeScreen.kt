@@ -167,7 +167,7 @@ private fun EmptyHome(onAddDevice: () -> Unit, onAddByAddress: () -> Unit) {
         Icon(Icons.Default.Mouse, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         Text("No Devices Yet", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 16.dp))
         Text(
-            "Add a HID helper on your local network to get started.",
+            "Add an InputPilot device on your local network to get started.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

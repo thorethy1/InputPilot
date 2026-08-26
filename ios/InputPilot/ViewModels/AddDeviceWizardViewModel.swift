@@ -335,7 +335,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         if !status.name.isEmpty {
             return status.name
         }
-        return "HID Helper"
+        return "InputPilot"
     }
 
     private func startBrowsing() {
