@@ -1,6 +1,12 @@
-# Signed iOS builds without a local Mac
+# iOS builds without a local Mac
 
-The unsigned build and unit tests run on GitHub's `macos-26` runner with Xcode 26 or newer in `ci.yml`. The separate, manually dispatched `ios-build.yml` workflow archives and exports an installable IPA using credentials that already exist; it does not create or renew Apple credentials.
+The unsigned build and unit tests run on GitHub's `macos-26` runner with Xcode 26 or newer in `ci.yml`. CI also builds a Release app for a generic iOS device, removes any signing material defensively, packages it as `InputPilot-unsigned.ipa`, and uploads it with the other CI artifacts. The separate, manually dispatched `ios-build.yml` workflow archives and exports an installable IPA using credentials that already exist; it does not create or renew Apple credentials.
+
+## Public unsigned IPA for self-signing
+
+The regular CI artifact has `CFBundleIdentifier=com.thorethy.inputpilot`, but no `embedded.mobileprovision`, `_CodeSignature`, Apple Team ID, certificate, or registered-device UDID list. It is therefore safe to publish but cannot be installed as-is on normal iOS. Sign it with the installer's own certificate and provisioning profile using a compatible self-signing tool. Depending on Apple account and App ID availability, that tool may need to replace `com.thorethy.inputpilot` with a bundle ID belonging to the installer's team.
+
+Do not create the public artifact by deleting only `embedded.mobileprovision` from an already signed personal IPA. Any bundle modification invalidates the existing signature, and the signed IPA may contain identity information in both its profile and signature. Build the unsigned target from source as CI does instead.
 
 ## Repository secrets
 
@@ -18,7 +24,7 @@ On Linux/Windows, use a Base64 encoder that does not add line wrapping. Never ad
 
 Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and publishes `InputPilot.ipa` only in the private run's Artifacts section. The iPhone must be covered by the supplied development/ad-hoc profile.
 
-Tags do not start this signing workflow, and the workflow has read-only repository-content permission. It contains no release creation or upload step: a personally signed development/ad-hoc IPA must never become a public GitHub Release asset automatically. Public releases may contain source, changelogs, and separately produced non-personalized artifacts. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
+Tags do not start this signing workflow, and the workflow has read-only repository-content permission. It contains no release creation or upload step: a personally signed development/ad-hoc IPA must never become a public GitHub Release asset automatically. Public releases may contain source, changelogs, firmware, APKs, and the separately built unsigned IPA. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
 
 All reconstructed inputs, derived data, archive, export options, and IPA staging live under `$RUNNER_TEMP`. The profile and temporary keychain are removed in an always-running cleanup step; GitHub also discards the hosted runner after the job.
 

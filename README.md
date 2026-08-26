@@ -104,7 +104,7 @@ Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+b
 
 ## iOS builds on GitHub
 
-No local Mac is required for development handoff or signed builds. GitHub Actions uses a hosted macOS runner for unsigned builds/tests and a manually triggered workflow for manual Apple signing.
+No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes three downloadable artifacts on each `main` build: ESP32-S3 firmware, the Android debug APK, and an unsigned iOS device IPA. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
 
 Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow** and download `InputPilot.ipa` from that run's artifacts. Personal development/ad-hoc IPAs are never uploaded to a public GitHub Release by the workflow.
 

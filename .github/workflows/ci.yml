@@ -211,6 +211,59 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO
 
+      - name: Build unsigned iOS device app
+        if: steps.guard.outputs.present == 'true'
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          derived="$RUNNER_TEMP/InputPilotUnsignedDerived"
+          xcodebuild build \
+            -project InputPilot.xcodeproj \
+            -scheme InputPilot \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PRODUCT_BUNDLE_IDENTIFIER=com.thorethy.inputpilot
+
+          app="$derived/Build/Products/Release-iphoneos/InputPilot.app"
+          [[ -d "$app" ]] || { echo "::error::Unsigned device app was not produced."; exit 1; }
+
+          # A self-signing artifact must not contain any personal provisioning
+          # profile, device UDID list, team identity, or previous signature.
+          find "$app" -name embedded.mobileprovision -type f -delete
+          find "$app" -name _CodeSignature -type d -prune -exec rm -rf {} +
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
+          [[ "$bundle_id" == com.thorethy.inputpilot ]] || {
+            echo "::error::Unexpected unsigned bundle ID: $bundle_id"
+            exit 1
+          }
+          if find "$app" \( -name embedded.mobileprovision -o -name _CodeSignature \) -print -quit | grep -q .; then
+            echo "::error::Unsigned app still contains signing material."
+            exit 1
+          fi
+
+          stage="$RUNNER_TEMP/InputPilotUnsigned"
+          mkdir -p "$stage/Payload"
+          ditto "$app" "$stage/Payload/InputPilot.app"
+          (cd "$stage" && zip -qry "$RUNNER_TEMP/InputPilot-unsigned.ipa" Payload)
+          [[ -s "$RUNNER_TEMP/InputPilot-unsigned.ipa" ]] || {
+            echo "::error::Unsigned IPA was not produced."
+            exit 1
+          }
+
+      - name: Upload unsigned IPA artifact
+        if: steps.guard.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: InputPilot-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/InputPilot-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
   android:
     name: Android build + unit tests
     runs-on: ubuntu-latest
@@ -258,3 +311,12 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
+
+      - name: Upload Android APK artifact
+        if: steps.guard.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: InputPilot-android-debug-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
