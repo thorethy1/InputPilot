@@ -32,10 +32,19 @@ void test_from_string_invalid() {
   TEST_ASSERT_EQUAL(int(RadioMode::Wifi), int(m));  // unchanged
 }
 
+void test_wifi_ble_aliases_select_simultaneous_mode() {
+  RadioMode mode = RadioMode::None;
+  TEST_ASSERT_TRUE(radioModeFromString("wifi+ble", mode));
+  TEST_ASSERT_EQUAL(int(RadioMode::WifiBle), int(mode));
+  TEST_ASSERT_TRUE(radioModeFromString("both", mode));
+  TEST_ASSERT_EQUAL(int(RadioMode::WifiBle), int(mode));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_to_string);
   RUN_TEST(test_from_string);
   RUN_TEST(test_from_string_invalid);
+  RUN_TEST(test_wifi_ble_aliases_select_simultaneous_mode);
   return UNITY_END();
 }

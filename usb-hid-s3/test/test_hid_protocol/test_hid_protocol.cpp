@@ -40,11 +40,36 @@ void test_keyboard_report_frame() {
   TEST_ASSERT_EQUAL_STRING("report 64 20", HIDProtocol::command(m).c_str());
 }
 
+void test_layout_resolved_modifier_reports() {
+  HIDMessage m; std::string error;
+  const uint8_t uppercase[] = {1, 0x13, 0x02, 0x34};  // Shift + German Ä key
+  TEST_ASSERT_TRUE(HIDProtocol::decode(uppercase, sizeof(uppercase), m, error));
+  TEST_ASSERT_EQUAL_STRING("report 2 52", HIDProtocol::command(m).c_str());
+  const uint8_t altGr[] = {1, 0x13, 0x40, 0x14};      // AltGr + Q = @ on DE
+  TEST_ASSERT_TRUE(HIDProtocol::decode(altGr, sizeof(altGr), m, error));
+  TEST_ASSERT_EQUAL_STRING("report 64 20", HIDProtocol::command(m).c_str());
+  const uint8_t combo[] = {1, 0x13, 0x43, 0x08};      // Ctrl + Shift + AltGr
+  TEST_ASSERT_TRUE(HIDProtocol::decode(combo, sizeof(combo), m, error));
+  TEST_ASSERT_EQUAL_HEX8(0x43, m.modifier);
+}
+
+void test_rejects_invalid_binary_payloads() {
+  HIDMessage m; std::string error;
+  const uint8_t shortMove[] = {1, 1, 0, 0};
+  TEST_ASSERT_FALSE(HIDProtocol::decode(shortMove, sizeof(shortMove), m, error));
+  const uint8_t unknownType[] = {1, 0x66};
+  TEST_ASSERT_FALSE(HIDProtocol::decode(unknownType, sizeof(unknownType), m, error));
+  const uint8_t oversizedReport[] = {1, 0x13, 0, 4, 0};
+  TEST_ASSERT_FALSE(HIDProtocol::decode(oversizedReport, sizeof(oversizedReport), m, error));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_move_frame);
   RUN_TEST(test_button_and_release_frames);
   RUN_TEST(test_rejects_bad_frames);
   RUN_TEST(test_keyboard_report_frame);
+  RUN_TEST(test_layout_resolved_modifier_reports);
+  RUN_TEST(test_rejects_invalid_binary_payloads);
   return UNITY_END();
 }
