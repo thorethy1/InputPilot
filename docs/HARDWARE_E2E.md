@@ -1,6 +1,6 @@
-# InputPilot 0.6 hardware E2E test plan
+# InputPilot 0.6.1 hardware E2E test plan
 
-Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use firmware 0.6.0 and an app built with Xcode 26 or newer.
+Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use firmware 0.6.1 and an app built with Xcode 26 or newer. Release results belong in `HARDWARE_E2E_RESULTS_0.6.1.md`.
 
 ## USB HID and transports
 

@@ -25,6 +25,13 @@ Anyone on the Soft-AP or the same LAN can call the REST/TCP APIs and type or
 move the mouse on the host PC. Use only on trusted networks, or harden before
 exposing the device beyond a lab.
 
+`CONTROL_API_TOKEN = ""` is the intentional default and means that REST, TCP,
+and BLE control are unauthenticated. For normal use, prefer a trusted LAN, set
+`CONTROL_API_TOKEN`, and configure `WIFI_AP_PASS` when an open provisioning AP
+is not acceptable. TCP and BLE require an explicit `auth ok` response before
+the iOS app enables HID control. The token is an application-level gate; BLE is
+not cryptographically paired or bonded by this project.
+
 ## USB identity
 
 The firmware uses hobbyist USB IDs (`VID 0xCAFE`, `PID 0x4001`). These are **not**

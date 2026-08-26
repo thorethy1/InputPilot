@@ -10,7 +10,9 @@
 - Flashing requires manual **BOOT+RESET**, then a **power-cycle** for HID
   enumeration (OTG auto-reset is unreliable).
 - On-device pytest E2E (HID cursor / keystroke proof) is **macOS-only**.
-- WiFi and BLE are mutually exclusive; only one radio mode is active.
+- WiFi and BLE share the ESP32-S3's 2.4 GHz radio and can run concurrently in
+  `wifi+ble` mode; throughput and latency still depend on local radio conditions.
 - BLE teardown deliberately avoids `NimBLEDevice::deinit()` (upstream crash on
   Arduino-ESP32 3.2.x / IDF 5.4).
-- Companion iOS/Android apps are not in this repository yet.
+- BLE control uses application-token confirmation but does not implement BLE
+  cryptographic pairing or bonding.

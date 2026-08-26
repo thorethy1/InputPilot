@@ -4,7 +4,7 @@ This protocol carries semantic HID events from a trusted phone to the ESP32-S3. 
 
 ## Security and discovery
 
-Control is local-only. Set `CONTROL_API_TOKEN` at firmware build time. REST uses `X-API-Token` or `Authorization: Bearer`; TCP and the legacy BLE control characteristic authenticate once with `auth <token>`. Binary BLE events are rejected until that session is authenticated. Use BLE pairing/bonding and an API token on deployed devices.
+Control is local-only. Set `CONTROL_API_TOKEN` at firmware build time. REST uses `X-API-Token` or `Authorization: Bearer`; TCP and NUS RX authenticate once with `auth <token>`. The firmware answers on the same TCP connection or through NUS TX notify with `auth ok` or `auth failed`; clients must not become ready before `auth ok`. No token value is returned. Binary BLE events are rejected until that session is authenticated. This application token does not provide BLE pairing, bonding, or transport encryption; use the device only on trusted networks and physical environments.
 
 The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET /api/status` reports `protocol_version` and `capabilities`, allowing clients to fall back for firmware before 0.5.0.
 
@@ -21,7 +21,7 @@ The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET 
 | Layout-resolved key | `report <modifiers:u8> <usage:u8>` | `POST /api/report` |
 | Release all | `release all` | `POST /api/release-all` |
 
-TCP listens on port 3333 and is persistent. Commands are UTF-8 lines ending in LF. A disconnect releases all held keys, modifiers, and mouse buttons.
+TCP listens on port 3333 and is persistent. Commands and replies are UTF-8 lines ending in LF. Replies include `auth ok`, `auth failed`, `pong`, and `error ...`. A disconnect releases all held keys, modifiers, and mouse buttons.
 
 `report` is the v0.6 layout boundary. The client maps each Unicode character for the selected host layout to a USB HID usage and modifier byte (including right Alt/AltGr bit `0x40`), then sends one report. The firmware presses and releases that report; it does not interpret UTF-8 as HID key codes. Legacy `type` and `key` remain supported. Multiline and long input is emitted as ordered per-character reports (newline becomes Enter), so neither TCP line framing nor BLE MTU splits UTF-8.
 
@@ -36,7 +36,7 @@ The primary service UUID is `7d9f0001-4f4d-4f56-4552-484944000001`.
 | Keyboard | `0004` | Write / Write Without Response | text, keys, combos |
 | Status | `0005` | Read / Notify | protocol status |
 
-The Nordic UART Service remains available for 0.4.x-compatible text commands and authentication. Integer fields are little-endian. Every binary frame begins with protocol version `0x01`, followed by type and payload:
+The Nordic UART Service remains available for 0.4.x-compatible text commands and authentication. Authentication is written to NUS RX only after NUS TX notifications are enabled; its confirmation arrives on NUS TX. Integer fields are little-endian. Every binary frame begins with protocol version `0x01`, followed by type and payload:
 
 | Type | Value | Payload |
 |---|---:|---|
@@ -62,4 +62,4 @@ Protocol v1 firmware reports only implemented features: `mouse_move`, `mouse_cli
 
 ## Transport selection
 
-Automatic mode prefers BLE for latency-sensitive events and TCP for long text or macro streams; REST is the management/fallback path. `Prefer Bluetooth`, `Prefer Wi-Fi`, `Bluetooth Only`, and `Wi-Fi Only` constrain this order. Presets, recording, playback, and live controls all emit the same semantic events.
+Automatic mode prefers BLE for latency-sensitive events and TCP for long text or macro streams; REST is the management/fallback path. `Prefer Bluetooth`, `Prefer Wi-Fi`, `Bluetooth Only`, and `Wi-Fi Only` constrain this order. A drag, keyboard sequence, text send, preset, or macro leases one ready transport for its ordered lifetime. Loss of that transport aborts the sequence and attempts release-all; failover is allowed only for a later independent sequence.

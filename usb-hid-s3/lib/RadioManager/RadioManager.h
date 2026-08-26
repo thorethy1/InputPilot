@@ -10,8 +10,8 @@
 //     app/browser provisioning. STA mode advertises mDNS via DeviceIdentity::mdnsFqdn.
 //   - If credentials exist → STA + TCP line control on WIFI_CONTROL_PORT.
 //
-// Only one radio is ever active at a time (single 2.4 GHz radio). USB HID is a
-// separate peripheral and is unaffected.
+// WiFi and BLE may operate concurrently in WifiBle mode. USB HID is a separate
+// peripheral and is unaffected.
 
 #include <Arduino.h>
 

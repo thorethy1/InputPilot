@@ -2,7 +2,7 @@
 
 A composite **USB HID mouse + keyboard** device on the ESP32-S3 (native USB-OTG
 via the ESP32 core USB stack — `USBHIDMouse` + `USBHIDKeyboard` + `USBCDC`), with
-USB-CDC serial logging/commands, and mutually exclusive WiFi *or* BLE connectivity
+USB-CDC serial logging/commands, and concurrent or standalone WiFi/BLE connectivity
 for remote control.
 
 ## Hardware

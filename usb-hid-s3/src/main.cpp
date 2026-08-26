@@ -7,7 +7,7 @@
 // RX) non-functional; the core stack integrates CDC RX+TX and HID cleanly.
 //
 // Serial commands (move/click/type/key/jiggle/radio/...) plus a FreeRTOS jiggle
-// task. The `radio` command activates the WiFi/BLE stack (mutually exclusive).
+// task. The `radio` command activates WiFi, BLE, both, or neither.
 
 #include <Arduino.h>
 #include "USB.h"

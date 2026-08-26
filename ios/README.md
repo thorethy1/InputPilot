@@ -22,7 +22,7 @@ SwiftUI/SwiftData companion app for discovering and controlling **InputPilot** E
 - Xcode 26 or newer (required for the iOS 26 SDK and native Liquid Glass rendering)
 - iOS 17.0 deployment target
 - macOS for building and Simulator testing
-- **Firmware 0.6.0** for BLE identity matching, layout-resolved QWERTZ/QWERTY reports, and all remote capabilities. Older firmware remains usable through capability-aware fallbacks.
+- **Firmware 0.6.1** for confirmed BLE/TCP authentication, ordered HID sessions, layout-resolved QWERTZ/QWERTY reports, and all remote capabilities. Older firmware remains usable through capability-aware fallbacks.
 
 ## Project layout
 

@@ -8,7 +8,7 @@
 
 
 
-**InputPilot 0.6.0** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
+**InputPilot 0.6.1** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
 
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
@@ -57,7 +57,7 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 <p align="center">
   <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two online hid-helpers" width="240">
   &nbsp;
-  <img src="docs/images/ios-device-detail.jpg" alt="iOS device detail for Mover 1 with firmware 0.4.0 and jiggle toggle" width="240">
+  <img src="docs/images/ios-device-detail.jpg" alt="InputPilot iOS device detail with firmware version and jiggle toggle" width="240">
 </p>
 
 ### 4. Platform support
