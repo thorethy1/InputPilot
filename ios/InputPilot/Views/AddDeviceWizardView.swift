@@ -100,7 +100,7 @@ struct AddDeviceWizardView: View {
                     } icon: { Image(systemName: "antenna.radiowaves.left.and.right") }
                 }
             }
-            Section("Wi-Fi") {
+            Section {
                 Button {
                     viewModel.chooseScan()
                 } label: {
@@ -132,7 +132,11 @@ struct AddDeviceWizardView: View {
                         Image(systemName: "wifi.router")
                     }
                 }
-            } footer: { Text("Wi-Fi is optional. Network scanning uses Bonjour.") }
+            } header: {
+                Text("Wi-Fi")
+            } footer: {
+                Text("Wi-Fi is optional. Network scanning uses Bonjour.")
+            }
         }
     }
 
