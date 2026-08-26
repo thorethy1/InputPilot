@@ -23,7 +23,7 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(HIDEvent.releaseAll.restPath, "api/release-all")
     }
 
-    func testTransportSelectionOrdersAndConstraints() {
+    @MainActor func testTransportSelectionOrdersAndConstraints() {
         XCTAssertEqual(HIDConnectionManager.candidateKinds(mode: .automatic, lowLatency: true), [.bluetooth, .tcp, .rest])
         XCTAssertEqual(HIDConnectionManager.candidateKinds(mode: .automatic, lowLatency: false), [.tcp, .rest, .bluetooth])
         XCTAssertEqual(HIDConnectionManager.candidateKinds(mode: .preferBluetooth, lowLatency: false), [.bluetooth, .tcp, .rest])
@@ -63,7 +63,8 @@ final class HIDRemoteTests: XCTestCase {
         let tcp = MockTransport(kind: .tcp, available: false)
         let rest = MockTransport(kind: .rest, available: true)
         let manager = HIDConnectionManager(ble: ble, tcp: tcp, rest: rest)
-        XCTAssertTrue(await manager.send(.click(.left)))
+        let didSend = await manager.send(.click(.left))
+        XCTAssertTrue(didSend)
         XCTAssertEqual(rest.events, [.click(.left)])
         XCTAssertEqual(manager.activeTransport, .rest)
     }
@@ -71,14 +72,16 @@ final class HIDRemoteTests: XCTestCase {
     @MainActor func testCapabilitiesRejectUnsupportedEvent() async {
         let transport = MockTransport(kind: .bluetooth, available: true)
         let manager = HIDConnectionManager(ble: transport, tcp: transport, rest: transport, capabilities: ["mouse_move"])
-        XCTAssertFalse(await manager.send(.scroll(1)))
+        let didSend = await manager.send(.scroll(1))
+        XCTAssertFalse(didSend)
         XCTAssertTrue(transport.events.isEmpty)
     }
 
     @MainActor func testNewerProtocolIsRejectedBeforeTransportSend() async {
         let transport = MockTransport(kind: .bluetooth, available: true)
         let manager = HIDConnectionManager(ble: transport, tcp: transport, rest: transport, protocolVersion: 2)
-        XCTAssertFalse(await manager.send(.click(.left)))
+        let didSend = await manager.send(.click(.left))
+        XCTAssertFalse(didSend)
         XCTAssertTrue(transport.events.isEmpty)
         XCTAssertEqual(manager.connectionSummary, "Firmware unsupported")
     }
