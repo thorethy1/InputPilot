@@ -55,6 +55,7 @@ private:
   void handlePostMove();
   void handlePostType();
   void handlePostKey();
+  void handlePostReport();
   void handlePostClick();
   void handlePostButton();
   void handlePostReleaseAll();

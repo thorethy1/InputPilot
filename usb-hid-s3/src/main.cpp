@@ -163,6 +163,14 @@ static bool hidKey(const KeyCode &kc) {
   return true;
 }
 
+static bool hidReport(uint8_t modifier, uint8_t keycode) {
+  KeyCode kc;
+  kc.found = true;
+  kc.modifier = modifier;
+  kc.keycode = keycode;
+  return hidKey(kc);
+}
+
 // ---------------------------------------------------------------------------
 // Serial command dispatch
 // ---------------------------------------------------------------------------
@@ -174,6 +182,7 @@ static void printHelp() {
   LOG_INFO("  release all");
   LOG_INFO("  type <text>              type a string");
   LOG_INFO("  key <name[+name...]>     press a key/combo (enter,esc,cmd+space,...)");
+  LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report");
   LOG_INFO("  jiggle on|off|status");
   LOG_INFO("  radio wifi|ble|both|none enable control radios");
   LOG_INFO("  wifi status|set|clear    NVS WiFi creds (Soft-AP if none)");
@@ -232,6 +241,10 @@ void handleCommandLine(const std::string &line, const char *source) {
       if (hidKey(kc)) LOG_HID("key ok %s", c.text.c_str());
       break;
     }
+    case CmdType::KeyboardReport:
+      LOG_CMD("report mod=0x%02x kc=0x%02x", c.modifier, c.keycode);
+      if (hidReport((uint8_t)c.modifier, (uint8_t)c.keycode)) LOG_HID("report ok");
+      break;
     case CmdType::JiggleOn:
       g_jiggle.setEnabled(true);
       LOG_JIG("jiggle=on interval=%lums", (unsigned long)g_jiggle.intervalMs());

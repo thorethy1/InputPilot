@@ -290,6 +290,9 @@ void RadioManager::startBle() {
     adv->addServiceUUID(BLE_NUS_SERVICE_UUID);
     adv->addServiceUUID(BLE_HID_SERVICE_UUID);
     adv->setName(BLE_DEVICE_NAME);
+    // Stable identity used by InputPilot to select the intended StoredDevice.
+    // Prefix keeps the payload self-describing while preserving legacy names.
+    adv->setManufacturerData(std::string("IP") + DeviceIdentity::deviceId());
   }
   s_bleTearingDown = false;
   NimBLEDevice::startAdvertising();

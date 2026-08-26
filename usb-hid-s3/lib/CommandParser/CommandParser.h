@@ -16,6 +16,7 @@ enum class CmdType {
   ReleaseAll,    // release all mouse buttons and keyboard keys
   Type,          // type <text>
   Key,           // key <name[+name...]>
+  KeyboardReport,// report <modifier-byte> <usage-byte>
   JiggleOn,      // jiggle on
   JiggleOff,     // jiggle off
   JiggleStatus,  // jiggle | jiggle status
@@ -38,6 +39,8 @@ struct ParsedCommand {
   int dx = 0;
   int dy = 0;
   int wheel = 0;
+  int modifier = 0;
+  int keycode = 0;
 
   // Click
   MouseBtn button = MouseBtn::Left;

@@ -134,6 +134,16 @@ ParsedCommand CommandParser::parse(const std::string &rawLine) {
     return c;
   }
 
+  if (cmd == "report") {
+    if (tok.size() != 3) return unknown("report needs <modifier> <usage>");
+    ParsedCommand c;
+    c.type = CmdType::KeyboardReport;
+    if (!parseInt(tok[1], c.modifier) || !parseInt(tok[2], c.keycode) ||
+        c.modifier < 0 || c.modifier > 255 || c.keycode < 0 || c.keycode > 255)
+      return unknown("report values must be bytes");
+    return c;
+  }
+
   if (cmd == "jiggle") {
     if (tok.size() < 2) {
       ParsedCommand c;

@@ -31,10 +31,20 @@ void test_rejects_bad_frames() {
   TEST_ASSERT_FALSE(HIDProtocol::decode(badButton, sizeof(badButton), message, error));
 }
 
+void test_keyboard_report_frame() {
+  const uint8_t bytes[] = {1, 0x13, 0x40, 0x14};
+  HIDMessage m; std::string error;
+  TEST_ASSERT_TRUE(HIDProtocol::decode(bytes, sizeof(bytes), m, error));
+  TEST_ASSERT_EQUAL_HEX8(0x40, m.modifier);
+  TEST_ASSERT_EQUAL_HEX8(0x14, m.keycode);
+  TEST_ASSERT_EQUAL_STRING("report 64 20", HIDProtocol::command(m).c_str());
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_move_frame);
   RUN_TEST(test_button_and_release_frames);
   RUN_TEST(test_rejects_bad_frames);
+  RUN_TEST(test_keyboard_report_frame);
   return UNITY_END();
 }

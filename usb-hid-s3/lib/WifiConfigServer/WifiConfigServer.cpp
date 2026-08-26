@@ -253,9 +253,9 @@ void WifiConfigServer::handleGetWifi() {
   json += "\"auth_required\":";
   json += controlAuthRequired() ? "true" : "false";
   json += ",\"protocol_version\":1,";
-  json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",";
-  json += "\"keyboard_type\",\"keyboard_key\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\"]";
+  json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
+  json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
+  json += "\"tcp_control\",\"rest_control\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
@@ -325,9 +325,9 @@ void WifiConfigServer::handleGetStatus() {
   json += "\"auth_required\":";
   json += controlAuthRequired() ? "true" : "false";
   json += ",\"protocol_version\":1,";
-  json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",";
-  json += "\"keyboard_type\",\"keyboard_key\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\"]";
+  json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
+  json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
+  json += "\"tcp_control\",\"rest_control\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
@@ -424,6 +424,19 @@ void WifiConfigServer::handlePostClick() {
   sendOk("\"button\":\"" + jsonEscape(button) + "\"");
 }
 
+void WifiConfigServer::handlePostReport() {
+  if (!requireApiAuth()) return;
+  const String body = bodyOrEmpty();
+  int modifier = 0, usage = 0;
+  if (!jsonGetInt(body, "modifiers", modifier) || !jsonGetInt(body, "usage", usage) ||
+      modifier < 0 || modifier > 255 || usage < 0 || usage > 255) {
+    sendErr(400, "modifiers and usage bytes required");
+    return;
+  }
+  handleCommandLine(("report " + String(modifier) + " " + String(usage)).c_str(), "http");
+  sendOk("\"modifiers\":" + String(modifier) + ",\"usage\":" + String(usage));
+}
+
 void WifiConfigServer::handlePostButton() {
   if (!requireApiAuth()) return;
   const String body = bodyOrEmpty();
@@ -477,6 +490,8 @@ void WifiConfigServer::begin() {
 
   s_server->on("/api/key", HTTP_POST, [this]() { handlePostKey(); });
   s_server->on("/api/key", HTTP_OPTIONS, [this]() { handleOptions(); });
+  s_server->on("/api/report", HTTP_POST, [this]() { handlePostReport(); });
+  s_server->on("/api/report", HTTP_OPTIONS, [this]() { handleOptions(); });
 
   s_server->on("/api/click", HTTP_POST, [this]() { handlePostClick(); });
   s_server->on("/api/click", HTTP_OPTIONS, [this]() { handleOptions(); });

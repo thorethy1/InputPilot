@@ -33,6 +33,9 @@ bool HIDProtocol::decode(const uint8_t *data, size_t length, HIDMessage &out,
     case HIDMessageType::KeyboardCombo:
       if (length < 3 || length > 242) { error = "keyboard payload"; return false; }
       out.text.assign(reinterpret_cast<const char *>(data + 2), length - 2); break;
+    case HIDMessageType::KeyboardReport:
+      if (length != 4) { error = "keyboard report length"; return false; }
+      out.modifier = data[2]; out.keycode = data[3]; break;
     case HIDMessageType::ReleaseAll:
     case HIDMessageType::Ping:
       if (length != 2) { error = "control payload"; return false; }
@@ -53,6 +56,8 @@ std::string HIDProtocol::command(const HIDMessage &m) {
     case HIDMessageType::KeyboardText: return "type " + m.text;
     case HIDMessageType::KeyboardKey:
     case HIDMessageType::KeyboardCombo: return "key " + m.text;
+    case HIDMessageType::KeyboardReport:
+      return "report " + std::to_string(m.modifier) + " " + std::to_string(m.keycode);
     case HIDMessageType::ReleaseAll: return "release all";
     case HIDMessageType::Ping: return "";
   }

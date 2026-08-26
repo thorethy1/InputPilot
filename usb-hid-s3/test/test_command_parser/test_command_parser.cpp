@@ -108,6 +108,15 @@ void test_simple_verbs() {
   TEST_ASSERT_EQUAL(int(CmdType::Help), int(P("?").type));
 }
 
+void test_keyboard_report() {
+  ParsedCommand c = CommandParser::parse("report 64 20");
+  TEST_ASSERT_EQUAL((int)CmdType::KeyboardReport, (int)c.type);
+  TEST_ASSERT_EQUAL(64, c.modifier);
+  TEST_ASSERT_EQUAL(20, c.keycode);
+  TEST_ASSERT_EQUAL((int)CmdType::Unknown, (int)CommandParser::parse("report 256 1").type);
+  TEST_ASSERT_EQUAL((int)CmdType::Unknown, (int)CommandParser::parse("report 1").type);
+}
+
 void test_unknown() {
   ParsedCommand c = P("frobnicate");
   TEST_ASSERT_EQUAL(int(CmdType::Unknown), int(c.type));
@@ -129,6 +138,7 @@ int main(int, char **) {
   RUN_TEST(test_radio);
   RUN_TEST(test_wifi);
   RUN_TEST(test_simple_verbs);
+  RUN_TEST(test_keyboard_report);
   RUN_TEST(test_unknown);
   return UNITY_END();
 }

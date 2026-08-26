@@ -9,7 +9,8 @@
 enum class HIDMessageType : uint8_t {
   MouseMove = 0x01, MouseScroll = 0x02, MouseButtonDown = 0x03,
   MouseButtonUp = 0x04, MouseClick = 0x05, KeyboardText = 0x10,
-  KeyboardKey = 0x11, KeyboardCombo = 0x12, ReleaseAll = 0x20,
+  KeyboardKey = 0x11, KeyboardCombo = 0x12, KeyboardReport = 0x13,
+  ReleaseAll = 0x20,
   Ping = 0x7f
 };
 
@@ -19,6 +20,8 @@ struct HIDMessage {
   int16_t y = 0;
   int16_t wheel = 0;
   uint8_t button = 0;
+  uint8_t modifier = 0;
+  uint8_t keycode = 0;
   std::string text;
 };
 
