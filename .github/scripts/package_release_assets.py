@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import plistlib
 import re
 import shutil
@@ -142,28 +143,69 @@ def validate_unsigned_ipa(ipa: Path) -> None:
             raise ValueError(f"IPA Mach-O binaries contain LC_CODE_SIGNATURE: {signed_machos}")
 
 
-def create_firmware_zip(source: Path, destination: Path) -> None:
-    required_names = ("bootloader.bin", "firmware.bin", "partitions.bin")
+INITIAL_IMAGE_NAMES = ("bootloader.bin", "partitions.bin", "boot_app0.bin", "firmware.bin")
+INITIAL_SUPPORT_NAMES = ("initial-flash-manifest.json", "flash_args")
+
+
+def validate_initial_flash_assets(source: Path) -> dict:
+    files = {name: only_named_file(source, name) for name in (*INITIAL_IMAGE_NAMES, *INITIAL_SUPPORT_NAMES, "initial-flash.bin")}
+    manifest = json.loads(files["initial-flash-manifest.json"].read_text(encoding="utf-8"))
+    if manifest.get("product") != "InputPilot" or manifest.get("board") != "esp32-s3-zero-4mb":
+        raise ValueError("unexpected initial-flash manifest identity")
+    entries = manifest.get("images")
+    if not isinstance(entries, list) or [entry.get("file") for entry in entries] != list(INITIAL_IMAGE_NAMES):
+        raise ValueError("initial-flash manifest has an unexpected image set or order")
+    parsed = []
+    for entry in entries:
+        path = files[entry["file"]]
+        try:
+            offset = int(entry["offset"], 0)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("invalid initial-flash offset") from error
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if entry.get("size") != path.stat().st_size or entry.get("sha256") != digest:
+            raise ValueError(f"initial-flash manifest does not match {path.name}")
+        parsed.append((offset, path))
+    if parsed != sorted(parsed) or len({offset for offset, _ in parsed}) != len(parsed):
+        raise ValueError("initial-flash offsets must be unique and increasing")
+    expected_args = " ".join(value for offset, path in parsed for value in (f"0x{offset:x}", path.name)) + "\n"
+    if files["flash_args"].read_text(encoding="utf-8") != expected_args:
+        raise ValueError("flash_args does not match initial-flash manifest")
+    merged = files["initial-flash.bin"].read_bytes()
+    for offset, path in parsed:
+        data = path.read_bytes()
+        if merged[offset:offset + len(data)] != data:
+            raise ValueError(f"merged image does not contain the exact {path.name} bytes")
+    if len(merged) > manifest.get("flashSize", 0):
+        raise ValueError("merged image exceeds declared flash size")
+    return manifest
+
+
+def create_initial_flash_zip(source: Path, destination: Path) -> None:
+    validate_initial_flash_assets(source)
+    required_names = (*INITIAL_IMAGE_NAMES, *INITIAL_SUPPORT_NAMES, "README.txt")
     files = [only_named_file(source, name) for name in required_names]
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in files:
             archive.write(path, arcname=path.name)
     with zipfile.ZipFile(destination) as archive:
         if sorted(archive.namelist()) != sorted(required_names):
-            raise ValueError("firmware ZIP contains unexpected members")
+            raise ValueError("initial-flash ZIP contains unexpected members")
 
 
 def copy_ota_assets(source: Path, output: Path) -> list[Path]:
     copied = []
-    for name in ("firmware.bin", "firmware.sha256", "firmware-manifest.json", "bootloader.bin", "partitions.bin"):
+    for name in ("firmware.bin", "firmware.sha256", "firmware-manifest.json", *INITIAL_IMAGE_NAMES[:-1], "initial-flash-manifest.json"):
         destination = output / name
         shutil.copyfile(only_named_file(source, name), destination)
         copied.append(destination)
-    manifest = __import__("json").loads((output / "firmware-manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((output / "firmware-manifest.json").read_text(encoding="utf-8"))
     firmware = output / "firmware.bin"
     digest = hashlib.sha256(firmware.read_bytes()).hexdigest()
     if manifest.get("size") != firmware.stat().st_size or manifest.get("sha256") != digest:
         raise ValueError("firmware manifest does not match firmware.bin")
+    if (output / "firmware.sha256").read_text(encoding="utf-8") != f"{digest}  firmware.bin\n":
+        raise ValueError("firmware.sha256 does not match firmware.bin")
     return copied
 
 
@@ -198,14 +240,34 @@ def main() -> None:
 
     apk = args.output / f"InputPilot-{args.tag}-android.apk"
     ipa = args.output / f"InputPilot-{args.tag}-ios-unsigned.ipa"
-    firmware = args.output / f"InputPilot-{args.tag}-esp32s3-firmware.zip"
+    initial_zip = args.output / f"InputPilot-{args.tag}-initial-flash.zip"
+    initial_bin = args.output / f"InputPilot-{args.tag}-initial-flash.bin"
     shutil.copyfile(apk_source, apk)
     shutil.copyfile(ipa_source, ipa)
-    create_firmware_zip(args.input / "firmware", firmware)
+    firmware_source = args.input / "firmware"
+    validate_initial_flash_assets(firmware_source)
+    version = args.tag.removeprefix("v")
+    ota_manifest = json.loads(only_named_file(firmware_source, "firmware-manifest.json").read_text(encoding="utf-8"))
+    initial_manifest = json.loads(only_named_file(firmware_source, "initial-flash-manifest.json").read_text(encoding="utf-8"))
+    if ota_manifest.get("version") != version or initial_manifest.get("version") != version:
+        raise ValueError("firmware manifests do not match the release tag")
+    readme = firmware_source / "README.txt"
+    readme.write_text(
+        "This package is for initial USB installation or migration.\n"
+        "Normal future updates must use only firmware.bin through the InputPilot app.\n"
+        "Do not select bootloader.bin, partitions.bin or boot_app0.bin in the Firmware tab.\n",
+        encoding="utf-8",
+    )
+    create_initial_flash_zip(firmware_source, initial_zip)
+    shutil.copyfile(only_named_file(firmware_source, "initial-flash.bin"), initial_bin)
     ota_assets = copy_ota_assets(args.input / "firmware", args.output)
-    checksum_file = write_checksums(args.output, [apk, firmware, ipa, *ota_assets])
+    checksum_file = write_checksums(args.output, [apk, initial_zip, initial_bin, ipa, *ota_assets])
+    checksummed = {line.split("  ", 1)[1] for line in checksum_file.read_text(encoding="utf-8").splitlines()}
+    published_without_checksum = {path.name for path in args.output.iterdir() if path != checksum_file}
+    if checksummed != published_without_checksum:
+        raise ValueError("SHA256SUMS.txt does not cover every other release asset")
 
-    for path in (apk, firmware, ipa, *ota_assets, checksum_file):
+    for path in (apk, initial_zip, initial_bin, ipa, *ota_assets, checksum_file):
         print(f"{path.name}\t{path.stat().st_size} bytes")
 
 

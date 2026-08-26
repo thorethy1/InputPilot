@@ -102,13 +102,41 @@ Automatic transport selection uses BLE for small low-latency events, persistent 
 
 Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+ble`; the compatible serial command `radio wifi|ble|both|none` changes this at runtime. See [the protocol specification](docs/PROTOCOL.md) for GATT UUIDs, binary frames, TCP grammar, REST endpoints, capabilities, and authentication.
 
+## Firmware installation
+
+InputPilot ships one application firmware with two installation paths. `firmware.bin` is the same InputPilot application image included in the initial USB flash and used for later BLE OTA updates. Initial installation additionally needs the bootloader, partition table, and OTA bootstrap image.
+
+### First installation / migration
+
+Use `InputPilot-vX.Y.Z-initial-flash.bin` over USB, or flash the individual files from `InputPilot-vX.Y.Z-initial-flash.zip` according to its manifest. This replaces the bootloader, partition table, OTA bootstrap data, and application. It also works after `esptool erase-flash`; no data from an older installation is assumed. See [the hardware guide](usb-hid-s3/docs/HARDWARE.md) for commands.
+
+### Future firmware updates
+
+Use the InputPilot iOS Firmware tab. The app downloads only `firmware-manifest.json` and `firmware.bin` from GitHub Releases, validates them, and transfers only `firmware.bin` through BLE OTA. Never select an initial-flash image, bootloader, partition table, or `boot_app0.bin` in the Firmware tab.
+
+```text
+New ESP32-S3
+    │
+    ▼
+Initial USB flash ── bootloader + partitions + boot_app0 + firmware.bin
+    │
+    ▼
+InputPilot installed
+    │
+    ▼
+iOS app checks GitHub ── firmware-manifest.json + firmware.bin
+    │
+    ▼
+BLE OTA
+```
+
 ## Bluetooth firmware updates
 
 Firmware v0.8.0 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
 The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
-Devices flashed with the earlier factory-only partition table cannot migrate through a normal app OTA. Perform the one-time USB migration with the release assets at the PlatformIO ESP32-S3 offsets: `bootloader.bin` at `0x0000`, `partitions.bin` at `0x8000`, and `firmware.bin` at `0x10000` (for example with `esptool` after erasing the device). This full USB flash replaces the partition table, so back up/re-enter Wi-Fi credentials if needed. After migration, normal updates use **only `firmware.bin`**; never select the bootloader or partition-table image in the app.
+Devices flashed with the earlier factory-only partition table cannot migrate through a normal app OTA. Perform the one-time USB migration described above. This full USB flash replaces the partition table, so back up/re-enter Wi-Fi credentials if needed.
 
 Contributors should use `AppColors` and the `AccentColor` asset for the red brand accent. Success, warning, error, and informational states retain semantic system colors and always include text or symbols.
 
@@ -128,10 +156,12 @@ Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) wi
 |-------|---------|
 | `InputPilot-vX.Y.Z-android.apk` | Android debug APK |
 | `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
-| `InputPilot-vX.Y.Z-esp32s3-firmware.zip` | ESP32-S3 firmware (bootloader + app + partitions) |
+| `InputPilot-vX.Y.Z-initial-flash.bin` | Single merged image for initial USB installation or migration; never OTA |
+| `InputPilot-vX.Y.Z-initial-flash.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |
 | `firmware.bin` | App-only image for normal BLE OTA |
 | `firmware.sha256` / `firmware-manifest.json` | Automatically generated OTA integrity and compatibility metadata |
-| `bootloader.bin` / `partitions.bin` | One-time USB migration assets; not normal OTA images |
+| `bootloader.bin` / `partitions.bin` / `boot_app0.bin` | Individual initial USB flash assets; never OTA images |
+| `initial-flash-manifest.json` | Build-derived offsets, sizes, and SHA-256 hashes for the full flash set |
 | `SHA256SUMS.txt` | Checksum file for every published asset |
 
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.

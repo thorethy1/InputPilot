@@ -235,10 +235,11 @@ struct FirmwareManifest: Codable, Equatable {
 }
 
 enum FirmwareValidationError: LocalizedError, Equatable {
-    case notESP32Image, tooSmall, tooLarge, missingMetadata, wrongProduct, wrongBoard, unsupportedProtocol, unsupportedSchema
+    case notESP32Image, notApplicationImage, tooSmall, tooLarge, missingMetadata, wrongProduct, wrongBoard, unsupportedProtocol, unsupportedSchema
     var errorDescription: String? {
         switch self {
         case .notESP32Image: "The selected file is not an ESP32 application image."
+        case .notApplicationImage: "Select firmware.bin only. Full-flash, bootloader, and partition images cannot be installed through OTA."
         case .tooSmall: "The selected firmware file is too small."
         case .tooLarge: "This firmware file is too large for the InputPilot OTA slot."
         case .missingMetadata, .wrongProduct, .wrongBoard: "This firmware is not compatible with InputPilot."
@@ -252,12 +253,16 @@ struct FirmwareImageMetadata: Equatable {
     static let prefix = Data("INPUTPILOT-META:".utf8)
     static let minimumSize = 64 * 1024
     static let otaSlotSize = 0x1e0000
+    static let appDescriptorMagic = Data([0x32, 0x54, 0xcd, 0xab])
     let product: String; let board: String; let version: String; let protocolVersion: Int; let otaSchema: Int
 
     static func parseAndValidate(_ image: Data) throws -> Self {
         guard image.count >= minimumSize else { throw FirmwareValidationError.tooSmall }
         guard image.count <= otaSlotSize else { throw FirmwareValidationError.tooLarge }
         guard image.first == 0xe9 else { throw FirmwareValidationError.notESP32Image }
+        guard image.count >= 36, image.subdata(in: 32..<36) == appDescriptorMagic else {
+            throw FirmwareValidationError.notApplicationImage
+        }
         var searchStart = image.startIndex
         while searchStart < image.endIndex,
               let prefixRange = image.range(of: prefix, in: searchStart..<image.endIndex) {

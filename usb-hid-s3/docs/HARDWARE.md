@@ -27,7 +27,7 @@ Official Waveshare wiki / product page is also fine if you buy elsewhere — mat
 | Host PC | USB HID target (mouse/keyboard appear here) |
 | Optional: phone/PC on WiFi | Soft-AP setup or STA REST control |
 
-## Flash procedure (USB-OTG)
+## Developer build (USB-OTG)
 
 Auto-reset into download mode usually **fails** in native USB-OTG mode:
 
@@ -37,9 +37,32 @@ Auto-reset into download mode usually **fails** in native USB-OTG mode:
 3. **Power-cycle** the board (unplug/replug) so the app boots in OTG mode.
 
 After power-cycle the host should see USB identity **VID `0xCAFE` / PID `0x4001`**
-(“S3 Mouse+Keyboard”), not Espressif’s JTAG CDC (`0x303A`).
+(“InputPilot S3”), not Espressif’s JTAG CDC (`0x303A`).
 
 `scripts/flash_and_verify.sh` waits for that enumeration after you power-cycle.
+
+## Installing from a GitHub Release
+
+Release users do not need PlatformIO. Enter download mode as described above and erase the device when installing for the first time or migrating from the old partition layout.
+
+The preferred single-image method is:
+
+```bash
+esptool --chip esp32s3 erase-flash
+esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.0-initial-flash.bin
+```
+
+Alternatively, extract `InputPilot-v0.8.0-initial-flash.zip` and flash the individual images. These offsets are exported from the actual pinned PlatformIO/pioarduino build and recorded in `initial-flash-manifest.json` and `flash_args`:
+
+```bash
+esptool --chip esp32s3 write-flash \
+  0x0000 bootloader.bin \
+  0x8000 partitions.bin \
+  0xe000 boot_app0.bin \
+  0x10000 firmware.bin
+```
+
+Power-cycle after flashing. Future releases use only `firmware.bin` in the iOS Firmware tab; never use the merged image or the other three `.bin` files for BLE OTA.
 
 ## Status LED
 

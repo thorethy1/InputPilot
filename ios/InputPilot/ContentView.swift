@@ -266,7 +266,9 @@ private struct FirmwareDeviceView: View {
     private var statusText: String { switch updater.state { case .idle: "Ready"; case .checking: "Checking…"; case .connecting: "Connecting…"; case .authenticating: "Authenticating…"; case .preparing: "Preparing…"; case .transferring: "Updating firmware…"; case .waitingForFinalAck: "Waiting for final acknowledgement…"; case .verifying: "Verifying firmware…"; case .installing: "Installing firmware…"; case .rebooting: "Restarting InputPilot…"; case .reconnecting: "Reconnecting…"; case .verifyingInstalledVersion: "Verifying installed firmware…"; case .completed: "Firmware updated successfully"; case .cancelled: "Update cancelled. Existing firmware remains installed."; case let .failed(message): message } }
 }
 
-@MainActor private final class GitHubFirmwareSource: ObservableObject {
+@MainActor final class GitHubFirmwareSource: ObservableObject {
+    static let manifestAssetName = "firmware-manifest.json"
+    static let firmwareAssetName = "firmware.bin"
     @Published var manifest: FirmwareManifest?
     @Published var updateAvailable = false
     @Published var errorMessage: String?
@@ -280,8 +282,8 @@ private struct FirmwareDeviceView: View {
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let assets = json["assets"] as? [[String: Any]],
-                  let manifestString = assets.first(where: { $0["name"] as? String == "firmware-manifest.json" })?["browser_download_url"] as? String,
-                  let firmwareString = assets.first(where: { $0["name"] as? String == "firmware.bin" })?["browser_download_url"] as? String,
+                  let manifestString = assets.first(where: { $0["name"] as? String == Self.manifestAssetName })?["browser_download_url"] as? String,
+                  let firmwareString = assets.first(where: { $0["name"] as? String == Self.firmwareAssetName })?["browser_download_url"] as? String,
                   let manifestURL = URL(string: manifestString), let imageURL = URL(string: firmwareString) else { throw URLError(.badServerResponse) }
             let (manifestData, _) = try await URLSession.shared.data(from: manifestURL)
             let decoded = try JSONDecoder().decode(FirmwareManifest.self, from: manifestData)

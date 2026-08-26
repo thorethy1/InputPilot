@@ -23,6 +23,14 @@ Use `PASS`, `FAIL`, or `NOT RUN`, and attach concise evidence or observations.
 | Test | Result | Evidence / notes |
 | --- | --- | --- |
 | USB migration | NOT RUN | |
+| Merged initial-flash.bin after erase-flash | NOT RUN | |
+| Individual initial-flash files after erase-flash | NOT RUN | |
+| boot_app0.bin present | NOT RUN | |
+| Partition table / two OTA slots correct | NOT RUN | |
+| First boot after erased flash | NOT RUN | |
+| USB enumeration as InputPilot S3 | NOT RUN | |
+| BLE metadata and OTA schema 1 after clean install | NOT RUN | |
+| First OTA after clean install uses inactive slot | NOT RUN | |
 | BLE discovery | NOT RUN | |
 | BLE-only onboarding | NOT RUN | |
 | BLE auth success | NOT RUN | |

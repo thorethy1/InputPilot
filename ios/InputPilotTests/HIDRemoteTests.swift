@@ -5,6 +5,7 @@ final class HIDRemoteTests: XCTestCase {
     private func firmwareImage(product: String = "InputPilot", board: String = "esp32-s3-zero-4mb", version: String = "0.8.1", protocolVersion: Int = 1) -> Data {
         var data = Data(repeating: 0xff, count: FirmwareImageMetadata.minimumSize)
         data[0] = 0xe9
+        data.replaceSubrange(32..<36, with: FirmwareImageMetadata.appDescriptorMagic)
         let metadata = "INPUTPILOT-META:product=\(product);board=\(board);version=\(version);protocol=\(protocolVersion);otaSchema=1;\0"
         data.replaceSubrange(128..<(128 + metadata.utf8.count), with: metadata.utf8)
         return data
@@ -45,6 +46,20 @@ final class HIDRemoteTests: XCTestCase {
     func testForeignAndWrongBoardFirmwareAreRejected() {
         XCTAssertThrowsError(try FirmwareImageMetadata.parseAndValidate(firmwareImage(product: "Other")))
         XCTAssertThrowsError(try FirmwareImageMetadata.parseAndValidate(firmwareImage(board: "other-board")))
+    }
+
+    func testFullFlashImageIsRejectedStructurally() {
+        var image = firmwareImage()
+        image.replaceSubrange(32..<36, with: Data([0x50, 0, 0, 0]))
+        XCTAssertThrowsError(try FirmwareImageMetadata.parseAndValidate(image)) { error in
+            XCTAssertEqual(error as? FirmwareValidationError, .notApplicationImage)
+        }
+    }
+
+    @MainActor func testGitHubOTAUsesOnlyDedicatedAssets() {
+        XCTAssertEqual(GitHubFirmwareSource.manifestAssetName, "firmware-manifest.json")
+        XCTAssertEqual(GitHubFirmwareSource.firmwareAssetName, "firmware.bin")
+        XCTAssertNotEqual(GitHubFirmwareSource.firmwareAssetName, "initial-flash.bin")
     }
 
     func testManifestWrongProductAndBoardAreRejected() {
