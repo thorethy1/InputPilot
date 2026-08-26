@@ -28,7 +28,7 @@ Supported board: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 4 MB flash,
 WS2812 on GPIO21).
 
 <p align="center">
-  <img src="docs/images/esp32-s3-zero.jpg" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
+  <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
 </p>
 
 - Buy example: [Amazon listing](https://a.co/d/0fwrWUFU)
