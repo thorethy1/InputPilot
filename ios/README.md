@@ -1,5 +1,7 @@
 # InputPilot (iOS)
 
+OUTDATED PLEASE UPDATE ME!
+
 SwiftUI/SwiftData companion app for discovering and controlling **InputPilot** ESP32-S3 devices over BLE, persistent TCP, and local REST.
 
 <p align="center">
@@ -82,7 +84,7 @@ Configured in `InputPilot/Info.plist`:
 
 ## Bundle ID
 
-`com.mkflabs.inputpilot`
+`com.thorethy.inputpilot`
 
 ## Manual QA
 
