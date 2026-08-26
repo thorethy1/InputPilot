@@ -75,6 +75,14 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertTrue(transport.events.isEmpty)
     }
 
+    @MainActor func testNewerProtocolIsRejectedBeforeTransportSend() async {
+        let transport = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(ble: transport, tcp: transport, rest: transport, protocolVersion: 2)
+        XCTAssertFalse(await manager.send(.click(.left)))
+        XCTAssertTrue(transport.events.isEmpty)
+        XCTAssertEqual(manager.connectionSummary, "Firmware unsupported")
+    }
+
     @MainActor func testMacroCompressionPreservesNonMovementEvents() {
         let controller = MacroController()
         controller.startRecording()
@@ -100,6 +108,7 @@ final class HIDRemoteTests: XCTestCase {
 private final class MockTransport: HIDControlTransport {
     let kind: TransportKind
     var isAvailable: Bool
+    var state: TransportConnectionState { isAvailable ? .ready : .offline }
     var events: [HIDEvent] = []
     init(kind: TransportKind, available: Bool) { self.kind = kind; isAvailable = available }
     func connect() async {}

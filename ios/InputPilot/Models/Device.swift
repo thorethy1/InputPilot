@@ -9,6 +9,8 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
     var jiggleEnabled: Bool
     var lastSeen: Date?
     var firmwareVersion: String?
+    var protocolVersion: Int
+    var capabilities: [String]
 
     init(
         id: String,
@@ -18,7 +20,9 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         apiToken: String? = nil,
         jiggleEnabled: Bool = false,
         lastSeen: Date? = nil,
-        firmwareVersion: String? = nil
+        firmwareVersion: String? = nil,
+        protocolVersion: Int = 0,
+        capabilities: [String] = []
     ) {
         self.id = id
         self.displayName = displayName
@@ -28,6 +32,8 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         self.jiggleEnabled = jiggleEnabled
         self.lastSeen = lastSeen
         self.firmwareVersion = firmwareVersion
+        self.protocolVersion = protocolVersion
+        self.capabilities = capabilities
     }
 
     init(status: DeviceStatus, fallbackHost: String) {
@@ -39,6 +45,8 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         jiggleEnabled = status.jiggle
         lastSeen = Date()
         firmwareVersion = status.version
+        protocolVersion = status.protocolVersion
+        capabilities = status.capabilities
     }
 }
 

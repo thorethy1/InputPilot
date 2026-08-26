@@ -68,10 +68,14 @@ enum ConnectionMode: String, CaseIterable, Codable, Identifiable {
     var id: String { rawValue }
 }
 enum TransportKind: String { case bluetooth = "Bluetooth", tcp = "Wi-Fi TCP", rest = "REST" }
+enum TransportConnectionState: String, Equatable {
+    case offline, connecting, reconnecting, authenticating, ready, authenticationFailed
+}
 
 protocol HIDControlTransport: AnyObject {
     var kind: TransportKind { get }
     var isAvailable: Bool { get }
+    var state: TransportConnectionState { get }
     func connect() async
     func send(_ event: HIDEvent) async throws
     func disconnect() async
@@ -84,10 +88,11 @@ enum TransportError: LocalizedError { case unavailable, encoding, failed(String)
 final class RESTHIDControlTransport: HIDControlTransport {
     let kind = TransportKind.rest
     private(set) var isAvailable = false
+    private(set) var state: TransportConnectionState = .offline
     private let baseURL: URL; private let token: String?; private let session: URLSession
     init(baseURL: URL, token: String?, session: URLSession = .shared) { self.baseURL = baseURL; self.token = token; self.session = session }
-    func connect() async { do { try await send(.ping); isAvailable = true } catch { isAvailable = false } }
-    func disconnect() async { isAvailable = false }
+    func connect() async { state = .connecting; do { try await send(.ping); isAvailable = true; state = .ready } catch { isAvailable = false; if state != .authenticationFailed { state = .offline } } }
+    func disconnect() async { isAvailable = false; state = .offline }
     func send(_ event: HIDEvent) async throws {
         let body: [String: Any]
         switch event {
@@ -105,9 +110,9 @@ final class RESTHIDControlTransport: HIDControlTransport {
         if request.httpMethod == "POST" { request.httpBody = try JSONSerialization.data(withJSONObject: body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }
         let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { isAvailable = false; throw TransportError.failed("Invalid REST response") }
-        guard (200...299).contains(http.statusCode) else { isAvailable = false; throw TransportError.failed(http.statusCode == 401 ? "Authentication failed" : "REST request failed (HTTP \(http.statusCode))") }
-        isAvailable = true
+        guard let http = response as? HTTPURLResponse else { isAvailable = false; state = .offline; throw TransportError.failed("Invalid REST response") }
+        guard (200...299).contains(http.statusCode) else { isAvailable = false; state = http.statusCode == 401 ? .authenticationFailed : .offline; throw TransportError.failed(http.statusCode == 401 ? "Authentication failed" : "REST request failed (HTTP \(http.statusCode))") }
+        isAvailable = true; state = .ready
     }
 }
 
@@ -115,22 +120,25 @@ final class TCPHIDControlTransport: HIDControlTransport {
     let kind = TransportKind.tcp
     private let host: NWEndpoint.Host; private let token: String?; private var connection: NWConnection?
     private(set) var isAvailable = false
+    private(set) var state: TransportConnectionState = .offline
     private var shouldReconnect = false
     init(host: String, token: String?) { self.host = NWEndpoint.Host(host); self.token = token }
     func connect() async {
         shouldReconnect = true
         if connection != nil { return }
+        state = state == .offline ? .connecting : .reconnecting
         let conn = NWConnection(host: host, port: 3333, using: .tcp); connection = conn
         conn.stateUpdateHandler = { [weak self, weak conn] state in
             guard let self, let conn, self.connection === conn else { return }
             switch state {
             case .ready:
                 if let token = self.token, !token.isEmpty {
-                    guard !token.contains("\n"), !token.contains("\r") else { self.isAvailable = false; conn.cancel(); return }
-                    conn.send(content: Data("auth \(token)\n".utf8), completion: .contentProcessed { [weak self] error in self?.isAvailable = error == nil })
-                } else { self.isAvailable = true }
+                    self.state = .authenticating
+                    guard !token.contains("\n"), !token.contains("\r") else { self.isAvailable = false; self.state = .authenticationFailed; conn.cancel(); return }
+                    conn.send(content: Data("auth \(token)\n".utf8), completion: .contentProcessed { [weak self] error in self?.isAvailable = error == nil; self?.state = error == nil ? .ready : .offline })
+                } else { self.isAvailable = true; self.state = .ready }
             case .failed, .cancelled:
-                self.isAvailable = false; self.connection = nil
+                self.isAvailable = false; self.connection = nil; self.state = self.shouldReconnect ? .reconnecting : .offline
                 if self.shouldReconnect { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
             default: self.isAvailable = false
             }
@@ -145,13 +153,17 @@ final class TCPHIDControlTransport: HIDControlTransport {
             })
         }
     }
-    func send(_ event: HIDEvent) async throws { try await sendLine(event.line) }
-    func disconnect() async { shouldReconnect = false; connection?.cancel(); connection = nil; isAvailable = false }
+    func send(_ event: HIDEvent) async throws {
+        guard isAvailable else { throw TransportError.unavailable }
+        do { try await sendLine(event.line) } catch { isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
+    }
+    func disconnect() async { shouldReconnect = false; connection?.cancel(); connection = nil; isAvailable = false; state = .offline }
 }
 
 final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
     let kind = TransportKind.bluetooth
     private(set) var isAvailable = false
+    private(set) var state: TransportConnectionState = .offline
     private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var characteristics: [CBUUID: CBCharacteristic] = [:]
     private let token: String?
     private let deviceId: String
@@ -167,13 +179,14 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     init(deviceId: String, token: String?) { self.deviceId = deviceId.lowercased(); self.token = token; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
+        state = state == .offline ? .connecting : .reconnecting
         central.scanForPeripherals(withServices: [service, legacyService])
         scanTimeoutWork?.cancel()
         let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
     }
     func connect() async { shouldReconnect = true; scan() }
-    func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn { scan() } else { isAvailable = false } }
+    func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn { scan() } else { isAvailable = false; state = .offline } }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
               let advertised = String(data: data, encoding: .utf8)?.lowercased(),
@@ -181,23 +194,24 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         self.peripheral = peripheral
         scanTimeoutWork?.cancel()
         central.stopScan()
-        central.connect(peripheral)
+        state = .connecting; central.connect(peripheral)
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService]) }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { isAvailable = false; characteristics.removeAll(); self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { isAvailable = false; state = shouldReconnect ? .reconnecting : .offline; characteristics.removeAll(); self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { peripheral.services?.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         service.characteristics?.forEach { characteristics[$0.uuid] = $0 }
-        if let token, !token.isEmpty, let rx = characteristics[legacyRX] { peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse) }
+        if let token, !token.isEmpty, let rx = characteristics[legacyRX] { state = .authenticating; peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse) }
         let hasBinary = characteristics[mouse] != nil && characteristics[keyboard] != nil && characteristics[control] != nil
         isAvailable = hasBinary && (token?.isEmpty != false || characteristics[legacyRX] != nil)
+        state = isAvailable ? .ready : .offline
     }
     func send(_ event: HIDEvent) async throws {
         let uuid: CBUUID = { switch event { case .mouseMove, .scroll, .mouseDown, .mouseUp, .click: mouse; case .typeText, .key, .keyCombo, .keyboardReport: keyboard; default: control } }()
         guard let peripheral, let characteristic = characteristics[uuid] else { throw TransportError.unavailable }
         peripheral.writeValue(event.binary, for: characteristic, type: .withoutResponse)
     }
-    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; isAvailable = false }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; isAvailable = false; state = .offline }
 }
 
 @MainActor final class HIDConnectionManager: ObservableObject {
@@ -206,6 +220,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     @Published var lastError: String?
     @Published private(set) var isConnecting = false
     let capabilities: Set<String>
+    let protocolVersion: Int
     var onEvent: ((HIDEvent) -> Void)?
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport; private let rest: HIDControlTransport
     init(device: StoredDevice) {
@@ -213,25 +228,34 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         ble = BLEHIDControlTransport(deviceId: device.deviceId, token: device.apiToken); tcp = TCPHIDControlTransport(host: host, token: device.apiToken)
         rest = RESTHIDControlTransport(baseURL: DeviceEndpointResolver.baseURL(from: host)!, token: device.apiToken)
         capabilities = Set(device.capabilities)
+        protocolVersion = device.protocolVersion
     }
-    init(ble: HIDControlTransport, tcp: HIDControlTransport, rest: HIDControlTransport, capabilities: Set<String> = []) {
-        self.ble = ble; self.tcp = tcp; self.rest = rest; self.capabilities = capabilities
+    init(ble: HIDControlTransport, tcp: HIDControlTransport, rest: HIDControlTransport, capabilities: Set<String> = [], protocolVersion: Int = 1) {
+        self.ble = ble; self.tcp = tcp; self.rest = rest; self.capabilities = capabilities; self.protocolVersion = protocolVersion
     }
     func connect() async { isConnecting = true; async let b: Void = ble.connect(); async let t: Void = tcp.connect(); async let r: Void = rest.connect(); _ = await (b, t, r); isConnecting = false }
     func disconnect() async { await releaseAll(); await ble.disconnect(); await tcp.disconnect(); await rest.disconnect(); activeTransport = nil }
     @discardableResult func send(_ event: HIDEvent) async -> Bool {
+        guard protocolVersion <= 1 else { lastError = "Firmware protocol v\(protocolVersion) is unsupported."; activeTransport = nil; return false }
         if let capability = requiredCapability(for: event), !supports(capability) {
             lastError = "This firmware does not support \(capability.replacingOccurrences(of: "_", with: " "))."
             return false
         }
-        for transport in candidates(for: event) where transport.isAvailable {
+        var failure: String?
+        for transport in candidates(for: event) where transport.isAvailable && transport.state == .ready {
             do { try await transport.send(event); activeTransport = transport.kind; lastError = nil; onEvent?(event); return true }
-            catch { lastError = error.localizedDescription }
+            catch { failure = error.localizedDescription }
         }
-        lastError = "No permitted control transport is available."
+        lastError = failure ?? (allTransports.contains { $0.state == .authenticationFailed } ? "Authentication failed" : "No permitted control transport is ready.")
+        activeTransport = nil
         return false
     }
     func releaseAll() async { await send(.releaseAll) }
+    func releaseAllPreservingError() async {
+        let error = lastError
+        await releaseAll()
+        if let error { lastError = error }
+    }
     @discardableResult func sendText(_ text: String, layout: KeyboardLayout, delayMilliseconds: Int = 0) async -> Bool {
         do {
             for stroke in try layout.strokes(for: text) {
@@ -244,6 +268,16 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     }
     func supports(_ capability: String) -> Bool { capabilities.isEmpty || capabilities.contains(capability) }
     var transportReadiness: [(TransportKind, Bool)] { [(.bluetooth, ble.isAvailable), (.tcp, tcp.isAvailable), (.rest, rest.isAvailable)] }
+    var connectionSummary: String {
+        if protocolVersion > 1 { return "Firmware unsupported" }
+        if let lastError { return lastError }
+        if let activeTransport { return "Connected · \(activeTransport.rawValue)" }
+        if allTransports.contains(where: { $0.state == .authenticationFailed }) { return "Authentication failed" }
+        if allTransports.contains(where: { $0.state == .reconnecting }) { return "Reconnecting…" }
+        if isConnecting || allTransports.contains(where: { [.connecting, .authenticating].contains($0.state) }) { return "Connecting…" }
+        return "Offline"
+    }
+    private var allTransports: [HIDControlTransport] { [ble, tcp, rest] }
     private func requiredCapability(for event: HIDEvent) -> String? {
         switch event {
         case .mouseMove: "mouse_move"
@@ -303,7 +337,7 @@ struct RecordedEvent: Codable { let offset: TimeInterval; let event: HIDEvent }
             do { try await Task.sleep(for: .seconds(delay)) } catch { self?.isPlaying = false; return }; var iteration = 0
             while !Task.isCancelled && (repeats == nil || iteration < repeats!) {
                 var previous = 0.0
-                for item in macro.events { if Task.isCancelled { break }; do { try await Task.sleep(for: .seconds(max(0, item.offset - previous) / speed)) } catch { break }; guard !Task.isCancelled else { break }; previous = item.offset; if !(await manager.send(item.event)) { self?.isPlaying = false; await manager.releaseAll(); return } }
+                for item in macro.events { if Task.isCancelled { break }; do { try await Task.sleep(for: .seconds(max(0, item.offset - previous) / speed)) } catch { break }; guard !Task.isCancelled else { break }; previous = item.offset; if !(await manager.send(item.event)) { self?.isPlaying = false; await manager.releaseAllPreservingError(); return } }
                 iteration += 1
             }
             await manager.releaseAll(); self?.isPlaying = false
@@ -319,7 +353,7 @@ struct HIDControlView: View {
     init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 4) { HStack { Circle().fill(manager.activeTransport == nil ? .orange : .green).frame(width: 9, height: 9); Text(manager.lastError ?? manager.activeTransport.map { "Connected · \($0.rawValue)" } ?? (manager.isConnecting ? "Connecting…" : "Offline")).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }; TimelineView(.periodic(from: .now, by: 1)) { _ in HStack(spacing: 12) { ForEach(manager.transportReadiness, id: \.0) { item in Label(item.0.rawValue, systemImage: item.1 ? "circle.fill" : "circle").foregroundStyle(item.1 ? .green : .secondary) } }.font(.caption2) } }
+            VStack(spacing: 4) { HStack { Circle().fill(manager.activeTransport == nil ? .orange : .green).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }; TimelineView(.periodic(from: .now, by: 1)) { _ in HStack(spacing: 12) { ForEach(manager.transportReadiness, id: \.0) { item in Label(item.0.rawValue, systemImage: item.1 ? "circle.fill" : "circle").foregroundStyle(item.1 ? .green : .secondary) } }.font(.caption2) } }
                 .padding(.horizontal)
             TabView { TrackpadView(manager: manager).tabItem { Label("Trackpad", systemImage: "rectangle.and.hand.point.up.left") }; LiveKeyboardView(manager: manager).tabItem { Label("Keyboard", systemImage: "keyboard") }; PresetsView(manager: manager).tabItem { Label("Presets", systemImage: "star") }; MacrosView(manager: manager, controller: macros).tabItem { Label("Macros", systemImage: "record.circle") } }
         }
@@ -361,8 +395,8 @@ struct LiveKeyboardView: View {
 }
 
 struct PresetsView: View {
-    @ObservedObject var manager: HIDConnectionManager; @Environment(\.modelContext) private var context; @Query(sort: \HIDPreset.order) private var presets: [HIDPreset]; @State private var name = ""; @State private var payload = ""; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
-    var body: some View { NavigationStack { List { Section("New preset") { TextField("Name", text: $name); TextField("Text or shortcut", text: $payload, axis: .vertical); Button("Add Text Preset") { context.insert(HIDPreset(name: name.isEmpty ? "Preset" : name, payload: payload, order: presets.count)); name = ""; payload = "" } }; Section("Presets") { ForEach(presets) { preset in HStack { Button { preset.favorite.toggle() } label: { Image(systemName: preset.favorite ? "star.fill" : "star") }; VStack(alignment: .leading) { TextField("Name", text: Binding(get: { preset.name }, set: { preset.name = $0 })); TextField("Content", text: Binding(get: { preset.payload }, set: { preset.payload = $0 }), axis: .vertical).font(.caption); Toggle("Shortcut", isOn: Binding(get: { preset.shortcut }, set: { preset.shortcut = $0 })); Toggle("Enter after", isOn: Binding(get: { preset.enterAfter }, set: { preset.enterAfter = $0 })); Picker("Typing speed", selection: Binding(get: { preset.typingDelayMs }, set: { preset.typingDelayMs = $0 })) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } } }; Spacer(); Button("Run") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); Task { let sent: Bool; if preset.shortcut { sent = await manager.send(.keyCombo(preset.payload)) } else { sent = await manager.sendText(preset.payload, layout: KeyboardLayout(rawValue: layoutName) ?? .german, delayMilliseconds: preset.typingDelayMs) }; if sent && preset.enterAfter { await manager.send(.key("enter")) } } } }.swipeActions { Button(role: .destructive) { context.delete(preset) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDPreset(name: preset.name + " Copy", payload: preset.payload, shortcut: preset.shortcut, favorite: preset.favorite, order: presets.count, enterAfter: preset.enterAfter, typingDelayMs: preset.typingDelayMs)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } }.onMove { source, destination in var ordered = presets; ordered.move(fromOffsets: source, toOffset: destination); for (index, item) in ordered.enumerated() { item.order = index } } } }.toolbar { EditButton() } } }
+    @ObservedObject var manager: HIDConnectionManager; @Environment(\.modelContext) private var context; @Query(sort: \HIDPreset.order) private var presets: [HIDPreset]; @State private var name = ""; @State private var payload = ""; @State private var shortcut = false; @State private var favorite = false; @State private var enterAfter = false; @State private var typingDelayMs = 0; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
+    var body: some View { NavigationStack { List { Section("New preset") { TextField("Name", text: $name); TextField("Text or shortcut", text: $payload, axis: .vertical); Picker("Type", selection: $shortcut) { Text("Text").tag(false); Text("Keyboard Shortcut").tag(true) }; Toggle("Favorite", isOn: $favorite); Toggle("Enter after", isOn: $enterAfter).disabled(shortcut); Picker("Typing speed", selection: $typingDelayMs) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(shortcut); Button("Add Preset") { context.insert(HIDPreset(name: name.isEmpty ? "Preset" : name, payload: payload, shortcut: shortcut, favorite: favorite, order: presets.count, enterAfter: enterAfter, typingDelayMs: typingDelayMs)); name = ""; payload = ""; shortcut = false; favorite = false; enterAfter = false; typingDelayMs = 0 } }; Section("Presets") { ForEach(presets) { preset in HStack { Button { preset.favorite.toggle() } label: { Image(systemName: preset.favorite ? "star.fill" : "star") }; VStack(alignment: .leading) { TextField("Name", text: Binding(get: { preset.name }, set: { preset.name = $0 })); TextField("Content", text: Binding(get: { preset.payload }, set: { preset.payload = $0 }), axis: .vertical).font(.caption); Toggle("Shortcut", isOn: Binding(get: { preset.shortcut }, set: { preset.shortcut = $0 })); Toggle("Enter after", isOn: Binding(get: { preset.enterAfter }, set: { preset.enterAfter = $0 })); Picker("Typing speed", selection: Binding(get: { preset.typingDelayMs }, set: { preset.typingDelayMs = $0 })) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } } }; Spacer(); Button("Run") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); Task { let sent: Bool; if preset.shortcut { sent = await manager.send(.keyCombo(preset.payload)) } else { sent = await manager.sendText(preset.payload, layout: KeyboardLayout(rawValue: layoutName) ?? .german, delayMilliseconds: preset.typingDelayMs) }; if sent && preset.enterAfter { await manager.send(.key("enter")) } } } }.swipeActions { Button(role: .destructive) { context.delete(preset) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDPreset(name: preset.name + " Copy", payload: preset.payload, shortcut: preset.shortcut, favorite: preset.favorite, order: presets.count, enterAfter: preset.enterAfter, typingDelayMs: preset.typingDelayMs)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } }.onMove { source, destination in var ordered = presets; ordered.move(fromOffsets: source, toOffset: destination); for (index, item) in ordered.enumerated() { item.order = index } } } }.toolbar { EditButton() } } }
 }
 
 struct MacrosView: View {

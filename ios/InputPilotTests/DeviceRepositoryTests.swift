@@ -81,6 +81,32 @@ final class DeviceRepositoryTests: XCTestCase {
 
         XCTAssertEqual(device.displayName, "Desk Mouse")
     }
+
+    func testAddPersistsProtocolCapabilitiesImmediately() async throws {
+        let status = DeviceStatus(
+            ok: true,
+            name: "InputPilot",
+            version: "0.6.0",
+            deviceId: "aabbccddeeff",
+            jiggle: false,
+            jiggleIntervalMs: 10_000,
+            mdns: "hid-helper-eeff.local",
+            protocolVersion: 1,
+            capabilities: ["keyboard_layout", "release_all"]
+        )
+
+        let stored = try await repository.addFromDiscovery(
+            status: status,
+            fallbackHost: "hid-helper-eeff.local",
+            displayName: "Office",
+            token: nil,
+            api: mockAPI
+        )
+
+        XCTAssertEqual(stored.protocolVersion, 1)
+        XCTAssertEqual(stored.capabilities, ["keyboard_layout", "release_all"])
+        XCTAssertNotNil(stored.lastCapabilitiesUpdate)
+    }
 }
 
 final class DeviceEndpointResolverTests: XCTestCase {

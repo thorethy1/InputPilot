@@ -50,7 +50,10 @@ final class StoredDevice {
             apiToken: device.apiToken,
             jiggleEnabled: device.jiggleEnabled,
             lastSeen: device.lastSeen,
-            firmwareVersion: device.firmwareVersion
+            firmwareVersion: device.firmwareVersion,
+            protocolVersion: device.protocolVersion,
+            capabilities: device.capabilities,
+            lastCapabilitiesUpdate: device.capabilities.isEmpty ? nil : Date()
         )
     }
 
@@ -63,7 +66,9 @@ final class StoredDevice {
             apiToken: apiToken,
             jiggleEnabled: jiggleEnabled,
             lastSeen: lastSeen,
-            firmwareVersion: firmwareVersion
+            firmwareVersion: firmwareVersion,
+            protocolVersion: protocolVersion,
+            capabilities: capabilities
         )
     }
 }
@@ -84,6 +89,9 @@ enum DeviceStore {
             existing.jiggleEnabled = device.jiggleEnabled
             existing.lastSeen = device.lastSeen
             existing.firmwareVersion = device.firmwareVersion
+            existing.protocolVersion = device.protocolVersion
+            existing.capabilities = device.capabilities
+            existing.lastCapabilitiesUpdate = device.capabilities.isEmpty ? existing.lastCapabilitiesUpdate : Date()
         } else {
             context.insert(StoredDevice(device: device))
         }
