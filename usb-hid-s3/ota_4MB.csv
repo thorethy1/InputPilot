@@ -1,0 +1,9 @@
+# InputPilot OTA schema 1 for Waveshare ESP32-S3-Zero (4 MB flash).
+# Two 0x1e0000 (1,966,080-byte) app slots leave ~695 KB headroom over the
+# v0.6.4 baseline image (1,271,270 bytes). App offsets/sizes are 64 KB aligned.
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x5000,
+otadata,   data, ota,     0xe000,   0x2000,
+ota_0,     app,  ota_0,   0x10000,  0x1e0000,
+ota_1,     app,  ota_1,   0x1f0000, 0x1e0000,
+coredump,  data, coredump,0x3d0000, 0x10000,

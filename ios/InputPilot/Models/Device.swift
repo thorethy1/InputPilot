@@ -11,6 +11,7 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
     var firmwareVersion: String?
     var protocolVersion: Int
     var capabilities: [String]
+    var otaSchema: Int
 
     init(
         id: String,
@@ -22,7 +23,8 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         lastSeen: Date? = nil,
         firmwareVersion: String? = nil,
         protocolVersion: Int = 0,
-        capabilities: [String] = []
+        capabilities: [String] = [],
+        otaSchema: Int = 0
     ) {
         self.id = id
         self.displayName = displayName
@@ -34,6 +36,7 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         self.firmwareVersion = firmwareVersion
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
+        self.otaSchema = otaSchema
     }
 
     init(status: DeviceStatus, fallbackHost: String) {
@@ -47,6 +50,7 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         firmwareVersion = status.version
         protocolVersion = status.protocolVersion
         capabilities = status.capabilities
+        otaSchema = status.otaSchema
     }
 }
 
@@ -62,6 +66,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let authRequired: Bool
     let protocolVersion: Int
     let capabilities: [String]
+    let otaSchema: Int
 
     enum CodingKeys: String, CodingKey {
         case ok
@@ -75,6 +80,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case authRequired = "auth_required"
         case protocolVersion = "protocol_version"
         case capabilities
+        case otaSchema = "ota_schema"
     }
 
     init(
@@ -88,7 +94,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         mdns: String? = nil,
         authRequired: Bool = false,
         protocolVersion: Int = 0,
-        capabilities: [String] = []
+        capabilities: [String] = [],
+        otaSchema: Int = 0
     ) {
         self.ok = ok
         self.name = name
@@ -101,6 +108,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.authRequired = authRequired
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
+        self.otaSchema = otaSchema
     }
 
     init(from decoder: Decoder) throws {
@@ -117,6 +125,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         authRequired = try container.decodeIfPresent(Bool.self, forKey: .authRequired) ?? false
         protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
+        otaSchema = try container.decodeIfPresent(Int.self, forKey: .otaSchema) ?? 0
     }
 }
 

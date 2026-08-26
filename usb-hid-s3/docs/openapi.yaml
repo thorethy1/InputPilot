@@ -21,7 +21,7 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.6.4
+  version: 0.8.0
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -89,6 +89,9 @@ paths:
                 jiggle_interval_ms: 10000
                 sta_ip: 192.168.2.161
                 mdns: hid-helper-eeff.local
+                protocol_version: 1
+                ota_schema: 1
+                capabilities: [ble_control, tcp_control, rest_control, ble_ota]
     options:
       tags: [status]
       summary: CORS preflight
@@ -508,11 +511,15 @@ components:
         protocol_version:
           type: integer
           example: 1
+        ota_schema:
+          type: integer
+          description: Dual-slot OTA partition schema; absent or 0 requires USB migration
+          example: 1
         capabilities:
           type: array
           items:
             type: string
-          example: [mouse_move, mouse_click, mouse_button_state, mouse_scroll, keyboard_type, keyboard_key, keyboard_layout, release_all, ble_control, tcp_control, rest_control, protocol_v1]
+          example: [mouse_move, mouse_click, mouse_button_state, mouse_scroll, keyboard_type, keyboard_key, keyboard_layout, release_all, ble_control, tcp_control, rest_control, ble_ota, protocol_v1]
 
     JiggleStatus:
       type: object

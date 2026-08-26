@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0] - 2026-08-26
+
+### Added
+
+- Authenticated, versioned BLE firmware updates with offset/ACK flow control, cancellation, timeouts, reconnect handling, and mandatory SHA-256 integrity verification.
+- Native iOS Devices, Control, Firmware, and Settings tab navigation, a manual `.bin` firmware picker, and BLE-only device/update UX.
+- Explicit Bluetooth transport visibility and centralized red native accent/theme tokens.
+
+### Changed
+
+- Replaced the factory-only 4 MB partition layout with OTA schema 1: two 1,966,080-byte app slots plus NVS, OTA metadata, and coredump partitions.
+- Expanded status capabilities with `ble_ota` and `ota_schema` while retaining existing REST, TCP, NUS, HID, identity, credentials, and authentication contracts.
+- Release builds now produce `firmware.bin`, `firmware.sha256`, `firmware-manifest.json`, `bootloader.bin`, and `partitions.bin` with automatic size/hash metadata.
+
+### Security
+
+- BLE OTA requires the existing per-session control authentication, never activates incomplete or hash-mismatched images, and aborts safely on disconnect or timeout.
+- SHA-256 verifies firmware integrity; it is not described as a cryptographic firmware signature.
+
 ## [0.6.4] - 2026-08-26
 
 - Simplified app icon to a clean paper-plane-only design. Removed the ESP32 antenna, wireless arcs, mouse and keyboard symbols. Just the plane.

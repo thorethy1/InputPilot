@@ -63,3 +63,12 @@ Protocol v1 firmware reports only implemented features: `mouse_move`, `mouse_cli
 ## Transport selection
 
 Automatic mode prefers BLE for latency-sensitive events and TCP for long text or macro streams; REST is the management/fallback path. `Prefer Bluetooth`, `Prefer Wi-Fi`, `Bluetooth Only`, and `Wi-Fi Only` constrain this order. A drag, keyboard sequence, text send, preset, or macro leases one ready transport for its ordered lifetime. Loss of that transport aborts the sequence and attempts release-all; failover is allowed only for a later independent sequence.
+# BLE OTA protocol v1
+
+InputPilot extends its existing NimBLE server with service `7d9f1001-4f4d-4f56-4552-484944000001` and Control (`...1002`, write-with-response), Data (`...1003`, write-without-response), and Status (`...1004`, read/notify) characteristics. The existing NUS authentication command must succeed before Control or Data is accepted.
+
+The client writes `START protocol=1 version=<semver> size=<bytes> sha256=<64 lowercase hex>` to Control. The device validates OTA schema, target slot, protocol, size, and authentication, calls `esp_ota_begin`, then notifies `READY` with `maxChunk` and `windowSize`. Each Data value begins with a four-byte little-endian absolute offset followed by image bytes. Offsets must be contiguous; Status emits ACKs containing the durable received offset. End-of-file is determined only by the declared size and explicit `FINISH`, never by a short BLE packet.
+
+On FINISH the device verifies byte count and streaming SHA-256, calls `esp_ota_end`, and only then calls `esp_ota_set_boot_partition`. Status transitions through `VERIFYING`, `INSTALLING`, `SUCCESS`, and `REBOOTING`. `ABORT`, disconnect, timeout, write error, invalid offset, or checksum mismatch calls `esp_ota_abort` and leaves the installed partition active. Partial-transfer resume is not part of protocol v1.
+
+SHA-256 supplies transport/file integrity, not cryptographic signing or publisher authenticity.

@@ -186,6 +186,7 @@ final class DeviceRepository {
         stored.firmwareVersion = status.version
         stored.protocolVersion = status.protocolVersion
         stored.capabilities = status.capabilities
+        stored.otaSchema = status.otaSchema
         stored.lastCapabilitiesUpdate = Date()
     }
 

@@ -14,5 +14,6 @@ void deviceReleaseAll();
 bool deviceJiggleEnabled();
 uint32_t deviceJiggleIntervalMs();
 bool deviceHidReady();
+bool deviceOtaActive();
 
 #endif // COMMAND_SINK_H

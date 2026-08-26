@@ -1,4 +1,5 @@
 import CoreBluetooth
+import CryptoKit
 import Foundation
 import Network
 import SwiftData
@@ -215,6 +216,138 @@ final class TCPHIDControlTransport: HIDControlTransport {
     func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; receiveBuffer.removeAll(); isAvailable = false; state = .offline }
 }
 
+enum FirmwareUpdateState: Equatable {
+    case idle, checking, preparing, transferring, verifying, rebooting, reconnecting, completed, cancelled
+    case failed(String)
+}
+
+struct FirmwareManifest: Codable, Equatable {
+    let product: String
+    let version: String
+    let board: String
+    let protocolVersion: Int
+    let otaSchema: Int
+    let size: Int
+    let sha256: String
+
+    enum CodingKeys: String, CodingKey { case product, version, board, otaSchema, size, sha256; case protocolVersion = "protocol" }
+}
+
+struct SemanticVersion: Comparable, Equatable {
+    let components: [Int]
+    init?(_ value: String) {
+        let core = value.split(separator: "+", maxSplits: 1)[0].split(separator: "-", maxSplits: 1)[0]
+        let parts = core.split(separator: ".")
+        guard !parts.isEmpty, parts.allSatisfy({ Int($0) != nil }) else { return nil }
+        components = parts.map { Int($0)! }
+    }
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        for index in 0..<max(lhs.components.count, rhs.components.count) {
+            let l = index < lhs.components.count ? lhs.components[index] : 0
+            let r = index < rhs.components.count ? rhs.components[index] : 0
+            if l != r { return l < r }
+        }
+        return false
+    }
+    static func == (lhs: Self, rhs: Self) -> Bool { !(lhs < rhs) && !(rhs < lhs) }
+}
+
+final class FirmwareUpdateManager: ObservableObject {
+    @Published private(set) var state: FirmwareUpdateState = .idle
+    @Published private(set) var bytesSent = 0
+    @Published private(set) var totalBytes = 0
+    @Published private(set) var bytesPerSecond = 0.0
+    @Published private(set) var installedVersion: String?
+    var progress: Double { totalBytes == 0 ? 0 : Double(bytesSent) / Double(totalBytes) }
+    var expectsReboot: Bool { if case .rebooting = state { return true }; if case .reconnecting = state { return true }; return false }
+
+    private weak var peripheral: CBPeripheral?
+    private var control: CBCharacteristic?
+    private var data: CBCharacteristic?
+    private var status: CBCharacteristic?
+    private var acknowledged = 0
+    private var windowSize = 32 * 1024
+    private var statusEvent = ""
+    private var targetVersion: String?
+    private var cancelled = false
+
+    func attach(peripheral: CBPeripheral, control: CBCharacteristic, data: CBCharacteristic, status: CBCharacteristic) {
+        self.peripheral = peripheral; self.control = control; self.data = data; self.status = status
+        peripheral.readValue(for: status)
+    }
+
+    func receive(_ value: Data?, error: Error?) {
+        guard error == nil, let value,
+              let object = try? JSONSerialization.jsonObject(with: value) as? [String: Any] else { return }
+        statusEvent = object["event"] as? String ?? ""
+        acknowledged = object["offset"] as? Int ?? acknowledged
+        windowSize = object["windowSize"] as? Int ?? windowSize
+        installedVersion = object["firmware"] as? String ?? installedVersion
+        if let code = object["error"] as? String { state = .failed(Self.message(for: code)); return }
+        switch statusEvent {
+        case "READY": state = .transferring
+        case "VERIFYING": state = .verifying
+        case "SUCCESS", "REBOOTING": state = .rebooting
+        case "CANCELLED": state = .cancelled
+        case "IDLE" where expectsReboot:
+            if installedVersion == targetVersion { state = .completed }
+            else { state = .failed("InputPilot reconnected, but the expected firmware version was not detected.") }
+        default: break
+        }
+    }
+
+    func install(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+        guard let peripheral, let control, let data else { state = .failed("Connect to this InputPilot over Bluetooth first."); return }
+        let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
+        if let expectedSHA256, expectedSHA256.lowercased() != digest { state = .failed("Firmware verification failed. The selected file was not transferred."); return }
+        cancelled = false; targetVersion = version; totalBytes = firmware.count; bytesSent = 0; acknowledged = 0; state = .preparing
+        let command = "START protocol=1 version=\(version) size=\(firmware.count) sha256=\(digest)"
+        peripheral.writeValue(Data(command.utf8), for: control, type: .withResponse)
+        guard await wait(for: "READY", timeout: 10) else { if case .failed = state { return }; state = .failed("InputPilot did not become ready for the update."); return }
+        let started = Date()
+        let maximum = max(5, peripheral.maximumWriteValueLength(for: .withoutResponse) - 4)
+        var offset = 0
+        while offset < firmware.count && !cancelled {
+            while (!peripheral.canSendWriteWithoutResponse || offset - acknowledged >= windowSize) && !cancelled { try? await Task.sleep(for: .milliseconds(10)) }
+            let count = min(maximum, firmware.count - offset)
+            var frame = Data()
+            var littleEndian = UInt32(offset).littleEndian
+            withUnsafeBytes(of: &littleEndian) { frame.append(contentsOf: $0) }
+            frame.append(firmware[offset..<(offset + count)])
+            peripheral.writeValue(frame, for: data, type: .withoutResponse)
+            offset += count; bytesSent = offset
+            bytesPerSecond = Double(offset) / max(0.1, Date().timeIntervalSince(started))
+        }
+        guard !cancelled else { return }
+        while acknowledged < firmware.count { if case .failed = state { return }; try? await Task.sleep(for: .milliseconds(20)) }
+        peripheral.writeValue(Data("FINISH".utf8), for: control, type: .withResponse)
+        state = .verifying
+    }
+
+    func cancel() {
+        cancelled = true
+        if let peripheral, let control { peripheral.writeValue(Data("ABORT".utf8), for: control, type: .withResponse) }
+        state = .cancelled
+    }
+    func disconnected(expected: Bool) { state = expected ? .reconnecting : .failed("Bluetooth connection lost. The existing firmware is still installed.") }
+    func writerReady() {}
+    private func wait(for event: String, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline { if statusEvent == event { return true }; if case .failed = state { return false }; try? await Task.sleep(for: .milliseconds(20)) }
+        return false
+    }
+    private static func message(for code: String) -> String {
+        switch code {
+        case "checksum_mismatch", "image_invalid": "Firmware verification failed. The update was not installed."
+        case "firmware_too_large": "This firmware file is too large for this InputPilot device."
+        case "migration_required": "This device needs a one-time USB migration before Bluetooth updates are available."
+        case "unauthorized": "Authentication is required before updating firmware."
+        case "connection_lost": "Bluetooth connection lost. The existing firmware is still installed."
+        default: "The firmware update failed (\(code.replacingOccurrences(of: "_", with: " ")))."
+        }
+    }
+}
+
 final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
     let kind = TransportKind.bluetooth
     private(set) var isAvailable = false
@@ -229,6 +362,11 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     private let mouse = CBUUID(string: "7D9F0003-4F4D-4F56-4552-484944000001")
     private let keyboard = CBUUID(string: "7D9F0004-4F4D-4F56-4552-484944000001")
     private let control = CBUUID(string: "7D9F0002-4F4D-4F56-4552-484944000001")
+    private let otaService = CBUUID(string: "7D9F1001-4F4D-4F56-4552-484944000001")
+    private let otaControl = CBUUID(string: "7D9F1002-4F4D-4F56-4552-484944000001")
+    private let otaData = CBUUID(string: "7D9F1003-4F4D-4F56-4552-484944000001")
+    private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
+    let firmwareUpdater = FirmwareUpdateManager()
     private var reconnectWork: DispatchWorkItem?
     private var scanTimeoutWork: DispatchWorkItem?
     private var shouldReconnect = false
@@ -255,8 +393,8 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         central.stopScan()
         state = .connecting; central.connect(peripheral)
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService]) }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService, otaService]) }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot); let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { central.cancelPeripheralConnection(peripheral); return }; pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if error == nil { service.characteristics?.forEach { characteristics[$0.uuid] = $0 } }
@@ -264,7 +402,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         guard pendingServices == 0 else { return }
         let hasBinary = characteristics[mouse] != nil && characteristics[keyboard] != nil && characteristics[control] != nil
         guard hasBinary else { isAvailable = false; state = .offline; return }
-        guard let token, !token.isEmpty else { isAvailable = true; state = .ready; return }
+        guard let token, !token.isEmpty else { isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral); return }
         guard !token.contains("\n"), !token.contains("\r"), let tx = characteristics[legacyTX], characteristics[legacyRX] != nil else { failAuthentication(peripheral); return }
         state = .authenticating
         peripheral.setNotifyValue(true, for: tx)
@@ -276,13 +414,20 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        if characteristic.uuid == otaStatus { firmwareUpdater.receive(characteristic.value, error: error); return }
         guard characteristic.uuid == legacyTX, error == nil, let data = characteristic.value, let reply = String(data: data, encoding: .utf8) else { return }
         switch reply.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "auth ok" where state == .authenticating: authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
+        case "auth ok" where state == .authenticating: authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral)
         case "auth failed" where state == .authenticating: failAuthentication(peripheral)
         default: break
         }
     }
+    private func prepareFirmwareUpdater(_ peripheral: CBPeripheral) {
+        guard let control = characteristics[otaControl], let data = characteristics[otaData], let status = characteristics[otaStatus] else { return }
+        firmwareUpdater.attach(peripheral: peripheral, control: control, data: data, status: status)
+        peripheral.setNotifyValue(true, for: status)
+    }
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) { firmwareUpdater.writerReady() }
     private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.failAuthentication(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
     private func failAuthentication(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; central.cancelPeripheralConnection(peripheral) }
     func send(_ event: HIDEvent) async throws {
@@ -294,7 +439,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
 }
 
 @MainActor final class HIDConnectionManager: ObservableObject {
-    @Published var mode: ConnectionMode = .automatic
+    @Published var mode: ConnectionMode { didSet { UserDefaults.standard.set(mode.rawValue, forKey: "connectionMode") } }
     @Published var activeTransport: TransportKind?
     @Published var lastError: String?
     @Published private(set) var isConnecting = false
@@ -304,6 +449,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport; private let rest: HIDControlTransport
     private var leasedTransport: HIDControlTransport?
     init(device: StoredDevice) {
+        mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
         let host = device.staIP ?? device.mdnsHost
         ble = BLEHIDControlTransport(deviceId: device.deviceId, token: device.apiToken); tcp = TCPHIDControlTransport(host: host, token: device.apiToken)
         rest = RESTHIDControlTransport(baseURL: DeviceEndpointResolver.baseURL(from: host)!, token: device.apiToken)
@@ -311,6 +457,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         protocolVersion = device.protocolVersion
     }
     init(ble: HIDControlTransport, tcp: HIDControlTransport, rest: HIDControlTransport, capabilities: Set<String> = [], protocolVersion: Int = 1) {
+        mode = .automatic
         self.ble = ble; self.tcp = tcp; self.rest = rest; self.capabilities = capabilities; self.protocolVersion = protocolVersion
     }
     func connect() async { isConnecting = true; async let b: Void = ble.connect(); async let t: Void = tcp.connect(); async let r: Void = rest.connect(); _ = await (b, t, r); isConnecting = false }
@@ -476,12 +623,15 @@ struct HIDControlView: View {
     @Bindable var device: StoredDevice
     @StateObject private var manager: HIDConnectionManager
     @StateObject private var macros = MacroController()
+    @State private var section: ControlSection = .trackpad
+    enum ControlSection: String, CaseIterable, Identifiable { case trackpad = "Trackpad", keyboard = "Keyboard", presets = "Presets", macros = "Macros"; var id: Self { self } }
     init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 4) { HStack { Circle().fill(manager.activeTransport == nil ? .orange : .green).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }; TimelineView(.periodic(from: .now, by: 1)) { _ in HStack(spacing: 12) { ForEach(manager.transportReadiness, id: \.0) { item in Label(item.0.rawValue, systemImage: item.1 ? "circle.fill" : "circle").foregroundStyle(item.1 ? .green : .secondary) } }.font(.caption2) } }
                 .padding(.horizontal)
-            TabView { TrackpadView(manager: manager).tabItem { Label("Trackpad", systemImage: "rectangle.and.hand.point.up.left") }; LiveKeyboardView(manager: manager).tabItem { Label("Keyboard", systemImage: "keyboard") }; PresetsView(manager: manager).tabItem { Label("Presets", systemImage: "star") }; MacrosView(manager: manager, controller: macros).tabItem { Label("Macros", systemImage: "record.circle") } }
+            Picker("Control", selection: $section) { ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
+            Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager); case .macros: MacrosView(manager: manager, controller: macros) } }
         }
         .navigationTitle(device.displayName).navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) { if !manager.unsupportedControlMessages.isEmpty { Text(manager.unsupportedControlMessages.joined(separator: " ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal).accessibilityIdentifier("capability-limitations") } }

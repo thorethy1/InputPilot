@@ -1,5 +1,9 @@
 # Security policy
 
+## BLE firmware updates
+
+BLE OTA uses the same optional `CONTROL_API_TOKEN` session authentication as BLE control; no separate or weaker credential path exists. Tokens are never included in OTA metadata or logs. The device validates declared size, contiguous offsets, target OTA slot, complete byte count, and SHA-256 before selecting a boot partition. Abort, timeout, disconnect, or verification failure leaves the running firmware selected. SHA-256 detects corruption but is not a cryptographic firmware signature.
+
 ## What this project does
 
 `usb-hid-s3` presents itself to a host PC as a **USB mouse and keyboard**, and

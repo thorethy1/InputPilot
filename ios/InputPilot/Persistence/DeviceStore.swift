@@ -13,6 +13,7 @@ final class StoredDevice {
     var firmwareVersion: String?
     var protocolVersion: Int = 0
     var capabilities: [String] = []
+    var otaSchema: Int = 0
     var lastCapabilitiesUpdate: Date?
 
     init(
@@ -26,7 +27,8 @@ final class StoredDevice {
         firmwareVersion: String? = nil,
         protocolVersion: Int = 0,
         capabilities: [String] = [],
-        lastCapabilitiesUpdate: Date? = nil
+        lastCapabilitiesUpdate: Date? = nil,
+        otaSchema: Int = 0
     ) {
         self.deviceId = deviceId
         self.displayName = displayName
@@ -39,6 +41,7 @@ final class StoredDevice {
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
         self.lastCapabilitiesUpdate = lastCapabilitiesUpdate
+        self.otaSchema = otaSchema
     }
 
     convenience init(device: Device) {
@@ -53,7 +56,8 @@ final class StoredDevice {
             firmwareVersion: device.firmwareVersion,
             protocolVersion: device.protocolVersion,
             capabilities: device.capabilities,
-            lastCapabilitiesUpdate: device.capabilities.isEmpty ? nil : Date()
+            lastCapabilitiesUpdate: device.capabilities.isEmpty ? nil : Date(),
+            otaSchema: device.otaSchema
         )
     }
 
@@ -68,7 +72,8 @@ final class StoredDevice {
             lastSeen: lastSeen,
             firmwareVersion: firmwareVersion,
             protocolVersion: protocolVersion,
-            capabilities: capabilities
+            capabilities: capabilities,
+            otaSchema: otaSchema
         )
     }
 }
@@ -91,6 +96,7 @@ enum DeviceStore {
             existing.firmwareVersion = device.firmwareVersion
             existing.protocolVersion = device.protocolVersion
             existing.capabilities = device.capabilities
+            existing.otaSchema = device.otaSchema
             existing.lastCapabilitiesUpdate = device.capabilities.isEmpty ? existing.lastCapabilitiesUpdate : Date()
         } else {
             context.insert(StoredDevice(device: device))

@@ -14,6 +14,9 @@ data class DeviceStatus(
     @SerialName("sta_ip") val staIp: String? = null,
     val mdns: String? = null,
     @SerialName("auth_required") val authRequired: Boolean = false,
+    @SerialName("protocol_version") val protocolVersion: Int = 0,
+    @SerialName("ota_schema") val otaSchema: Int = 0,
+    val capabilities: List<String> = emptyList(),
 )
 
 @Serializable

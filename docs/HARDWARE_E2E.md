@@ -1,4 +1,17 @@
-# InputPilot 0.6.1 hardware E2E test plan
+# InputPilot hardware E2E test plan
+
+## v0.8.0 BLE OTA release gate (Waveshare ESP32-S3-Zero, 4 MB)
+
+This gate cannot be replaced by simulator or host tests. Record board revision, iPhone/iOS version, source/target firmware versions, and observed USB HID result.
+
+1. Flash `bootloader.bin`, `partitions.bin`, and `firmware.bin` over USB to establish OTA schema 1.
+2. Connect the iPhone over BLE, complete token authentication when configured, and start an update from the native Firmware tab.
+3. Confirm 100% transfer, SHA-256 verification, reboot, automatic reconnect, expected new version, and working USB mouse/keyboard/release-all.
+4. Repeat with a token failure, invalid image, oversized declaration, wrong SHA-256, and explicit Cancel; no failed case may select the pending partition.
+5. Start another update and disconnect Bluetooth near 50%. Power-cycle the ESP32, verify that the prior firmware and USB HID still work, then complete a fresh OTA successfully.
+6. Exercise BLE-only, Wi-Fi-only, and combined Automatic control plus small/large iPhone layouts, portrait/landscape where supported, Light/Dark Mode, Dynamic Type, VoiceOver, Reduce Motion, and Increased Contrast.
+
+Attach the completed observation record to the v0.8.0 release. If physical hardware or a signed iOS build is unavailable, mark this gate **not run**; do not infer success from compilation.
 
 Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use firmware 0.6.1 and an app built with Xcode 26 or newer. Release results belong in `HARDWARE_E2E_RESULTS_0.6.1.md`.
 

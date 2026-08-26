@@ -14,8 +14,8 @@ android {
         applicationId = "com.mkflabs.inputpilot"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.6.4"
+        versionCode = 3
+        versionName = "0.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

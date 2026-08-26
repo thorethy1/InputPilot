@@ -57,6 +57,12 @@ jobs:
       - name: Build esp32s3 firmware
         run: pio run -e esp32s3
 
+      - name: Generate OTA manifest and checksum
+        run: |
+          python scripts/generate_ota_assets.py \
+            --firmware .pio/build/esp32s3/firmware.bin \
+            --output .pio/build/esp32s3
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -65,6 +71,8 @@ jobs:
             usb-hid-s3/.pio/build/esp32s3/firmware.bin
             usb-hid-s3/.pio/build/esp32s3/bootloader.bin
             usb-hid-s3/.pio/build/esp32s3/partitions.bin
+            usb-hid-s3/.pio/build/esp32s3/firmware.sha256
+            usb-hid-s3/.pio/build/esp32s3/firmware-manifest.json
           if-no-files-found: error
           retention-days: 14
 

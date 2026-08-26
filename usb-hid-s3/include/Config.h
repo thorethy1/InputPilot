@@ -6,10 +6,12 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.6.4"
+#define FW_VERSION      "0.8.0"
 #define FW_NAME         "usb-hid-s3"
-// USB bcdDevice (0x0400 = v4.00) reported to the host.
-#define FW_VERSION_BCD  0x0604
+// USB bcdDevice reported to the host.
+#define FW_VERSION_BCD  0x0800
+#define OTA_SCHEMA_VERSION 1
+#define OTA_PROTOCOL_VERSION 1
 
 // --- USB identity (custom VID/PID so the host drops the boot-time Espressif id) ---
 // Prefixed to avoid colliding with USB_VID/USB_PID/... from the S3 variant's
@@ -85,6 +87,15 @@
 #define BLE_HID_MOUSE_UUID    "7d9f0003-4f4d-4f56-4552-484944000001"
 #define BLE_HID_KEYBOARD_UUID "7d9f0004-4f4d-4f56-4552-484944000001"
 #define BLE_HID_STATUS_UUID   "7d9f0005-4f4d-4f56-4552-484944000001"
+
+// InputPilot authenticated BLE OTA service v1. These UUIDs are stable public
+// protocol identifiers and must match BLEFirmwareUpdater.swift.
+#define BLE_OTA_SERVICE_UUID "7d9f1001-4f4d-4f56-4552-484944000001"
+#define BLE_OTA_CONTROL_UUID "7d9f1002-4f4d-4f56-4552-484944000001"
+#define BLE_OTA_DATA_UUID    "7d9f1003-4f4d-4f56-4552-484944000001"
+#define BLE_OTA_STATUS_UUID  "7d9f1004-4f4d-4f56-4552-484944000001"
+#define BLE_OTA_TIMEOUT_MS 15000UL
+#define BLE_OTA_ACK_BYTES (32UL * 1024UL)
 
 // WiFi STA control: TCP line server (same command grammar as serial).
 #define WIFI_CONTROL_PORT 3333

@@ -8,7 +8,7 @@
 
 
 
-**InputPilot 0.6.4** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
+**InputPilot 0.8.0** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
 
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
@@ -91,7 +91,7 @@ Badges above track the latest `main` workflow run
 
 ## Using the iOS remote
 
-Flash firmware, provision the ESP32-S3 onto the same local network, then add it in the app through Bonjour, Soft-AP setup, or its address. Open the saved device and choose **Open Trackpad & Keyboard**.
+Flash firmware, then add the ESP32-S3 over nearby Bluetooth or through Bonjour, Soft-AP setup, or its Wi-Fi address. Wi-Fi is optional for BLE control and BLE firmware updates. The native tab bar keeps Devices, Control, Firmware, and Settings available without a custom bottom bar.
 
 - **Trackpad:** coalesced relative one-finger movement, two-finger scrolling, tap/double-tap click, long-press drag, mouse buttons, sensitivity and safety release.
 - **Keyboard:** native event input (including Backspace, Enter, Tab and paste), navigation/editing keys, one-shot modifiers, shortcuts, and actual German QWERTZ or US QWERTY USB-HID mapping.
@@ -101,6 +101,16 @@ Flash firmware, provision the ESP32-S3 onto the same local network, then add it 
 Automatic transport selection uses BLE for small low-latency events, persistent TCP for longer text and event streams, and REST for management/fallback. Device settings also offer Prefer Bluetooth, Prefer Wi-Fi, Bluetooth Only, and Wi-Fi Only. The active transport is shown above the control tabs.
 
 Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+ble`; the compatible serial command `radio wifi|ble|both|none` changes this at runtime. See [the protocol specification](docs/PROTOCOL.md) for GATT UUIDs, binary frames, TCP grammar, REST endpoints, capabilities, and authentication.
+
+## Bluetooth firmware updates
+
+Firmware v0.8.0 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
+
+In the iOS **Firmware** tab, choose a `.bin` app image and review its size before updating. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After success, InputPilot restarts, reconnects, and verifies the reported version.
+
+Devices flashed with the earlier factory-only partition table cannot migrate through a normal app OTA. Perform the one-time USB migration with the release assets at the PlatformIO ESP32-S3 offsets: `bootloader.bin` at `0x0000`, `partitions.bin` at `0x8000`, and `firmware.bin` at `0x10000` (for example with `esptool` after erasing the device). This full USB flash replaces the partition table, so back up/re-enter Wi-Fi credentials if needed. After migration, normal updates use **only `firmware.bin`**; never select the bootloader or partition-table image in the app.
+
+Contributors should use `AppColors` and the `AccentColor` asset for the red brand accent. Success, warning, error, and informational states retain semantic system colors and always include text or symbols.
 
 ## iOS builds on GitHub
 
@@ -112,14 +122,17 @@ Signing inputs are never committed or uploaded as artifacts and are reconstructe
 
 ## Versioned release assets
 
-Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) with a `vMAJOR.MINOR.PATCH` tag automatically triggers the `Attach release assets` workflow. It validates that every project source (Android `versionName`, iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, and README) declares the same version, waits for a successful CI run on the exact tag commit, then attaches four permanent assets:
+Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) with a `vMAJOR.MINOR.PATCH` tag validates all project versions and attaches application and firmware assets:
 
 | Asset | Content |
 |-------|---------|
 | `InputPilot-vX.Y.Z-android.apk` | Android debug APK |
 | `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
 | `InputPilot-vX.Y.Z-esp32s3-firmware.zip` | ESP32-S3 firmware (bootloader + app + partitions) |
-| `SHA256SUMS.txt` | Checksum file for the above |
+| `firmware.bin` | App-only image for normal BLE OTA |
+| `firmware.sha256` / `firmware-manifest.json` | Automatically generated OTA integrity and compatibility metadata |
+| `bootloader.bin` / `partitions.bin` | One-time USB migration assets; not normal OTA images |
+| `SHA256SUMS.txt` | Checksum file for every published asset |
 
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 

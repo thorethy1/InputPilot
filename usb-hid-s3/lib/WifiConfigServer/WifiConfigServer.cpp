@@ -252,15 +252,16 @@ void WifiConfigServer::handleGetWifi() {
   json += ",";
   json += "\"auth_required\":";
   json += controlAuthRequired() ? "true" : "false";
-  json += ",\"protocol_version\":1,";
+  json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"ble_ota\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
 
 void WifiConfigServer::handlePostWifi() {
+  if (deviceOtaActive()) { sendErr(409, "firmware update in progress"); return; }
   // Soft-AP setup stays open so a phone can provision WiFi without a token.
   if (!isSoftApProvisioning() && !requireApiAuth()) return;
   const String body = bodyOrEmpty();
@@ -286,6 +287,7 @@ void WifiConfigServer::handlePostWifi() {
 }
 
 void WifiConfigServer::handleClearWifi() {
+  if (deviceOtaActive()) { sendErr(409, "firmware update in progress"); return; }
   if (!requireApiAuth()) return;
   WifiCredentials::clear();
   reconnectPending_ = true;
@@ -324,10 +326,10 @@ void WifiConfigServer::handleGetStatus() {
   json += "\",";
   json += "\"auth_required\":";
   json += controlAuthRequired() ? "true" : "false";
-  json += ",\"protocol_version\":1,";
+  json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"ble_ota\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }

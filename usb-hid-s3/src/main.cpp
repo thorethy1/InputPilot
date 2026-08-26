@@ -26,6 +26,7 @@
 #include "RadioManager.h"
 #include "StatusLed.h"
 #include "WifiCredentials.h"
+#include "BLEOTA.h"
 
 // ---------------------------------------------------------------------------
 // USB devices (core stack). ARDUINO_USB_CDC_ON_BOOT=0, so the core does NOT
@@ -201,9 +202,14 @@ static void printStatus() {
 bool deviceJiggleEnabled() { return g_jiggle.isEnabled(); }
 uint32_t deviceJiggleIntervalMs() { return g_jiggle.intervalMs(); }
 bool deviceHidReady() { return hidReady(); }
+bool deviceOtaActive() { return g_bleOta.active(); }
 
 void handleCommandLine(const std::string &line, const char *source) {
   ParsedCommand c = CommandParser::parse(line);
+  if (g_bleOta.active() && c.type != CmdType::ReleaseAll) {
+    LOG_WARN("command blocked during OTA src=%s", source ? source : "?");
+    return;
+  }
   if (c.type != CmdType::None)
     LOG_CMD_DEBUG("src=%s line=\"%s\"", source ? source : "?", line.c_str());
   switch (c.type) {

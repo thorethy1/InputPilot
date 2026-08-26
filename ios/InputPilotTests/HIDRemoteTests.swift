@@ -2,6 +2,28 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    func testSemanticFirmwareVersionsCompareNumerically() {
+        XCTAssertLessThan(SemanticVersion("0.8.9")!, SemanticVersion("0.8.10")!)
+        XCTAssertEqual(SemanticVersion("1.2")!, SemanticVersion("1.2.0")!)
+        XCTAssertNil(SemanticVersion("latest"))
+    }
+
+    func testFirmwareManifestDecodingAndIntegrityMetadata() throws {
+        let json = #"{"product":"InputPilot","version":"0.8.0","board":"esp32-s3-zero-4mb","protocol":1,"otaSchema":1,"size":1271270,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#
+        let manifest = try JSONDecoder().decode(FirmwareManifest.self, from: Data(json.utf8))
+        XCTAssertEqual(manifest.protocolVersion, 1)
+        XCTAssertEqual(manifest.otaSchema, 1)
+        XCTAssertEqual(manifest.size, 1_271_270)
+    }
+
+    func testOTACapabilityAndMigrationStateDecode() throws {
+        let capable = try JSONDecoder().decode(DeviceStatus.self, from: Data(#"{"version":"0.8.0","ota_schema":1,"capabilities":["ble_control","ble_ota"]}"#.utf8))
+        XCTAssertEqual(capable.otaSchema, 1)
+        XCTAssertTrue(capable.capabilities.contains("ble_ota"))
+        let legacy = try JSONDecoder().decode(DeviceStatus.self, from: Data(#"{"version":"0.6.4"}"#.utf8))
+        XCTAssertEqual(legacy.otaSchema, 0)
+        XCTAssertFalse(legacy.capabilities.contains("ble_ota"))
+    }
     func testBinaryAndTCPKeyboardReportEncoding() {
         let event = HIDEvent.keyboardReport(modifiers: 0x40, usage: 0x14)
         XCTAssertEqual(Array(event.binary), [1, 0x13, 0x40, 0x14])

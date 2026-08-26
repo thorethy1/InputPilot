@@ -15,6 +15,7 @@
 #include "HIDProtocol.h"
 #include "WifiCredentials.h"
 #include "WifiConfigServer.h"
+#include "BLEOTA.h"
 
 RadioManager g_radio;
 
@@ -129,6 +130,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
     s_bleConnected = false;
     s_bleAuthed = false;
+    g_bleOta.disconnected();
     deviceReleaseAll();
     if (s_bleTearingDown) {
       LOG_BLE("central disconnected reason=%d during teardown", reason);
@@ -145,6 +147,8 @@ ServerCallbacks s_serverCallbacks;
 
 }  // namespace
 
+bool deviceBleAuthenticated() { return s_bleConnected && s_bleAuthed; }
+
 // ---------------------------------------------------------------------------
 void RadioManager::begin(RadioMode initial) {
   mode_ = RadioMode::None;
@@ -154,6 +158,10 @@ void RadioManager::begin(RadioMode initial) {
 
 bool RadioManager::setMode(RadioMode m) {
   if (m == mode_) return true;
+  if (g_bleOta.active()) {
+    LOG_WARN("radio mode change blocked during OTA");
+    return false;
+  }
   const bool hadWifi = wifiEnabled();
   const bool hadBle = bleEnabled();
   mode_ = m;
@@ -296,9 +304,12 @@ void RadioManager::startBle() {
     status->setValue(statusValue, sizeof(statusValue));
     hidSvc->start();
 
+    g_bleOta.begin(s_bleServer);
+
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     adv->addServiceUUID(BLE_NUS_SERVICE_UUID);
     adv->addServiceUUID(BLE_HID_SERVICE_UUID);
+    adv->addServiceUUID(BLE_OTA_SERVICE_UUID);
     adv->setName(BLE_DEVICE_NAME);
     // Stable identity used by InputPilot to select the intended StoredDevice.
     // Prefix keeps the payload self-describing while preserving legacy names.
@@ -339,6 +350,7 @@ void RadioManager::stopBle() {
 
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
+  g_bleOta.loop();
   if (!wifiEnabled()) return;
 
   // Soft-AP HTTP portal / REST (also handles reconnect requests from POST).

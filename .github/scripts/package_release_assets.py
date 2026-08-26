@@ -153,6 +153,20 @@ def create_firmware_zip(source: Path, destination: Path) -> None:
             raise ValueError("firmware ZIP contains unexpected members")
 
 
+def copy_ota_assets(source: Path, output: Path) -> list[Path]:
+    copied = []
+    for name in ("firmware.bin", "firmware.sha256", "firmware-manifest.json", "bootloader.bin", "partitions.bin"):
+        destination = output / name
+        shutil.copyfile(only_named_file(source, name), destination)
+        copied.append(destination)
+    manifest = __import__("json").loads((output / "firmware-manifest.json").read_text(encoding="utf-8"))
+    firmware = output / "firmware.bin"
+    digest = hashlib.sha256(firmware.read_bytes()).hexdigest()
+    if manifest.get("size") != firmware.stat().st_size or manifest.get("sha256") != digest:
+        raise ValueError("firmware manifest does not match firmware.bin")
+    return copied
+
+
 def write_checksums(output: Path, assets: list[Path]) -> Path:
     checksum_file = output / "SHA256SUMS.txt"
     lines = []
@@ -188,9 +202,10 @@ def main() -> None:
     shutil.copyfile(apk_source, apk)
     shutil.copyfile(ipa_source, ipa)
     create_firmware_zip(args.input / "firmware", firmware)
-    checksum_file = write_checksums(args.output, [apk, firmware, ipa])
+    ota_assets = copy_ota_assets(args.input / "firmware", args.output)
+    checksum_file = write_checksums(args.output, [apk, firmware, ipa, *ota_assets])
 
-    for path in (apk, firmware, ipa, checksum_file):
+    for path in (apk, firmware, ipa, *ota_assets, checksum_file):
         print(f"{path.name}\t{path.stat().st_size} bytes")
 
 
