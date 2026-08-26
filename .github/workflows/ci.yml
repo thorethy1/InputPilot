@@ -85,15 +85,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Validate openapi.yaml parses as YAML + OpenAPI 3
+      - name: Install OpenAPI validator
+        run: pip install "openapi-spec-validator==0.7.2" "pyyaml==6.0.2"
+
+      - name: Validate OpenAPI document and required paths
         run: |
-          pip install pyyaml
           python - <<'PY'
           from pathlib import Path
           import yaml
+          from openapi_spec_validator import validate
 
           path = Path("docs/openapi.yaml")
           doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+          validate(doc)
           assert isinstance(doc, dict), "root must be a mapping"
           assert str(doc.get("openapi", "")).startswith("3."), f"expected OpenAPI 3.x, got {doc.get('openapi')!r}"
           assert "paths" in doc and doc["paths"], "paths must be non-empty"
