@@ -115,8 +115,10 @@ final class TCPHIDControlTransport: HIDControlTransport {
     let kind = TransportKind.tcp
     private let host: NWEndpoint.Host; private let token: String?; private var connection: NWConnection?
     private(set) var isAvailable = false
+    private var shouldReconnect = false
     init(host: String, token: String?) { self.host = NWEndpoint.Host(host); self.token = token }
     func connect() async {
+        shouldReconnect = true
         if connection != nil { return }
         let conn = NWConnection(host: host, port: 3333, using: .tcp); connection = conn
         conn.stateUpdateHandler = { [weak self, weak conn] state in
@@ -127,7 +129,9 @@ final class TCPHIDControlTransport: HIDControlTransport {
                     guard !token.contains("\n"), !token.contains("\r") else { self.isAvailable = false; conn.cancel(); return }
                     conn.send(content: Data("auth \(token)\n".utf8), completion: .contentProcessed { [weak self] error in self?.isAvailable = error == nil })
                 } else { self.isAvailable = true }
-            case .failed, .cancelled: self.isAvailable = false; self.connection = nil
+            case .failed, .cancelled:
+                self.isAvailable = false; self.connection = nil
+                if self.shouldReconnect { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
             default: self.isAvailable = false
             }
         }
@@ -142,7 +146,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
         }
     }
     func send(_ event: HIDEvent) async throws { try await sendLine(event.line) }
-    func disconnect() async { connection?.cancel(); connection = nil; isAvailable = false }
+    func disconnect() async { shouldReconnect = false; connection?.cancel(); connection = nil; isAvailable = false }
 }
 
 final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -158,20 +162,29 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     private let keyboard = CBUUID(string: "7D9F0004-4F4D-4F56-4552-484944000001")
     private let control = CBUUID(string: "7D9F0002-4F4D-4F56-4552-484944000001")
     private var reconnectWork: DispatchWorkItem?
+    private var scanTimeoutWork: DispatchWorkItem?
+    private var shouldReconnect = false
     init(deviceId: String, token: String?) { self.deviceId = deviceId.lowercased(); self.token = token; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
-    private func scan() { guard central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }; central.scanForPeripherals(withServices: [service, legacyService]) }
-    func connect() async { scan() }
+    private func scan() {
+        guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
+        central.scanForPeripherals(withServices: [service, legacyService])
+        scanTimeoutWork?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
+        scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+    }
+    func connect() async { shouldReconnect = true; scan() }
     func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn { scan() } else { isAvailable = false } }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
               let advertised = String(data: data, encoding: .utf8)?.lowercased(),
               advertised.hasSuffix("ip" + deviceId) else { return }
         self.peripheral = peripheral
+        scanTimeoutWork?.cancel()
         central.stopScan()
         central.connect(peripheral)
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService]) }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { isAvailable = false; characteristics.removeAll(); self.peripheral = nil; reconnectWork?.cancel(); let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { isAvailable = false; characteristics.removeAll(); self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { peripheral.services?.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         service.characteristics?.forEach { characteristics[$0.uuid] = $0 }
@@ -184,7 +197,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         guard let peripheral, let characteristic = characteristics[uuid] else { throw TransportError.unavailable }
         peripheral.writeValue(event.binary, for: characteristic, type: .withoutResponse)
     }
-    func disconnect() async { reconnectWork?.cancel(); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; isAvailable = false }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; isAvailable = false }
 }
 
 @MainActor final class HIDConnectionManager: ObservableObject {
