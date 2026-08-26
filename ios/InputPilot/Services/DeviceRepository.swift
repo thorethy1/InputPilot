@@ -184,6 +184,9 @@ final class DeviceRepository {
         stored.jiggleEnabled = status.jiggle
         stored.lastSeen = Date()
         stored.firmwareVersion = status.version
+        stored.protocolVersion = status.protocolVersion
+        stored.capabilities = status.capabilities
+        stored.lastCapabilitiesUpdate = Date()
     }
 
     private func fetchAll() throws -> [StoredDevice] {

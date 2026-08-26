@@ -11,6 +11,9 @@ final class StoredDevice {
     var jiggleEnabled: Bool
     var lastSeen: Date?
     var firmwareVersion: String?
+    var protocolVersion: Int = 0
+    var capabilities: [String] = []
+    var lastCapabilitiesUpdate: Date?
 
     init(
         deviceId: String,
@@ -20,7 +23,10 @@ final class StoredDevice {
         apiToken: String? = nil,
         jiggleEnabled: Bool = false,
         lastSeen: Date? = nil,
-        firmwareVersion: String? = nil
+        firmwareVersion: String? = nil,
+        protocolVersion: Int = 0,
+        capabilities: [String] = [],
+        lastCapabilitiesUpdate: Date? = nil
     ) {
         self.deviceId = deviceId
         self.displayName = displayName
@@ -30,6 +36,9 @@ final class StoredDevice {
         self.jiggleEnabled = jiggleEnabled
         self.lastSeen = lastSeen
         self.firmwareVersion = firmwareVersion
+        self.protocolVersion = protocolVersion
+        self.capabilities = capabilities
+        self.lastCapabilitiesUpdate = lastCapabilitiesUpdate
     }
 
     convenience init(device: Device) {
