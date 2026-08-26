@@ -16,6 +16,8 @@
 **/docs/PHASE_LOG.md
 **/docs/ISSUES.md
 **/PROGRESS.md
+/AUFTRAG-*.md
+/INITIAL-AUFTRAG-*.md
 
 # Build / test artifacts
 **/.pio/
