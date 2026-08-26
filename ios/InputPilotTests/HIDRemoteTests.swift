@@ -77,6 +77,54 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertTrue(transport.events.isEmpty)
     }
 
+    @MainActor func testDragLeaseKeepsEveryEventOnBluetooth() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let tcp = MockTransport(kind: .tcp, available: true)
+        let rest = MockTransport(kind: .rest, available: true)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, rest: rest)
+        XCTAssertTrue(manager.beginOrderedSession(lowLatency: true))
+        let down = await manager.send(.mouseDown(.left))
+        let move1 = await manager.send(.mouseMove(2, 1))
+        let move2 = await manager.send(.mouseMove(3, -1))
+        let up = await manager.send(.mouseUp(.left))
+        XCTAssertTrue(down && move1 && move2 && up)
+        manager.endOrderedSession()
+        XCTAssertEqual(ble.events, [.mouseDown(.left), .mouseMove(2, 1), .mouseMove(3, -1), .mouseUp(.left)])
+        XCTAssertTrue(tcp.events.isEmpty)
+        XCTAssertTrue(rest.events.isEmpty)
+    }
+
+    @MainActor func testSendTextUsesSingleBulkTransport() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let tcp = MockTransport(kind: .tcp, available: true)
+        let rest = MockTransport(kind: .rest, available: true)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, rest: rest)
+        let sent = await manager.sendText("abc", layout: .us)
+        XCTAssertTrue(sent)
+        XCTAssertEqual(tcp.events.count, 3)
+        XCTAssertTrue(ble.events.isEmpty)
+        XCTAssertTrue(rest.events.isEmpty)
+    }
+
+    @MainActor func testLeaseFailureAbortsWithoutContinuingOnTCPAndAttemptsReleaseAll() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let tcp = MockTransport(kind: .tcp, available: true)
+        let rest = MockTransport(kind: .rest, available: false)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, rest: rest)
+        XCTAssertTrue(manager.beginOrderedSession(lowLatency: true))
+        let down = await manager.send(.mouseDown(.left))
+        XCTAssertTrue(down)
+        ble.isAvailable = false
+        let moved = await manager.send(.mouseMove(1, 0))
+        XCTAssertFalse(moved)
+        XCTAssertFalse(tcp.events.contains(.mouseMove(1, 0)))
+        XCTAssertTrue(tcp.events.contains(.releaseAll))
+        XCTAssertTrue(manager.beginOrderedSession(lowLatency: true))
+        let clicked = await manager.send(.click(.left))
+        XCTAssertTrue(clicked)
+        XCTAssertTrue(tcp.events.contains(.click(.left)))
+    }
+
     @MainActor func testNewerProtocolIsRejectedBeforeTransportSend() async {
         let transport = MockTransport(kind: .bluetooth, available: true)
         let manager = HIDConnectionManager(ble: transport, tcp: transport, rest: transport, protocolVersion: 2)

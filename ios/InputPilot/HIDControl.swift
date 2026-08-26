@@ -122,7 +122,11 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private(set) var isAvailable = false
     private(set) var state: TransportConnectionState = .offline
     private var shouldReconnect = false
-    init(host: String, token: String?) { self.host = NWEndpoint.Host(host); self.token = token }
+    private var receiveBuffer = Data()
+    private var receiving = false
+    private var authTimeoutWork: DispatchWorkItem?
+    private let authTimeout: TimeInterval
+    init(host: String, token: String?, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.token = token; self.authTimeout = authTimeout }
     func connect() async {
         shouldReconnect = true
         if connection != nil { return }
@@ -132,19 +136,70 @@ final class TCPHIDControlTransport: HIDControlTransport {
             guard let self, let conn, self.connection === conn else { return }
             switch state {
             case .ready:
+                self.startReceiveLoop(on: conn)
                 if let token = self.token, !token.isEmpty {
                     self.state = .authenticating
                     guard !token.contains("\n"), !token.contains("\r") else { self.isAvailable = false; self.state = .authenticationFailed; conn.cancel(); return }
-                    conn.send(content: Data("auth \(token)\n".utf8), completion: .contentProcessed { [weak self] error in self?.isAvailable = error == nil; self?.state = error == nil ? .ready : .offline })
+                    self.startAuthTimeout(for: conn)
+                    conn.send(content: Data("auth \(token)\n".utf8), completion: .contentProcessed { [weak self, weak conn] error in
+                        guard let self, let conn, self.connection === conn, let error else { return }
+                        self.failConnection(error.localizedDescription, on: conn)
+                    })
                 } else { self.isAvailable = true; self.state = .ready }
             case .failed, .cancelled:
-                self.isAvailable = false; self.connection = nil; self.state = self.shouldReconnect ? .reconnecting : .offline
-                if self.shouldReconnect { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
+                self.authTimeoutWork?.cancel(); self.authTimeoutWork = nil; self.receiving = false; self.receiveBuffer.removeAll(); self.isAvailable = false; self.connection = nil
+                let authFailed = self.state == .authenticationFailed
+                self.state = authFailed ? .authenticationFailed : (self.shouldReconnect ? .reconnecting : .offline)
+                if self.shouldReconnect && !authFailed { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
             default: self.isAvailable = false
             }
         }
         conn.start(queue: .main)
     }
+    private func startReceiveLoop(on conn: NWConnection) {
+        guard !receiving, connection === conn else { return }
+        receiving = true
+        receiveNext(on: conn)
+    }
+    private func receiveNext(on conn: NWConnection) {
+        guard receiving, connection === conn else { return }
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak conn] data, _, complete, error in
+            guard let self, let conn, self.connection === conn else { return }
+            if let data, !data.isEmpty { self.consume(data, on: conn) }
+            if let error { self.failConnection(error.localizedDescription, on: conn); return }
+            if complete { self.failConnection("Connection closed", on: conn); return }
+            self.receiveNext(on: conn)
+        }
+    }
+    private func consume(_ data: Data, on conn: NWConnection) {
+        receiveBuffer.append(data)
+        while let newline = receiveBuffer.firstIndex(of: 0x0a) {
+            let lineData = receiveBuffer[..<newline]
+            receiveBuffer.removeSubrange(...newline)
+            guard let raw = String(data: lineData, encoding: .utf8) else { continue }
+            handleReply(raw.trimmingCharacters(in: .whitespacesAndNewlines), on: conn)
+        }
+    }
+    private func handleReply(_ reply: String, on conn: NWConnection) {
+        switch reply.lowercased() {
+        case "auth ok" where state == .authenticating:
+            authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
+        case "auth failed" where state == .authenticating:
+            failAuthentication(on: conn)
+        case "pong": break
+        default:
+            if reply.lowercased().hasPrefix("error") { lastProtocolError = reply }
+        }
+    }
+    private var lastProtocolError: String?
+    private func startAuthTimeout(for conn: NWConnection) {
+        authTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self, weak conn] in guard let self, let conn, self.connection === conn, self.state == .authenticating else { return }; self.failAuthentication(on: conn) }
+        authTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work)
+    }
+    private func failAuthentication(on conn: NWConnection) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; receiving = false; conn.cancel() }
+    private func failConnection(_ message: String, on conn: NWConnection) { lastProtocolError = message; isAvailable = false; receiving = false; conn.cancel() }
     private func sendLine(_ line: String) async throws {
         guard let connection else { throw TransportError.unavailable }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -157,7 +212,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
         guard isAvailable else { throw TransportError.unavailable }
         do { try await sendLine(event.line) } catch { isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
     }
-    func disconnect() async { shouldReconnect = false; connection?.cancel(); connection = nil; isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; receiveBuffer.removeAll(); isAvailable = false; state = .offline }
 }
 
 final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
@@ -170,13 +225,17 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     private let service = CBUUID(string: "7D9F0001-4F4D-4F56-4552-484944000001")
     private let legacyService = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
     private let legacyRX = CBUUID(string: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
+    private let legacyTX = CBUUID(string: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
     private let mouse = CBUUID(string: "7D9F0003-4F4D-4F56-4552-484944000001")
     private let keyboard = CBUUID(string: "7D9F0004-4F4D-4F56-4552-484944000001")
     private let control = CBUUID(string: "7D9F0002-4F4D-4F56-4552-484944000001")
     private var reconnectWork: DispatchWorkItem?
     private var scanTimeoutWork: DispatchWorkItem?
     private var shouldReconnect = false
-    init(deviceId: String, token: String?) { self.deviceId = deviceId.lowercased(); self.token = token; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
+    private var pendingServices = 0
+    private var authTimeoutWork: DispatchWorkItem?
+    private let authTimeout: TimeInterval
+    init(deviceId: String, token: String?, authTimeout: TimeInterval = 4) { self.deviceId = deviceId.lowercased(); self.token = token; self.authTimeout = authTimeout; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
         state = state == .offline ? .connecting : .reconnecting
@@ -197,21 +256,41 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         state = .connecting; central.connect(peripheral)
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService]) }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { isAvailable = false; state = shouldReconnect ? .reconnecting : .offline; characteristics.removeAll(); self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { peripheral.services?.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { central.cancelPeripheralConnection(peripheral); return }; pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        service.characteristics?.forEach { characteristics[$0.uuid] = $0 }
-        if let token, !token.isEmpty, let rx = characteristics[legacyRX] { state = .authenticating; peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse) }
+        if error == nil { service.characteristics?.forEach { characteristics[$0.uuid] = $0 } }
+        pendingServices -= 1
+        guard pendingServices == 0 else { return }
         let hasBinary = characteristics[mouse] != nil && characteristics[keyboard] != nil && characteristics[control] != nil
-        isAvailable = hasBinary && (token?.isEmpty != false || characteristics[legacyRX] != nil)
-        state = isAvailable ? .ready : .offline
+        guard hasBinary else { isAvailable = false; state = .offline; return }
+        guard let token, !token.isEmpty else { isAvailable = true; state = .ready; return }
+        guard !token.contains("\n"), !token.contains("\r"), let tx = characteristics[legacyTX], characteristics[legacyRX] != nil else { failAuthentication(peripheral); return }
+        state = .authenticating
+        peripheral.setNotifyValue(true, for: tx)
     }
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid == legacyTX, state == .authenticating else { return }
+        guard error == nil, characteristic.isNotifying, let token, let rx = characteristics[legacyRX] else { failAuthentication(peripheral); return }
+        startAuthTimeout(peripheral)
+        peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse)
+    }
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid == legacyTX, error == nil, let data = characteristic.value, let reply = String(data: data, encoding: .utf8) else { return }
+        switch reply.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "auth ok" where state == .authenticating: authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
+        case "auth failed" where state == .authenticating: failAuthentication(peripheral)
+        default: break
+        }
+    }
+    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.failAuthentication(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
+    private func failAuthentication(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; central.cancelPeripheralConnection(peripheral) }
     func send(_ event: HIDEvent) async throws {
         let uuid: CBUUID = { switch event { case .mouseMove, .scroll, .mouseDown, .mouseUp, .click: mouse; case .typeText, .key, .keyCombo, .keyboardReport: keyboard; default: control } }()
         guard let peripheral, let characteristic = characteristics[uuid] else { throw TransportError.unavailable }
         peripheral.writeValue(event.binary, for: characteristic, type: .withoutResponse)
     }
-    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
 }
 
 @MainActor final class HIDConnectionManager: ObservableObject {
@@ -223,6 +302,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     let protocolVersion: Int
     var onEvent: ((HIDEvent) -> Void)?
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport; private let rest: HIDControlTransport
+    private var leasedTransport: HIDControlTransport?
     init(device: StoredDevice) {
         let host = device.staIP ?? device.mdnsHost
         ble = BLEHIDControlTransport(deviceId: device.deviceId, token: device.apiToken); tcp = TCPHIDControlTransport(host: host, token: device.apiToken)
@@ -241,6 +321,14 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
             lastError = "This firmware does not support \(capability.replacingOccurrences(of: "_", with: " "))."
             return false
         }
+        if let leasedTransport {
+            guard leasedTransport.isAvailable, leasedTransport.state == .ready else {
+                await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport was lost; sequence stopped.")
+                return false
+            }
+            do { try await leasedTransport.send(event); activeTransport = leasedTransport.kind; lastError = nil; onEvent?(event); return true }
+            catch { await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport failed; sequence stopped."); return false }
+        }
         var failure: String?
         for transport in candidates(for: event) where transport.isAvailable && transport.state == .ready {
             do { try await transport.send(event); activeTransport = transport.kind; lastError = nil; onEvent?(event); return true }
@@ -257,6 +345,9 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         if let error { lastError = error }
     }
     @discardableResult func sendText(_ text: String, layout: KeyboardLayout, delayMilliseconds: Int = 0) async -> Bool {
+        let ownsSession = leasedTransport == nil
+        if ownsSession && !beginOrderedSession(lowLatency: false) { return false }
+        defer { if ownsSession { endOrderedSession() } }
         do {
             for stroke in try layout.strokes(for: text) {
                 if Task.isCancelled { return false }
@@ -266,7 +357,34 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
             return true
         } catch { lastError = error.localizedDescription; return false }
     }
+    @discardableResult func beginOrderedSession(lowLatency: Bool) -> Bool {
+        if leasedTransport != nil { return true }
+        guard let selected = candidateTransports(lowLatency: lowLatency).first(where: { $0.isAvailable && $0.state == .ready }) else {
+            lastError = allTransports.contains { $0.state == .authenticationFailed } ? "Authentication failed" : "No permitted control transport is ready."
+            return false
+        }
+        leasedTransport = selected
+        activeTransport = selected.kind
+        return true
+    }
+    func endOrderedSession() { leasedTransport = nil }
+    private func abortOrderedSession(reason: String) async {
+        leasedTransport = nil
+        activeTransport = nil
+        for transport in allTransports where transport.isAvailable && transport.state == .ready {
+            try? await transport.send(.releaseAll)
+        }
+        lastError = reason + " Release-all was attempted."
+    }
     func supports(_ capability: String) -> Bool { capabilities.isEmpty || capabilities.contains(capability) }
+    func supports(_ event: HIDEvent) -> Bool { requiredCapability(for: event).map { supports($0) } ?? true }
+    var unsupportedControlMessages: [String] {
+        var messages: [String] = []
+        if !supports("mouse_scroll") { messages.append("Scrolling requires firmware 0.6+.") }
+        if !supports("mouse_button_state") { messages.append("Drag is not supported by this firmware.") }
+        if !supports("keyboard_layout") { messages.append("Keyboard layout mapping is unavailable.") }
+        return messages
+    }
     var transportReadiness: [(TransportKind, Bool)] { [(.bluetooth, ble.isAvailable), (.tcp, tcp.isAvailable), (.rest, rest.isAvailable)] }
     var connectionSummary: String {
         if protocolVersion > 1 { return "Firmware unsupported" }
@@ -301,8 +419,14 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         }
     }
     private func candidates(for event: HIDEvent) -> [HIDControlTransport] {
+        candidateTransports(lowLatency: event.prefersLowLatency)
+    }
+    private func candidateTransports(lowLatency: Bool) -> [HIDControlTransport] {
         let transports: [TransportKind: HIDControlTransport] = [.bluetooth: ble, .tcp: tcp, .rest: rest]
-        return Self.candidateKinds(mode: mode, lowLatency: event.prefersLowLatency).compactMap { transports[$0] }
+        return Self.candidateKinds(mode: mode, lowLatency: lowLatency).compactMap { kind in
+            guard supports(kind == .bluetooth ? "ble_control" : kind == .tcp ? "tcp_control" : "rest_control") else { return nil }
+            return transports[kind]
+        }
     }
 }
 
@@ -335,6 +459,8 @@ struct RecordedEvent: Codable { let offset: TimeInterval; let event: HIDEvent }
         stop(manager: manager); isPlaying = true
         playback = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { self?.isPlaying = false; return }; var iteration = 0
+            guard manager.beginOrderedSession(lowLatency: macro.events.first?.event.prefersLowLatency ?? true) else { self?.isPlaying = false; return }
+            defer { manager.endOrderedSession() }
             while !Task.isCancelled && (repeats == nil || iteration < repeats!) {
                 var previous = 0.0
                 for item in macro.events { if Task.isCancelled { break }; do { try await Task.sleep(for: .seconds(max(0, item.offset - previous) / speed)) } catch { break }; guard !Task.isCancelled else { break }; previous = item.offset; if !(await manager.send(item.event)) { self?.isPlaying = false; await manager.releaseAllPreservingError(); return } }
@@ -358,6 +484,7 @@ struct HIDControlView: View {
             TabView { TrackpadView(manager: manager).tabItem { Label("Trackpad", systemImage: "rectangle.and.hand.point.up.left") }; LiveKeyboardView(manager: manager).tabItem { Label("Keyboard", systemImage: "keyboard") }; PresetsView(manager: manager).tabItem { Label("Presets", systemImage: "star") }; MacrosView(manager: manager, controller: macros).tabItem { Label("Macros", systemImage: "record.circle") } }
         }
         .navigationTitle(device.displayName).navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) { if !manager.unsupportedControlMessages.isEmpty { Text(manager.unsupportedControlMessages.joined(separator: " ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal).accessibilityIdentifier("capability-limitations") } }
         .task { manager.onEvent = { macros.capture($0) }; await manager.connect() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in macros.stop(manager: manager) }
         .onDisappear { Task { macros.stop(manager: manager); await manager.disconnect() } }
@@ -372,8 +499,8 @@ struct TrackpadView: View {
         coalescer = MouseEventCoalescer { [weak manager] x, y in await manager?.send(.mouseMove(x, y)) }
     }
     var body: some View {
-        VStack { TrackpadInputBridge(move: { x, y in Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; Task { await manager.send(.scroll(Int16(clamping: Int(-value / 5)))) } }, click: { count in UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if !(await manager.send(active ? .mouseDown(.left) : .mouseUp(.left))) { dragging = false; await manager.releaseAll() } } }, cancel: { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
-            HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }.buttonStyle(.borderedProminent)
+        VStack { TrackpadInputBridge(move: { x, y in guard manager.supports("mouse_move") else { return }; Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; Task { await manager.send(.scroll(Int16(clamping: Int(-value / 5)))) } }, click: { count in guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if active { guard manager.beginOrderedSession(lowLatency: true) else { dragging = false; return } }; let sent = await manager.send(active ? .mouseDown(.left) : .mouseUp(.left)); if !active || !sent { manager.endOrderedSession() }; if !sent { dragging = false; await manager.releaseAllPreservingError() } } }, cancel: { dragging = false; Task { await coalescer.cancel(); manager.endOrderedSession(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
+            HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }.buttonStyle(.borderedProminent).disabled(!manager.supports("mouse_click"))
             HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }.padding()
         }.onChange(of: manager.lastError) { _, error in if error != nil && dragging { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } } }
     }
@@ -387,7 +514,7 @@ struct LiveKeyboardView: View {
     var body: some View { ScrollView { VStack(spacing: 12) { Picker("Layout", selection: $layoutName) { ForEach(KeyboardLayout.allCases) { Text($0.rawValue).tag($0.rawValue) } }.pickerStyle(.segmented).disabled(!manager.supports("keyboard_layout")); KeyboardInputBridge { event in Task { switch event { case let .insert(text):
                     if modifiers == 0 { await manager.sendText(text, layout: layout) }
                     else if let strokes = try? layout.strokes(for: text), let first = strokes.first { let oneShot = modifiers; modifiers = 0; guard await manager.send(.keyboardReport(modifiers: first.modifiers | oneShot, usage: first.usage)) else { return }; for stroke in strokes.dropFirst() { guard await manager.send(.keyboardReport(modifiers: stroke.modifiers, usage: stroke.usage)) else { return } } }
-                case .deleteBackward: await manager.send(.key("backspace")) } } }.frame(minHeight: 90).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12));
+                case .deleteBackward: await manager.send(.key("backspace")) } } }.disabled(!manager.supports("keyboard_layout")).frame(minHeight: 90).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12));
             HStack { modifierButton("Ctrl", 0x01); modifierButton("Shift", 0x02); modifierButton("Alt", 0x04); modifierButton("Win/Cmd", 0x08) }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 82))]) { ForEach(keys, id: \.self) { key in Button(key.capitalized) { UIImpactFeedbackGenerator(style: .light).impactOccurred(); let prefix = modifierNames; modifiers = 0; Task { await manager.send(prefix.isEmpty ? .key(key) : .keyCombo((prefix + [key]).joined(separator: "+"))) } }.buttonStyle(.bordered) } }; Text("Shortcuts").font(.headline); HStack { ForEach(["ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+shift+z", "ctrl+a", "ctrl+f", "alt+tab", "ctrl+shift+t", "cmd+space"], id: \.self) { combo in Button(combo) { Task { await manager.send(.keyCombo(combo)) } } }.buttonStyle(.borderedProminent) }.padding() } }
     }
