@@ -1,6 +1,6 @@
 # InputPilot (iOS)
 
-SwiftUI companion app for discovering and controlling **InputPilot** ESP32-S3 devices over the local network.
+SwiftUI/SwiftData companion app for discovering and controlling **InputPilot** ESP32-S3 devices over BLE, persistent TCP, and local REST.
 
 <p align="center">
   <img src="../docs/images/ios-device-list.jpg" alt="Device list with two online hid-helpers" width="240">
@@ -19,10 +19,10 @@ SwiftUI companion app for discovering and controlling **InputPilot** ESP32-S3 de
 
 ## Requirements
 
-- Xcode 15+ (Swift 5.9+)
+- Xcode 26 or newer (required for the iOS 26 SDK and native Liquid Glass rendering)
 - iOS 17.0 deployment target
 - macOS for building and Simulator testing
-- **Firmware 0.4.0+** for multi-device identity (`device_id`, per-device mDNS suffix, Soft-AP SSID). Older firmware may still work with host-based fallbacks.
+- **Firmware 0.6.0** for BLE identity matching, layout-resolved QWERTZ/QWERTY reports, and all remote capabilities. Older firmware remains usable through capability-aware fallbacks.
 
 ## Project layout
 
@@ -99,3 +99,4 @@ Run on Simulator unless noted. Physical device required for Soft-AP join and the
 - [ ] **Pull to refresh / presence poll** — online/offline badges track reachability
 - [ ] **API token** (optional) — with firmware `CONTROL_API_TOKEN` set, token in detail unlocks control
 - [ ] **Local network prompt** — first Bonjour scan triggers iOS permission dialog
+- [ ] **Remote controls** — complete [`../docs/HARDWARE_E2E.md`](../docs/HARDWARE_E2E.md), including two-board BLE identity, QWERTZ, scroll, preset/macro safety, and Liquid Glass checks

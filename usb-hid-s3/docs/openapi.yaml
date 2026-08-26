@@ -21,7 +21,7 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.5.0
+  version: 0.6.0
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -299,6 +299,31 @@ paths:
         "204":
           description: No content
 
+  /api/report:
+    post:
+      tags: [control]
+      summary: Send one layout-resolved USB HID keyboard report
+      description: The client maps a character using the selected host keyboard layout. The firmware presses and releases the supplied usage and modifiers; it does not decode UTF-8 here.
+      operationId: sendKeyboardReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyboardReportRequest"
+            example: { modifiers: 64, usage: 20 }
+      responses:
+        "200":
+          description: Keyboard report accepted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    options:
+      tags: [control]
+      summary: CORS preflight
+      responses:
+        "204":
+          description: No content
+
   /api/wifi:
     get:
       tags: [wifi]
@@ -487,7 +512,7 @@ components:
           type: array
           items:
             type: string
-          example: hid-helper-eeff.local
+          example: [mouse_move, mouse_click, mouse_button_state, mouse_scroll, keyboard_type, keyboard_key, keyboard_layout, release_all, ble_control, tcp_control, rest_control, protocol_v1]
 
     JiggleStatus:
       type: object
@@ -538,6 +563,21 @@ components:
           type: integer
           description: Scroll wheel delta
           default: 0
+
+    KeyboardReportRequest:
+      type: object
+      required: [modifiers, usage]
+      properties:
+        modifiers:
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: USB HID modifier bitmap; right Alt/AltGr is 0x40
+        usage:
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: USB HID keyboard usage ID
 
     MoveResponse:
       type: object

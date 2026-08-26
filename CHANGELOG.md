@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0] - 2026-08-26
+
+- Added native live-keyboard event capture and real German QWERTZ/US QWERTY USB-HID mapping, including AltGr and umlauts, through the backward-compatible report event.
+- Added two-finger scrolling, mouse-event coalescing, drag/release safety, editable presets with typing delay, and safer macro recording/playback management.
+- Added stable BLE device identity matching and persisted firmware protocol/capability metadata.
+- Moved iOS CI and signing to Xcode 26+ for native Liquid Glass and made personal signed IPAs manual Actions artifacts only, never automatic public release assets.
+- Extended firmware capabilities, protocol/OpenAPI documentation, native/iOS tests, and the hardware E2E plan.
+
 ## [0.5.0] - 2026-08-25
 
 - Added first-class BLE binary control with versioned Control, Mouse, Keyboard, and Status characteristics.

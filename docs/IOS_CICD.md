@@ -1,6 +1,6 @@
 # Signed iOS builds without a local Mac
 
-The unsigned build and unit tests run on GitHub's `macos-15` runner in `ci.yml`. The separate `ios-build.yml` workflow archives and exports an installable IPA using credentials that already exist; it does not create or renew Apple credentials.
+The unsigned build and unit tests run on GitHub's `macos-26` runner with Xcode 26 or newer in `ci.yml`. The separate, manually dispatched `ios-build.yml` workflow archives and exports an installable IPA using credentials that already exist; it does not create or renew Apple credentials.
 
 ## Repository secrets
 
@@ -16,9 +16,9 @@ On Linux/Windows, use a Base64 encoder that does not add line wrapping. Never ad
 
 ## Running and downloading
 
-Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and publishes `InputPilot.ipa` in the run's Artifacts section. The iPhone must be covered by the supplied development/ad-hoc profile.
+Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and publishes `InputPilot.ipa` only in the private run's Artifacts section. The iPhone must be covered by the supplied development/ad-hoc profile.
 
-Pushing a `v*` tag runs the same job and attaches `InputPilot-vX.Y.Z.ipa` to the matching GitHub Release. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
+Tags do not start this signing workflow, and the workflow has read-only repository-content permission. It contains no release creation or upload step: a personally signed development/ad-hoc IPA must never become a public GitHub Release asset automatically. Public releases may contain source, changelogs, and separately produced non-personalized artifacts. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
 
 All reconstructed inputs, derived data, archive, export options, and IPA staging live under `$RUNNER_TEMP`. The profile and temporary keychain are removed in an always-running cleanup step; GitHub also discards the hosted runner after the job.
 
