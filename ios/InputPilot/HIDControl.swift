@@ -390,6 +390,7 @@ struct LiveKeyboardView: View {
                 case .deleteBackward: await manager.send(.key("backspace")) } } }.frame(minHeight: 90).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12));
             HStack { modifierButton("Ctrl", 0x01); modifierButton("Shift", 0x02); modifierButton("Alt", 0x04); modifierButton("Win/Cmd", 0x08) }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 82))]) { ForEach(keys, id: \.self) { key in Button(key.capitalized) { UIImpactFeedbackGenerator(style: .light).impactOccurred(); let prefix = modifierNames; modifiers = 0; Task { await manager.send(prefix.isEmpty ? .key(key) : .keyCombo((prefix + [key]).joined(separator: "+"))) } }.buttonStyle(.bordered) } }; Text("Shortcuts").font(.headline); HStack { ForEach(["ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+shift+z", "ctrl+a", "ctrl+f", "alt+tab", "ctrl+shift+t", "cmd+space"], id: \.self) { combo in Button(combo) { Task { await manager.send(.keyCombo(combo)) } } }.buttonStyle(.borderedProminent) }.padding() } }
+    }
     private var modifierNames: [String] { let values: [(UInt8, String)] = [(0x01, "ctrl"), (0x02, "shift"), (0x04, "alt"), (0x08, "cmd")]; return values.compactMap { modifiers & $0.0 == 0 ? nil : $0.1 } }
     private func modifierButton(_ title: String, _ bit: UInt8) -> some View { Button(title) { modifiers ^= bit }.buttonStyle(.borderedProminent).tint(modifiers & bit == 0 ? .gray : .accentColor).accessibilityValue(modifiers & bit == 0 ? "Off" : "One shot") }
 }
