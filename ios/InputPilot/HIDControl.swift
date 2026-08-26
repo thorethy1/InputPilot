@@ -338,10 +338,10 @@ struct TrackpadView: View {
         coalescer = MouseEventCoalescer { [weak manager] x, y in await manager?.send(.mouseMove(x, y)) }
     }
     var body: some View {
-        VStack { TrackpadInputBridge(move: { x, y in Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; Task { await manager.send(.scroll(Int16(clamping: Int(-value / 5)))) } }, click: { count in UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { await manager.send(active ? .mouseDown(.left) : .mouseUp(.left)) } }, cancel: { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
+        VStack { TrackpadInputBridge(move: { x, y in Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; Task { await manager.send(.scroll(Int16(clamping: Int(-value / 5)))) } }, click: { count in UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if !(await manager.send(active ? .mouseDown(.left) : .mouseUp(.left))) { dragging = false; await manager.releaseAll() } } }, cancel: { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
             HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }.buttonStyle(.borderedProminent)
             HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }.padding()
-        }
+        }.onChange(of: manager.lastError) { _, error in if error != nil && dragging { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } } }
     }
 }
 
