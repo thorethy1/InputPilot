@@ -8,7 +8,7 @@
 
 
 
-**InputPilot 0.6.2** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
+**InputPilot 0.6.3** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
 
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.

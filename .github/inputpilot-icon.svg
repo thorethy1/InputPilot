@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+  
+</defs>
+
+
+  <!-- ESP32 antenna + transmission paths -->
+  <g id="01_antenna_connections">
+    <path d="
+      M188 246
+      H334
+      V150
+      H452
+      V246
+      H512
+      V150
+      H630
+      V246
+      H836"
+      fill="none" stroke="#ff2438" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Left connection -->
+    <path d="
+      M248 282
+      C214 392 220 520 286 626
+      C314 670 342 690 366 710"
+      fill="none" stroke="#ff2438" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Right connection -->
+    <path d="
+      M776 282
+      C810 392 804 520 738 626
+      C710 670 682 690 658 710"
+      fill="none" stroke="#ff2438" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Lower branches into input devices -->
+    <path d="M366 710 C342 728 315 742 286 752" fill="none" stroke="#ff2438" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M658 710 C682 728 713 740 746 748" fill="none" stroke="#ff2438" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Flat connector nodes -->
+    <circle cx="366" cy="710" r="15" fill="#ff2438"/>
+    <circle cx="658" cy="710" r="15" fill="#ff2438"/>
+  </g>
+
+  <!-- Main paper plane, split into flat facets -->
+  <g id="02_plane">
+    <!-- overall silhouette -->
+    <path d="
+      M512 314
+      L812 608
+      L594 570
+      L512 806
+      L430 570
+      L212 608
+      Z"
+      fill="#ff2438"/>
+
+    <!-- left facet -->
+    <path d="
+      M512 314
+      L430 570
+      L212 608
+      Z"
+      fill="#ff384b"/>
+
+    <!-- right facet -->
+    <path d="
+      M512 314
+      L812 608
+      L594 570
+      Z"
+      fill="#d81029"/>
+
+    <!-- center lower facet -->
+    <path d="
+      M512 314
+      L594 570
+      L512 806
+      L430 570
+      Z"
+      fill="#e30823"/>
+
+    <!-- crisp center fold; opaque for Icon Composer -->
+    <path d="M512 322 L512 790"
+          fill="none"
+          stroke="#ff6472"
+          stroke-width="7"
+          stroke-linecap="round"/>
+  </g>
+
+  <!-- Mouse -->
+  <g id="03_mouse">
+    <rect x="120" y="686" width="186" height="230" rx="90"
+          fill="#a90920"
+          stroke="#ff2438"
+          stroke-width="24"/>
+    <path d="M213 695 V770"
+          fill="none"
+          stroke="#ff2438"
+          stroke-width="12"
+          stroke-linecap="round"/>
+    <rect x="198" y="724" width="30" height="72" rx="15"
+          fill="#ff2438"/>
+    <path d="M132 806 H294"
+          fill="none"
+          stroke="#d30b25"
+          stroke-width="6"/>
+  </g>
+
+  <!-- Keyboard -->
+  <g id="04_keyboard">
+    <rect x="704" y="734" width="204" height="164" rx="42"
+          fill="#8f071c"
+          stroke="#ff2438"
+          stroke-width="24"/>
+
+    <g fill="#ff2438">
+      <rect x="745" y="772" width="34" height="28" rx="8"/>
+      <rect x="791" y="772" width="34" height="28" rx="8"/>
+      <rect x="837" y="772" width="34" height="28" rx="8"/>
+
+      <rect x="745" y="814" width="34" height="28" rx="8"/>
+      <rect x="791" y="814" width="34" height="28" rx="8"/>
+      <rect x="837" y="814" width="34" height="28" rx="8"/>
+
+      <rect x="746" y="856" width="124" height="22" rx="11"/>
+    </g>
+  </g>
+
+</svg>

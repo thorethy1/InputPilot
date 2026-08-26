@@ -4,25 +4,29 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-  <!-- A stylized paper plane symbol based on the iOS icon -->
+  <!-- Paper plane -->
   <group>
-    <!-- Paper plane body -->
+    <!-- silhouette -->
     <path
-        android:pathData="M54,28 L86,57 L68,56 L54,72 L40,56 L22,57 Z"
-        android:fillColor="#E20D22"/>
-    <!-- Paper plane center fold -->
+        android:pathData="M54,20 L86,61 L63,56 L54,80 L45,56 L22,61 Z"
+        android:fillColor="#ff2438"/>
+    <!-- left facet -->
     <path
-        android:pathData="M54,32 L54,69"
-        android:strokeWidth="1.2"
-        android:strokeColor="#FFFFFF"
-        android:strokeAlpha="0.4"
-        android:fillColor="#00000000"/>
-    <!-- Top edge highlight -->
+        android:pathData="M54,20 L45,56 L22,61 Z"
+        android:fillColor="#ff384b"/>
+    <!-- right facet -->
     <path
-        android:pathData="M28,58 L54,33 L80,58"
-        android:strokeWidth="1.5"
-        android:strokeColor="#FFFFFF"
-        android:strokeAlpha="0.35"
+        android:pathData="M54,20 L86,61 L63,56 Z"
+        android:fillColor="#d81029"/>
+    <!-- center lower facet -->
+    <path
+        android:pathData="M54,20 L63,56 L54,80 L45,56 Z"
+        android:fillColor="#e30823"/>
+    <!-- center fold -->
+    <path
+        android:pathData="M54,21 L54,79"
+        android:strokeWidth="1"
+        android:strokeColor="#ff6472"
         android:fillColor="#00000000"/>
   </group>
 </vector>

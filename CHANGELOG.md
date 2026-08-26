@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.3] - 2026-08-26
+
+- New app icon: flat bold-red paper plane with faceted shading, ESP32 PCB antenna, wireless transmission paths to mouse and keyboard. Transparent background for iOS Liquid Glass.
+- Removed dark tile background from icon — iOS applies its own backdrop.
+
 ## [0.6.2] - 2026-08-26
 
 - New app icon: dark Liquid-Glass tile with red ESP32 PCB antenna, wireless arcs, paper plane, and mouse+keyboard input symbols. Designed for iOS 26+ Liquid Glass appearance.

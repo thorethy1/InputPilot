@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Published release tag to repair or retry (for example v0.6.2)
+        description: Published release tag to repair or retry (for example v0.6.3)
         required: true
         type: string
 

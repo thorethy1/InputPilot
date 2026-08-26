@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.6.2"
+#define FW_VERSION      "0.6.3"
 #define FW_NAME         "usb-hid-s3"
 // USB bcdDevice (0x0400 = v4.00) reported to the host.
-#define FW_VERSION_BCD  0x0602
+#define FW_VERSION_BCD  0x0603
 
 // --- USB identity (custom VID/PID so the host drops the boot-time Espressif id) ---
 // Prefixed to avoid colliding with USB_VID/USB_PID/... from the S3 variant's
