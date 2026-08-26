@@ -29,3 +29,15 @@ Tags do not start this signing workflow, and the workflow has read-only reposito
 All reconstructed inputs, derived data, archive, export options, and IPA staging live under `$RUNNER_TEMP`. The profile and temporary keychain are removed in an always-running cleanup step; GitHub also discards the hosted runner after the job.
 
 Common non-sensitive diagnostics include expired profile, missing certificate identity, missing registered devices, and bundle/team mismatch. A profile that excludes the intended phone must be replaced externally in the repository secret; the workflow cannot add devices or issue Apple credentials.
+
+## Release assets (public)
+
+The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned assets to published GitHub Releases:
+
+- Published releases with a `vMAJOR.MINOR.PATCH` tag trigger it automatically.
+- It validates source version consistency (Android `versionName`, iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, README).
+- It waits for a successful CI run on the exact tag commit.
+- Assets downloaded from that CI run are validated, renamed, and uploaded as Release assets.
+- The iOS asset is the **unsigned** IPA from CI — identical to `InputPilot-unsigned-${{ github.sha }}` with no provisioning profile or signature. The signed IPA from the `ios-build.yml` workflow is never included in release assets, even if it exists on a previous CI run.
+
+To repair a release that was published without assets, run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name.

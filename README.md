@@ -110,6 +110,21 @@ Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONIN
 
 Signing inputs are never committed or uploaded as artifacts and are reconstructed only under `$RUNNER_TEMP`. Detailed preparation, diagnostics, download and cleanup behavior are documented in [iOS CI/CD](docs/IOS_CICD.md).
 
+## Versioned release assets
+
+Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) with a `vMAJOR.MINOR.PATCH` tag automatically triggers the `Attach release assets` workflow. It validates that every project source (Android `versionName`, iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, and README) declares the same version, waits for a successful CI run on the exact tag commit, then attaches four permanent assets:
+
+| Asset | Content |
+|-------|---------|
+| `InputPilot-vX.Y.Z-android.apk` | Android debug APK |
+| `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
+| `InputPilot-vX.Y.Z-esp32s3-firmware.zip` | ESP32-S3 firmware (bootloader + app + partitions) |
+| `SHA256SUMS.txt` | Checksum file for the above |
+
+CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
+
+To repair a release whose assets were not attached (or to retry after a CI fix), run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name.
+
 ## Development and tests
 
 ```bash

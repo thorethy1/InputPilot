@@ -1,0 +1,190 @@
+name: Attach release assets
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to repair or retry (for example v0.6.1)
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-assets-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  attach:
+    name: Validate and attach public assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG_NAME: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG_NAME }}
+          fetch-depth: 0
+
+      - name: Resolve release and validate versions
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$TAG_NAME"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must match vMAJOR.MINOR.PATCH; got '$tag'."
+            exit 1
+          fi
+          version="${tag#v}"
+          sha="$(git rev-parse "${tag}^{commit}")"
+
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")"
+          if [[ "$(jq -r '.draft' <<<"$release_json")" != "false" ]]; then
+            echo "::error::Release '$tag' is still a draft. Publish it before attaching assets."
+            exit 1
+          fi
+
+          python3 - "$version" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          version = sys.argv[1]
+          checks = {
+              "android/app/build.gradle.kts": rf'versionName\s*=\s*"{re.escape(version)}"',
+              "ios/InputPilot.xcodeproj/project.pbxproj": rf'MARKETING_VERSION\s*=\s*{re.escape(version)};',
+              "usb-hid-s3/docs/openapi.yaml": rf'(?m)^\s*version:\s*{re.escape(version)}\s*$',
+              "CHANGELOG.md": rf'(?m)^## \[{re.escape(version)}\]',
+              "README.md": rf'\*\*InputPilot {re.escape(version)}\*\*',
+          }
+          for filename, pattern in checks.items():
+              text = Path(filename).read_text(encoding="utf-8")
+              if not re.search(pattern, text):
+                  raise SystemExit(f"{filename} does not declare release version {version}")
+          notes = Path(f"docs/RELEASE_NOTES_{version}.md")
+          if not notes.is_file():
+              raise SystemExit(f"missing release notes: {notes}")
+          print(f"All checked project versions match {version}")
+          PY
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Release tag $tag resolves to $sha"
+
+      - name: Require successful CI for the release commit
+        id: ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${{ steps.release.outputs.sha }}"
+          run_id=""
+          for attempt in $(seq 1 90); do
+            runs="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --commit "$sha" \
+              --limit 20 \
+              --json databaseId,status,conclusion,url)"
+            run_id="$(jq -r '[.[] | select(.status == "completed" and .conclusion == "success")][0].databaseId // empty' <<<"$runs")"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+
+            pending="$(jq '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting")] | length' <<<"$runs")"
+            completed="$(jq '[.[] | select(.status == "completed")] | length' <<<"$runs")"
+            if (( completed > 0 && pending == 0 )); then
+              echo "::error::CI completed for $sha, but no run succeeded."
+              jq -r '.[] | "run \(.databaseId): status=\(.status) conclusion=\(.conclusion) \(.url)"' <<<"$runs"
+              exit 1
+            fi
+            echo "Waiting for successful CI on $sha (attempt $attempt/90)..."
+            sleep 10
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No successful CI run with retained artifacts was found for $sha. Run CI for this exact commit, then retry this workflow manually with tag '${{ steps.release.outputs.tag }}'."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Using successful CI run $run_id for exact commit $sha"
+
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: usb-hid-s3-esp32s3-${{ steps.release.outputs.sha }}
+          path: staging/firmware
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: InputPilot-android-debug-${{ steps.release.outputs.sha }}
+          path: staging/android
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download unsigned iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: InputPilot-unsigned-${{ steps.release.outputs.sha }}
+          path: staging/ios
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate and package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          python3 .github/scripts/package_release_assets.py \
+            --tag "${{ steps.release.outputs.tag }}" \
+            --input staging \
+            --output release-assets
+          {
+            echo "## Release assets"
+            echo
+            echo "Source CI run: ${{ steps.ci.outputs.run_id }}"
+            echo
+            echo '```text'
+            cat release-assets/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach assets to published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "${{ steps.release.outputs.tag }}" \
+            release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Verify published asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release.outputs.tag }}"
+          expected="$(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)"
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+            --jq '.assets[].name' | sort)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Published assets do not match the expected set."
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          echo "Verified release assets for $tag:"
+          printf '%s\n' "$actual"
