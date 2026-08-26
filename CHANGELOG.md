@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] - 2026-08-26
+
+- Confirmed BLE and TCP token authentication with explicit firmware replies, receive loops, failure states, and bounded timeouts before transports become ready.
+- Kept drag, keyboard text, presets, and macro playback on ordered transport sessions; transport loss now aborts safely and attempts release-all before later work can fail over.
+- Improved capability-aware controls and unsupported-protocol messaging while retaining progressive support for older firmware.
+- Corrected radio-mode, companion-app, upstream attribution, and security documentation.
+- Added focused auth/ordering regressions and an honest hardware validation record; physical and signed-device checks remain explicitly manual where hardware or signing secrets are required.
+
 ## [0.6.0] - 2026-08-26
 
 - Added native live-keyboard event capture and real German QWERTZ/US QWERTY USB-HID mapping, including AltGr and umlauts, through the backward-compatible report event.

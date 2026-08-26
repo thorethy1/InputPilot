@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.6.0"
+#define FW_VERSION      "0.6.1"
 #define FW_NAME         "usb-hid-s3"
 // USB bcdDevice (0x0400 = v4.00) reported to the host.
-#define FW_VERSION_BCD  0x0600
+#define FW_VERSION_BCD  0x0601
 
 // --- USB identity (custom VID/PID so the host drops the boot-time Espressif id) ---
 // Prefixed to avoid colliding with USB_VID/USB_PID/... from the S3 variant's
@@ -32,9 +32,8 @@
 #define SERIAL_BAUD        115200
 #define SERIAL_CMD_MAXLEN  256
 
-// --- Radio (Phase 3): "none" / "wifi" / "ble" selected at runtime.
-//     Default mode picked at boot; only one radio is ever active.
-//     Change this to "ble" or "wifi" to switch connectivity from code. ---
+// --- Radio: "none" / "wifi" / "ble" / "wifi+ble" selected at runtime.
+//     The CLI aliases the combined mode as `radio both`. ---
 #define RADIO_MODE_DEFAULT_STR "wifi+ble"
 
 // WiFi STA credentials. Empty by default (radio stays disconnected).
