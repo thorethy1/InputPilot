@@ -2,15 +2,13 @@ name: iOS Signed Build
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   signed-ipa:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     env:
       IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
@@ -21,6 +19,17 @@ jobs:
       IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require Xcode 26 or newer
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          major="$(xcodebuild -version | awk '/Xcode/{split($2,v,"."); print v[1]}')"
+          if [[ -z "$major" || "$major" -lt 26 ]]; then
+            echo "::error::InputPilot requires Xcode 26 or newer (found major=${major:-unknown})."
+            exit 1
+          fi
 
       - name: Verify signing prerequisites
         shell: bash
@@ -67,21 +76,9 @@ jobs:
           app_identifier="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")"
           profile_team="${app_identifier%%.*}"
           profile_bundle="${app_identifier#*.}"
-          default_bundle="$(
-            xcodebuild -project ios/InputPilot.xcodeproj -scheme InputPilot \
-              -configuration Release -showBuildSettings CODE_SIGNING_ALLOWED=NO 2>/dev/null \
-              | awk -F ' = ' '/^[[:space:]]*PRODUCT_BUNDLE_IDENTIFIER = / { print $2; exit }'
-          )"
-          [[ -n "$default_bundle" ]] || { echo "::error::Could not resolve the project bundle identifier."; exit 1; }
-          bundle="${IOS_BUNDLE_ID:-$default_bundle}"
+          bundle="${IOS_BUNDLE_ID:-$profile_bundle}"
           team="${APPLE_TEAM_ID:-$profile_team}"
-          if [[ "$profile_bundle" == *'*'* ]]; then
-            profile_prefix="${profile_bundle%\*}"
-            if [[ "$bundle" != "$profile_prefix"* ]]; then echo "::error::Bundle ID is outside the provisioning profile wildcard."; exit 1; fi
-          elif [[ "$bundle" != "$profile_bundle" ]]; then
-            echo "::error::Bundle ID mismatch between the project/IOS_BUNDLE_ID and provisioning profile."
-            exit 1
-          fi
+          if [[ "$bundle" != "$profile_bundle" && "$profile_bundle" != *'*'* ]]; then echo "::error::Bundle ID mismatch between IOS_BUNDLE_ID and provisioning profile."; exit 1; fi
           if [[ "$team" != "$profile_team" ]]; then echo "::error::Team ID mismatch between APPLE_TEAM_ID and provisioning profile."; exit 1; fi
           if [[ "$(date -j -f '%a %b %d %T %Z %Y' "$expiration" '+%s')" -le "$(date '+%s')" ]]; then echo "::error::Provisioning profile expired."; exit 1; fi
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
@@ -92,15 +89,13 @@ jobs:
           fi
           if [[ "$method" != enterprise ]] && ! /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices:0' "$profile_plist" >/dev/null 2>&1; then echo "::error::Provisioning profile contains no registered devices."; exit 1; fi
           echo "Signing prerequisites valid: identity found, profile current, bundle/team match, export method=$method."
-          {
-            echo "keychain=$keychain"
-            echo "uuid=$uuid"
-            echo "profile_name=$profile_name"
-            echo "identity=$identity"
-            echo "bundle=$bundle"
-            echo "team=$team"
-            echo "method=$method"
-          } >> "$GITHUB_OUTPUT"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          echo "uuid=$uuid" >> "$GITHUB_OUTPUT"
+          echo "profile_name=$profile_name" >> "$GITHUB_OUTPUT"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "team=$team" >> "$GITHUB_OUTPUT"
+          echo "method=$method" >> "$GITHUB_OUTPUT"
           trap - EXIT
 
       - name: Archive iOS app
@@ -139,17 +134,9 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: InputPilot-${{ github.ref_name }}
+          name: InputPilot-development-${{ github.run_number }}
           path: ${{ runner.temp }}/InputPilot.ipa
           if-no-files-found: error
-
-      - name: Attach IPA to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/InputPilot.ipa#InputPilot-$GITHUB_REF_NAME.ipa" --clobber
 
       - name: Remove signing material
         if: always()
