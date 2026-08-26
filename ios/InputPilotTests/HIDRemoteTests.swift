@@ -2,6 +2,14 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    private func firmwareImage(product: String = "InputPilot", board: String = "esp32-s3-zero-4mb", version: String = "0.8.1", protocolVersion: Int = 1) -> Data {
+        var data = Data(repeating: 0xff, count: FirmwareImageMetadata.minimumSize)
+        data[0] = 0xe9
+        let metadata = "INPUTPILOT-META:product=\(product);board=\(board);version=\(version);protocol=\(protocolVersion);otaSchema=1;\0"
+        data.replaceSubrange(128..<(128 + metadata.utf8.count), with: metadata.utf8)
+        return data
+    }
+
     func testSemanticFirmwareVersionsCompareNumerically() {
         XCTAssertLessThan(SemanticVersion("0.8.9")!, SemanticVersion("0.8.10")!)
         XCTAssertEqual(SemanticVersion("1.2")!, SemanticVersion("1.2.0")!)
@@ -14,6 +22,59 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(manifest.protocolVersion, 1)
         XCTAssertEqual(manifest.otaSchema, 1)
         XCTAssertEqual(manifest.size, 1_271_270)
+    }
+
+    func testBLEDeviceMetadataDecoding() throws {
+        let data = Data(#"{"product":"InputPilot","board":"esp32-s3-zero-4mb","deviceId":"aabbccddeeff","deviceName":"Desk","firmware":"0.8.0","protocol":1,"otaSchema":1,"capabilities":["ble_control","ble_ota"],"authRequired":true}"#.utf8)
+        let metadata = try JSONDecoder().decode(BLEDeviceMetadata.self, from: data)
+        XCTAssertEqual(metadata.deviceId, "aabbccddeeff")
+        XCTAssertTrue(metadata.capabilities.contains("ble_ota"))
+        XCTAssertTrue(metadata.authRequired)
+    }
+
+    func testBLEManufacturerIdentityFiltering() {
+        XCTAssertEqual(BLEDeviceDiscoveryManager.deviceId(from: Data("IPaabbccddeeff".utf8)), "aabbccddeeff")
+        XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data("random".utf8)))
+        XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data("IPaabbccddeefg".utf8)))
+    }
+
+    func testManualFirmwareVersionComesFromImageMetadata() throws {
+        XCTAssertEqual(try FirmwareImageMetadata.parseAndValidate(firmwareImage()).version, "0.8.1")
+    }
+
+    func testForeignAndWrongBoardFirmwareAreRejected() {
+        XCTAssertThrowsError(try FirmwareImageMetadata.parseAndValidate(firmwareImage(product: "Other")))
+        XCTAssertThrowsError(try FirmwareImageMetadata.parseAndValidate(firmwareImage(board: "other-board")))
+    }
+
+    func testManifestWrongProductAndBoardAreRejected() {
+        let hash = String(repeating: "a", count: 64)
+        XCTAssertThrowsError(try FirmwareManifestValidator.validate(.init(product: "Other", version: "1.0.0", board: "esp32-s3-zero-4mb", protocolVersion: 1, otaSchema: 1, size: 1, sha256: hash)))
+        XCTAssertThrowsError(try FirmwareManifestValidator.validate(.init(product: "InputPilot", version: "1.0.0", board: "other", protocolVersion: 1, otaSchema: 1, size: 1, sha256: hash)))
+    }
+
+    func testExpectedAndUnexpectedOTADisconnectStates() {
+        XCTAssertTrue(FirmwareUpdateManager.disconnectIsExpected(during: .verifying))
+        XCTAssertTrue(FirmwareUpdateManager.disconnectIsExpected(during: .rebooting))
+        XCTAssertFalse(FirmwareUpdateManager.disconnectIsExpected(during: .transferring))
+    }
+
+    func testActiveOTAStatesBlockConflictingCommands() {
+        let updater = FirmwareUpdateManager()
+        XCTAssertFalse(updater.blocksControl)
+        XCTAssertTrue(FirmwareUpdateManager.disconnectIsExpected(during: .installing))
+    }
+
+    func testPostRebootIdentityVersionAndSchemaVerification() {
+        let metadata = BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "abc", deviceName: "InputPilot", firmware: "0.8.1", protocolVersion: 1, otaSchema: 1, capabilities: ["ble_ota"], authRequired: false)
+        XCTAssertTrue(FirmwareUpdateManager.verifies(metadata: metadata, deviceId: "ABC", version: "0.8.1", requiredSchema: 1))
+        XCTAssertFalse(FirmwareUpdateManager.verifies(metadata: metadata, deviceId: "abc", version: "0.8.2", requiredSchema: 1))
+        XCTAssertFalse(FirmwareUpdateManager.verifies(metadata: metadata, deviceId: "other", version: "0.8.1", requiredSchema: 1))
+    }
+
+    func testBLEOnlyStoredDeviceNeedsNoNetworkEndpoint() {
+        let stored = StoredDevice(deviceId: "abc", displayName: "BLE", mdnsHost: "", staIP: nil, firmwareVersion: "0.8.0", protocolVersion: 1, capabilities: ["ble_ota"], otaSchema: 1)
+        XCTAssertNil(stored.staIP); XCTAssertTrue(stored.mdnsHost.isEmpty); XCTAssertEqual(stored.otaSchema, 1)
     }
 
     func testOTACapabilityAndMigrationStateDecode() throws {

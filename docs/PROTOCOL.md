@@ -6,7 +6,7 @@ This protocol carries semantic HID events from a trusted phone to the ESP32-S3. 
 
 Control is local-only. Set `CONTROL_API_TOKEN` at firmware build time. REST uses `X-API-Token` or `Authorization: Bearer`; TCP and NUS RX authenticate once with `auth <token>`. The firmware answers on the same TCP connection or through NUS TX notify with `auth ok` or `auth failed`; clients must not become ready before `auth ok`. No token value is returned. Binary BLE events are rejected until that session is authenticated. This application token does not provide BLE pairing, bonding, or transport encryption; use the device only on trusted networks and physical environments.
 
-The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET /api/status` reports `protocol_version` and `capabilities`, allowing clients to fall back for firmware before 0.5.0.
+The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET /api/status` and BLE OTA Status both report protocol and capabilities, so BLE-only clients do not depend on REST.
 
 ## Semantic events
 
@@ -54,7 +54,7 @@ The Nordic UART Service remains available for 0.4.x-compatible text commands and
 
 Buttons are `0=left`, `1=right`, `2=middle`. Frames exceeding the negotiated BLE MTU must be split at the semantic-event layer; long text and large macro streams should use TCP. Invalid versions, lengths, types, buttons, or unauthenticated binary events are rejected.
 
-The manufacturer-data payload is UTF-8 `IP<device_id>`. Clients compare the complete normalized ID and must not connect to the first device merely sharing the service UUID. Older firmware without this identity is still usable over TCP/REST, but cannot be selected safely by BLE when multiple devices are present.
+The manufacturer-data payload is UTF-8 `IP<device_id>`. Clients compare the complete normalized ID and must not connect to the first device merely sharing the service UUID. Repeated advertisements are deduplicated by device ID. Older firmware without this identity is still usable over TCP/REST, but cannot be selected safely by BLE when multiple devices are present.
 
 ## Capabilities
 
@@ -65,10 +65,10 @@ Protocol v1 firmware reports only implemented features: `mouse_move`, `mouse_cli
 Automatic mode prefers BLE for latency-sensitive events and TCP for long text or macro streams; REST is the management/fallback path. `Prefer Bluetooth`, `Prefer Wi-Fi`, `Bluetooth Only`, and `Wi-Fi Only` constrain this order. A drag, keyboard sequence, text send, preset, or macro leases one ready transport for its ordered lifetime. Loss of that transport aborts the sequence and attempts release-all; failover is allowed only for a later independent sequence.
 # BLE OTA protocol v1
 
-InputPilot extends its existing NimBLE server with service `7d9f1001-4f4d-4f56-4552-484944000001` and Control (`...1002`, write-with-response), Data (`...1003`, write-without-response), and Status (`...1004`, read/notify) characteristics. The existing NUS authentication command must succeed before Control or Data is accepted.
+InputPilot extends its existing NimBLE server with service `7d9f1001-4f4d-4f56-4552-484944000001` and Control (`...1002`, write-with-response), Data (`...1003`, write-without-response), and Status (`...1004`, read/notify) characteristics. Status is readable before authentication for onboarding and contains `product`, `board`, `deviceId`, `deviceName`, `firmware`, `protocol`, `otaSchema`, `capabilities`, and `authRequired`, plus OTA state/progress fields. The existing NUS authentication command must succeed before Control or Data is accepted.
 
 The client writes `START protocol=1 version=<semver> size=<bytes> sha256=<64 lowercase hex>` to Control. The device validates OTA schema, target slot, protocol, size, and authentication, calls `esp_ota_begin`, then notifies `READY` with `maxChunk` and `windowSize`. Each Data value begins with a four-byte little-endian absolute offset followed by image bytes. Offsets must be contiguous; Status emits ACKs containing the durable received offset. End-of-file is determined only by the declared size and explicit `FINISH`, never by a short BLE packet.
 
-On FINISH the device verifies byte count and streaming SHA-256, calls `esp_ota_end`, and only then calls `esp_ota_set_boot_partition`. Status transitions through `VERIFYING`, `INSTALLING`, `SUCCESS`, and `REBOOTING`. `ABORT`, disconnect, timeout, write error, invalid offset, or checksum mismatch calls `esp_ota_abort` and leaves the installed partition active. Partial-transfer resume is not part of protocol v1.
+On FINISH the device verifies byte count and streaming SHA-256, parses embedded InputPilot firmware metadata, and rejects a wrong product, board, protocol, schema, or target version. It then calls `esp_ota_end`, and only after every validation succeeds calls `esp_ota_set_boot_partition`. Status transitions through `VERIFYING`, `INSTALLING`, `SUCCESS`, and `REBOOTING`. `ABORT`, disconnect, timeout, write error, invalid offset, metadata mismatch, or checksum mismatch calls `esp_ota_abort` and leaves the installed partition active. Partial-transfer resume is not part of protocol v1.
 
 SHA-256 supplies transport/file integrity, not cryptographic signing or publisher authenticity.

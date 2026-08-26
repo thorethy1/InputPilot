@@ -91,7 +91,7 @@ Badges above track the latest `main` workflow run
 
 ## Using the iOS remote
 
-Flash firmware, then add the ESP32-S3 over nearby Bluetooth or through Bonjour, Soft-AP setup, or its Wi-Fi address. Wi-Fi is optional for BLE control and BLE firmware updates. The native tab bar keeps Devices, Control, Firmware, and Settings available without a custom bottom bar.
+Flash firmware, then choose **Add Device → Bluetooth → Scan Nearby** to onboard directly from the InputPilot manufacturer identity. The app reads device ID, name, firmware, protocol, OTA schema, capabilities, and authentication requirement over BLE and can save the device with no IP address or mDNS hostname. Bonjour, Soft-AP setup, and manual Wi-Fi addresses remain available. **Wi-Fi is optional; Bluetooth alone supports onboarding, control, status, and firmware updates.** The native tab bar keeps Devices, Control, Firmware, and Settings available without a custom bottom bar.
 
 - **Trackpad:** coalesced relative one-finger movement, two-finger scrolling, tap/double-tap click, long-press drag, mouse buttons, sensitivity and safety release.
 - **Keyboard:** native event input (including Backspace, Enter, Tab and paste), navigation/editing keys, one-shot modifiers, shortcuts, and actual German QWERTZ or US QWERTY USB-HID mapping.
@@ -106,7 +106,7 @@ Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+b
 
 Firmware v0.8.0 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
-In the iOS **Firmware** tab, choose a `.bin` app image and review its size before updating. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After success, InputPilot restarts, reconnects, and verifies the reported version.
+The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
 Devices flashed with the earlier factory-only partition table cannot migrate through a normal app OTA. Perform the one-time USB migration with the release assets at the PlatformIO ESP32-S3 offsets: `bootloader.bin` at `0x0000`, `partitions.bin` at `0x8000`, and `firmware.bin` at `0x10000` (for example with `esptool` after erasing the device). This full USB flash replaces the partition table, so back up/re-enter Wi-Fi credentials if needed. After migration, normal updates use **only `firmware.bin`**; never select the bootloader or partition-table image in the app.
 

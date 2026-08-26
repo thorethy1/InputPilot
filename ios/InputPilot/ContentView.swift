@@ -214,9 +214,16 @@ private struct FirmwareDeviceView: View {
     @State private var selectedData: Data?
     @State private var selectedName = ""
     @State private var targetVersion = ""
+    @State private var manualValidationError: String?
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
-        let transport = BLEHIDControlTransport(deviceId: device.deviceId, token: device.apiToken)
+        let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken)
+        transport.metadataHandler = { [weak device] metadata in
+            guard let device, metadata.deviceId.lowercased() == device.deviceId.lowercased() else { return }
+            device.firmwareVersion = metadata.firmware; device.protocolVersion = metadata.protocolVersion
+            device.capabilities = metadata.capabilities; device.otaSchema = metadata.otaSchema
+            device.lastCapabilitiesUpdate = Date(); device.lastSeen = Date()
+        }
         self.transport = transport; _updater = StateObject(wrappedValue: transport.firmwareUpdater)
     }
     var body: some View {
@@ -228,9 +235,10 @@ private struct FirmwareDeviceView: View {
                 } else {
                     Label("Available", systemImage: "checkmark.circle").foregroundStyle(AppColors.success)
                     Button("Check GitHub Releases") { Task { await releaseSource.check(installed: device.firmwareVersion) } }
-                    if releaseSource.updateAvailable { Button("Download Latest Firmware") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? "" } } }.buttonStyle(.borderedProminent) }
+                    if releaseSource.updateAvailable { Button("Download Latest Firmware") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
                     if let error = releaseSource.errorMessage { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     if let selectedData { LabeledContent("File", value: selectedName); LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file)) }
+                    if let manualValidationError { Label(manualValidationError, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     Button("Choose Firmware File") { importing = true }
                     if selectedData != nil { TextField("Firmware version", text: $targetVersion).textInputAutocapitalization(.never).autocorrectionDisabled() }
                     if let selectedData { Button("Update Firmware") { Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: releaseSource.manifest?.version == targetVersion ? releaseSource.manifest?.sha256 : nil) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
@@ -246,14 +254,16 @@ private struct FirmwareDeviceView: View {
             }
         }
         .task { await transport.connect() }
-        .onDisappear { Task { await transport.disconnect() } }
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data]) { result in
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
-            selectedData = try? Data(contentsOf: url); selectedName = url.lastPathComponent; targetVersion = device.firmwareVersion ?? ""
+            guard let data = try? Data(contentsOf: url) else { return }
+            selectedData = data; selectedName = url.lastPathComponent
+            do { targetVersion = try FirmwareImageMetadata.parseAndValidate(data).version; manualValidationError = nil }
+            catch { targetVersion = ""; manualValidationError = error.localizedDescription }
         }
     }
-    private var statusText: String { switch updater.state { case .idle: "Ready"; case .checking: "Checking…"; case .preparing: "Preparing…"; case .transferring: "Updating firmware…"; case .verifying: "Verifying firmware…"; case .rebooting: "Restarting InputPilot…"; case .reconnecting: "Reconnecting…"; case .completed: "Firmware updated"; case .cancelled: "Update cancelled. Existing firmware remains installed."; case let .failed(message): message } }
+    private var statusText: String { switch updater.state { case .idle: "Ready"; case .checking: "Checking…"; case .connecting: "Connecting…"; case .authenticating: "Authenticating…"; case .preparing: "Preparing…"; case .transferring: "Updating firmware…"; case .waitingForFinalAck: "Waiting for final acknowledgement…"; case .verifying: "Verifying firmware…"; case .installing: "Installing firmware…"; case .rebooting: "Restarting InputPilot…"; case .reconnecting: "Reconnecting…"; case .verifyingInstalledVersion: "Verifying installed firmware…"; case .completed: "Firmware updated successfully"; case .cancelled: "Update cancelled. Existing firmware remains installed."; case let .failed(message): message } }
 }
 
 @MainActor private final class GitHubFirmwareSource: ObservableObject {
@@ -275,7 +285,7 @@ private struct FirmwareDeviceView: View {
                   let manifestURL = URL(string: manifestString), let imageURL = URL(string: firmwareString) else { throw URLError(.badServerResponse) }
             let (manifestData, _) = try await URLSession.shared.data(from: manifestURL)
             let decoded = try JSONDecoder().decode(FirmwareManifest.self, from: manifestData)
-            guard decoded.product == "InputPilot", decoded.board == "esp32-s3-zero-4mb", decoded.protocolVersion == 1, decoded.otaSchema == 1 else { throw URLError(.cannotParseResponse) }
+            try FirmwareManifestValidator.validate(decoded)
             manifest = decoded; firmwareURL = imageURL
             updateAvailable = installed.flatMap(SemanticVersion.init).map { current in SemanticVersion(decoded.version).map { current < $0 } ?? false } ?? true
         } catch { errorMessage = "Could not check GitHub Releases." }
@@ -284,7 +294,7 @@ private struct FirmwareDeviceView: View {
         guard let firmwareURL, let manifest else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: firmwareURL)
-            guard data.count == manifest.size else { throw URLError(.dataLengthExceedsMaximum) }
+            try FirmwareManifestValidator.validate(manifest, firmware: data)
             return data
         } catch { errorMessage = "Could not download the firmware image."; return nil }
     }

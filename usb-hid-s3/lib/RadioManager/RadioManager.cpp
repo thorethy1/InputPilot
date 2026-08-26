@@ -289,7 +289,6 @@ void RadioManager::startBle() {
         BLE_NUS_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     rx->setCallbacks(&s_rxCallbacks);
     s_bleTx = svc->createCharacteristic(BLE_NUS_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
-    svc->start();
 
     NimBLEService *hidSvc = s_bleServer->createService(BLE_HID_SERVICE_UUID);
     for (const char *uuid : {BLE_HID_CONTROL_UUID, BLE_HID_MOUSE_UUID,
@@ -302,7 +301,6 @@ void RadioManager::startBle() {
         BLE_HID_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     const uint8_t statusValue[] = {HIDProtocol::Version, 0x00};
     status->setValue(statusValue, sizeof(statusValue));
-    hidSvc->start();
 
     g_bleOta.begin(s_bleServer);
 
@@ -366,7 +364,7 @@ void RadioManager::loop() {
 
   const bool hadTcpClient = s_tcpClient && s_tcpClient.connected();
   if (!hadTcpClient) {
-    WiFiClient nc = s_tcpServer.available();
+    WiFiClient nc = s_tcpServer.accept();
     if (nc) {
       s_tcpClient = nc;
       s_tcpLineBuf.clear();

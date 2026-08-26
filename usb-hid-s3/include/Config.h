@@ -12,6 +12,9 @@
 #define FW_VERSION_BCD  0x0800
 #define OTA_SCHEMA_VERSION 1
 #define OTA_PROTOCOL_VERSION 1
+#define FW_PRODUCT      "InputPilot"
+#define FW_BOARD        "esp32-s3-zero-4mb"
+#define FW_METADATA_PREFIX "INPUTPILOT-META:"
 
 // --- USB identity (custom VID/PID so the host drops the boot-time Espressif id) ---
 // Prefixed to avoid colliding with USB_VID/USB_PID/... from the S3 variant's

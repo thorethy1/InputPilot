@@ -41,6 +41,8 @@ struct SavedDeviceIndex: Equatable, Sendable {
 
     var isEmpty: Bool { byId.isEmpty }
 
+    func match(deviceId: String) -> Entry? { byId[deviceId.lowercased()] }
+
     func match(candidate: DiscoveredService) -> Entry? {
         if let id = candidate.deviceId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty,
            let entry = byId[id.lowercased()] {

@@ -27,6 +27,13 @@
 #include "StatusLed.h"
 #include "WifiCredentials.h"
 #include "BLEOTA.h"
+#include "FirmwareMetadata.h"
+
+// Kept in the application image so both the device and clients can reject a
+// valid ESP32 image built for another product or board before activation.
+extern "C" const char inputPilotFirmwareMetadata[] __attribute__((used)) =
+    FW_METADATA_PREFIX "product=" FW_PRODUCT ";board=" FW_BOARD ";version=" FW_VERSION
+    ";protocol=1;otaSchema=1;";
 
 // ---------------------------------------------------------------------------
 // USB devices (core stack). ARDUINO_USB_CDC_ON_BOOT=0, so the core does NOT
@@ -400,6 +407,7 @@ void setup() {
   LOG_RADIO("default mode=%s status=%s", radioModeToString(g_radio.mode()),
             g_radio.statusStr());
 
+  LOG_INFO("firmware metadata=%s", inputPilotFirmwareMetadata);
   LOG_INFO("ready: type 'help' for commands");
 }
 

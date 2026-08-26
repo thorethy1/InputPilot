@@ -13,7 +13,7 @@ This gate cannot be replaced by simulator or host tests. Record board revision, 
 
 Attach the completed observation record to the v0.8.0 release. If physical hardware or a signed iOS build is unavailable, mark this gate **not run**; do not infer success from compilation.
 
-Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use firmware 0.6.1 and an app built with Xcode 26 or newer. Release results belong in `HARDWARE_E2E_RESULTS_0.6.1.md`.
+Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use the v0.8.0 release-candidate firmware and an app built with Xcode 26 or newer. Release results belong in `HARDWARE_E2E_RESULTS_0.8.0.md`.
 
 ## USB HID and transports
 

@@ -1,10 +1,15 @@
 #include "BLEOTA.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <esp_partition.h>
 #include <esp_system.h>
 
 #include "CommandSink.h"
 #include "Config.h"
+#include "DeviceIdentity.h"
+#include "FirmwareMetadata.h"
 #include "Logging.h"
 
 extern bool deviceBleAuthenticated();
@@ -54,13 +59,23 @@ bool BLEOTA::active() const {
 
 void BLEOTA::notify(const char *event, const char *error) {
   if (!status_) return;
-  char json[256];
-  snprintf(json, sizeof(json),
-           "{\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"state\":\"%s\",\"event\":\"%s\",\"offset\":%lu,\"size\":%lu,\"maxChunk\":%u,\"windowSize\":%lu%s%s%s}",
-           OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION, OTAProtocol::stateName(state_), event,
-           (unsigned long)received_, (unsigned long)request_.size, 500,
-           (unsigned long)BLE_OTA_ACK_BYTES, error ? ",\"error\":\"" : "",
-           error ? error : "", error ? "\"" : "");
+  char json[640];
+  if (strcmp(event, "IDLE") == 0) {
+    // The complete identity is read during onboarding/connection. Active OTA
+    // notifications stay below a typical iOS ATT MTU and remain deterministic.
+    snprintf(json, sizeof(json),
+             "{\"product\":\"%s\",\"board\":\"%s\",\"deviceId\":\"%s\",\"deviceName\":\"%s\",\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"authRequired\":%s,\"capabilities\":[\"ble_control\",\"ble_ota\",\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"protocol_v1\"],\"state\":\"idle\",\"event\":\"IDLE\",\"offset\":0,\"size\":0,\"maxChunk\":500,\"windowSize\":%lu}",
+             FW_PRODUCT, FW_BOARD, DeviceIdentity::deviceId(), BLE_DEVICE_NAME,
+             OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION,
+             strlen(CONTROL_API_TOKEN) ? "true" : "false", (unsigned long)BLE_OTA_ACK_BYTES);
+  } else {
+    snprintf(json, sizeof(json),
+             "{\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"state\":\"%s\",\"event\":\"%s\",\"offset\":%lu,\"size\":%lu,\"maxChunk\":%u,\"windowSize\":%lu%s%s%s}",
+             OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION, OTAProtocol::stateName(state_), event,
+             (unsigned long)received_, (unsigned long)request_.size, 500,
+             (unsigned long)BLE_OTA_ACK_BYTES, error ? ",\"error\":\"" : "",
+             error ? error : "", error ? "\"" : "");
+  }
   status_->setValue(reinterpret_cast<const uint8_t *>(json), strlen(json));
   status_->notify();
 }
@@ -135,6 +150,28 @@ void BLEOTA::finish() {
   for (size_t i = 0; i < sizeof(digest); ++i) snprintf(calculated + i * 2, 3, "%02x", digest[i]);
   if (request_.sha256 != calculated) { fail("checksum_mismatch"); return; }
   LOG_INFO("OTA checksum ok");
+  FirmwareMetadataValue metadata;
+  std::string metadataError;
+  // Scan in bounded chunks; allocating an entire OTA slot would exhaust SRAM.
+  constexpr size_t kChunk = 4096;
+  constexpr size_t kOverlap = 256;
+  uint8_t *image = static_cast<uint8_t *>(malloc(kChunk + kOverlap));
+  if (!image) { fail("metadata_read_failed"); return; }
+  size_t carried = 0;
+  bool parsed = false;
+  for (uint32_t offset = 0; offset < request_.size && !parsed;) {
+    const size_t count = std::min<size_t>(kChunk, request_.size - offset);
+    if (esp_partition_read(partition_, offset, image + carried, count) != ESP_OK) break;
+    parsed = FirmwareMetadata::parse(image, carried + count, metadata);
+    const size_t available = carried + count;
+    carried = std::min(kOverlap, available);
+    memmove(image, image + available - carried, carried);
+    offset += count;
+  }
+  free(image);
+  if (!parsed) { fail("invalid_metadata"); return; }
+  if (!FirmwareMetadata::compatible(metadata, metadataError)) { fail(metadataError.c_str()); return; }
+  if (metadata.version != request_.version) { fail("version_mismatch"); return; }
   if (esp_ota_end(handle_) != ESP_OK) { handle_ = 0; fail("image_invalid"); return; }
   handle_ = 0; state_ = OTAState::Installing; notify("INSTALLING");
   if (esp_ota_set_boot_partition(partition_) != ESP_OK) { fail("boot_partition_failed"); return; }

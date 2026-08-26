@@ -220,6 +220,28 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
         XCTAssertFalse(mockBrowser.isBrowsing)
     }
 
+    func testChooseBluetoothAndSaveBLEOnlyDevice() async throws {
+        let metadata = BLEDeviceMetadata(
+            product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "aabbccddeeff",
+            deviceName: "InputPilot Desk", firmware: "0.8.0", protocolVersion: 1,
+            otaSchema: 1, capabilities: ["ble_control", "ble_ota"], authRequired: false
+        )
+        viewModel.chooseBluetooth()
+        XCTAssertEqual(viewModel.step, .bleScanning)
+        viewModel.selectBluetooth(metadata)
+        XCTAssertEqual(viewModel.bleMetadata, metadata)
+
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: StoredDevice.self, configurations: config)
+        try await viewModel.saveDevice(context: container.mainContext)
+        let devices = try container.mainContext.fetch(FetchDescriptor<StoredDevice>())
+        XCTAssertEqual(devices.count, 1)
+        XCTAssertEqual(devices[0].deviceId, metadata.deviceId)
+        XCTAssertNil(devices[0].staIP)
+        XCTAssertTrue(devices[0].mdnsHost.isEmpty)
+        XCTAssertEqual(devices[0].otaSchema, 1)
+    }
+
     func testSoftAPInstructionsContinueMovesToJoin() {
         viewModel.chooseSoftAP()
         viewModel.continueFromSoftAPInstructions()

@@ -6,6 +6,7 @@ struct AddDeviceWizardView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var storedDevices: [StoredDevice]
     @StateObject private var viewModel = AddDeviceWizardViewModel()
+    @StateObject private var bluetooth = BLEDeviceDiscoveryManager()
 
     var body: some View {
         NavigationStack {
@@ -15,8 +16,12 @@ struct AddDeviceWizardView: View {
                     choosePathStep
                 case .scanning:
                     scanningStep
+                case .bleScanning:
+                    bluetoothScanningStep
                 case .confirm:
                     confirmStep
+                case .confirmBLE:
+                    confirmBLEStep
                 case .softAPInstructions:
                     softAPInstructionsStep
                 case .softAPJoin:
@@ -42,6 +47,7 @@ struct AddDeviceWizardView: View {
             .onChange(of: storedDevices.map(\.deviceId)) { _, _ in
                 viewModel.updateKnownDevices(storedDevices)
             }
+            .onDisappear { bluetooth.stop() }
         }
     }
 
@@ -51,7 +57,9 @@ struct AddDeviceWizardView: View {
             "Add Device"
         case .scanning:
             "Scan Network"
-        case .confirm:
+        case .bleScanning:
+            "Scan Bluetooth"
+        case .confirm, .confirmBLE:
             "Confirm Device"
         case .softAPInstructions, .softAPJoin, .softAPHomeWifi, .softAPReconnect, .softAPDiscover:
             "Set Up New Device"
@@ -68,7 +76,7 @@ struct AddDeviceWizardView: View {
             .disabled(viewModel.isProbing || viewModel.isSaving || viewModel.isJoining || viewModel.isProvisioning)
         }
 
-        if case .confirm = viewModel.step {
+        if viewModel.probedDevice != nil || viewModel.bleMetadata != nil {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
                     Task { await saveDevice() }
@@ -80,7 +88,19 @@ struct AddDeviceWizardView: View {
 
     private var choosePathStep: some View {
         List {
-            Section {
+            Section("Bluetooth") {
+                Button {
+                    viewModel.chooseBluetooth(); bluetooth.start()
+                } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Scan Nearby").foregroundStyle(.primary)
+                            Text("Find nearby InputPilot devices without Wi‑Fi").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } icon: { Image(systemName: "antenna.radiowaves.left.and.right") }
+                }
+            }
+            Section("Wi-Fi") {
                 Button {
                     viewModel.chooseScan()
                 } label: {
@@ -112,9 +132,7 @@ struct AddDeviceWizardView: View {
                         Image(systemName: "wifi.router")
                     }
                 }
-            } footer: {
-                Text("Scanning uses Bonjour to find InputPilot devices in your network")
-            }
+            } footer: { Text("Wi-Fi is optional. Network scanning uses Bonjour.") }
         }
     }
 
@@ -126,6 +144,31 @@ struct AddDeviceWizardView: View {
                 ? "All InputPilot devices found on the network are already in your device list."
                                 : "Looking for InputPilot devices on your local network."
         )
+    }
+
+    private var bluetoothScanningStep: some View {
+        Group {
+            let candidates = bluetooth.devices.filter { viewModel.knownDevices.match(deviceId: $0.deviceId) == nil }
+            if candidates.isEmpty {
+                ContentUnavailableView("Scanning…", systemImage: "antenna.radiowaves.left.and.right", description: Text("Looking for nearby InputPilot devices."))
+            } else {
+                List(candidates) { device in
+                    Button {
+                        Task {
+                            do { viewModel.selectBluetooth(try await bluetooth.metadata(for: device)) }
+                            catch { viewModel.errorMessage = error.localizedDescription; bluetooth.start() }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(device.name).font(.headline).foregroundStyle(.primary)
+                            Text(device.deviceId).font(.caption).foregroundStyle(.secondary)
+                            Text("RSSI \(device.rssi) dBm").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+        }
+        .toolbar { ToolbarItem(placement: .bottomBar) { Button("Back") { bluetooth.stop(); viewModel.backToChoosePath() } } }
     }
 
     private var softAPInstructionsStep: some View {
@@ -373,6 +416,24 @@ struct AddDeviceWizardView: View {
                 apiToken: $viewModel.apiToken,
                 showsAuthTokenField: viewModel.showsAuthTokenField
             )
+        }
+    }
+
+    @ViewBuilder private var confirmBLEStep: some View {
+        if let metadata = viewModel.bleMetadata {
+            Form {
+                Section("Device") {
+                    LabeledContent("Name", value: metadata.deviceName)
+                    LabeledContent("Version", value: metadata.firmware)
+                    LabeledContent("Device ID", value: metadata.deviceId)
+                    LabeledContent("Connection", value: "Bluetooth only")
+                }
+                Section("Friendly name") { TextField("Name", text: $viewModel.displayName) }
+                if metadata.authRequired {
+                    Section { TextField("API Token", text: $viewModel.apiToken).textInputAutocapitalization(.never).autocorrectionDisabled() }
+                    footer: { Text("This device requires an API token for control.") }
+                }
+            }
         }
     }
 

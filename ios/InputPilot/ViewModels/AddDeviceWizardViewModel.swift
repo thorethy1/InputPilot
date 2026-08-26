@@ -4,7 +4,9 @@ import SwiftData
 enum AddDeviceWizardStep: Equatable {
     case choosePath
     case scanning
+    case bleScanning
     case confirm(ProbedDevice)
+    case confirmBLE(BLEDeviceMetadata)
     case softAPInstructions
     case softAPJoin
     case softAPHomeWifi
@@ -69,8 +71,10 @@ final class AddDeviceWizardViewModel: ObservableObject {
         return nil
     }
 
+    var bleMetadata: BLEDeviceMetadata? { if case let .confirmBLE(metadata) = step { metadata } else { nil } }
+
     var showsAuthTokenField: Bool {
-        probedDevice?.status.authRequired == true
+        probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true
     }
 
     /// Candidates for Soft-AP rediscovery (optionally filtered to expected device id).
@@ -99,6 +103,16 @@ final class AddDeviceWizardViewModel: ObservableObject {
         errorMessage = nil
         step = .scanning
         startBrowsing()
+    }
+
+    func chooseBluetooth() { browser.stopBrowsing(); resetSoftAPState(); errorMessage = nil; step = .bleScanning }
+
+    func selectBluetooth(_ metadata: BLEDeviceMetadata) {
+        if let existing = knownDevices.match(deviceId: metadata.deviceId) {
+            errorMessage = SavedDeviceIndex.alreadyExistsMessage(displayName: existing.displayName); return
+        }
+        displayName = metadata.deviceName.isEmpty ? "InputPilot" : metadata.deviceName
+        apiToken = ""; step = .confirmBLE(metadata)
     }
 
     func chooseSoftAP() {
@@ -217,6 +231,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
 
     func backFromConfirm() {
         errorMessage = nil
+        if case .confirmBLE = step { step = .bleScanning; return }
         if expectedDeviceId != nil {
             step = .softAPDiscover
             startBrowsing()
@@ -292,8 +307,6 @@ final class AddDeviceWizardViewModel: ObservableObject {
     }
 
     func saveDevice(context: ModelContext) async throws {
-        guard case let .confirm(probed) = step else { return }
-
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
@@ -307,19 +320,22 @@ final class AddDeviceWizardViewModel: ObservableObject {
         let trimmedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = trimmedToken.isEmpty ? nil : trimmedToken
 
-        if probed.status.authRequired && token == nil {
+        let requiresAuth = probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true
+        if requiresAuth && token == nil {
             errorMessage = "This device requires an API token."
             return
         }
 
-        let repository = DeviceRepository(context: context)
-        _ = try await repository.addFromDiscovery(
-            status: probed.status,
-            fallbackHost: probed.candidate.host,
-            displayName: trimmedName,
-            token: token,
-            api: apiClient
-        )
+        if case let .confirm(probed) = step {
+            let repository = DeviceRepository(context: context)
+            _ = try await repository.addFromDiscovery(status: probed.status, fallbackHost: probed.candidate.host, displayName: trimmedName, token: token, api: apiClient)
+        } else if case let .confirmBLE(metadata) = step {
+            context.insert(StoredDevice(deviceId: metadata.deviceId, displayName: trimmedName, mdnsHost: "", staIP: nil,
+                apiToken: token, lastSeen: Date(), firmwareVersion: metadata.firmware,
+                protocolVersion: metadata.protocolVersion, capabilities: metadata.capabilities,
+                lastCapabilitiesUpdate: Date(), otaSchema: metadata.otaSchema))
+            try context.save()
+        } else { return }
 
         browser.stopBrowsing()
     }
