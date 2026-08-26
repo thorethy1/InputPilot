@@ -7,6 +7,8 @@
 - Added stable BLE device identity matching and persisted firmware protocol/capability metadata.
 - Moved iOS CI and signing to Xcode 26+ for native Liquid Glass and made personal signed IPAs manual Actions artifacts only, never automatic public release assets.
 - Extended firmware capabilities, protocol/OpenAPI documentation, native/iOS tests, and the hardware E2E plan.
+- Persisted capability metadata on initial device save, rejected unsupported future protocol versions, and exposed explicit connecting/reconnecting/authentication transport states.
+- Completed all preset creation fields and upgraded CI from YAML parsing to OpenAPI schema validation.
 
 ## [0.5.0] - 2026-08-25
 

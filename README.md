@@ -49,11 +49,11 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 
 ### 3. Companions (optional)
 
-- **[iOS HID Remote](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
+- **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
 - **[Android InputPilot](android/)** — Kotlin + Jetpack Compose; NSD, Soft-AP, same REST. Firmware **0.4.0+**. See [`android/README.md`](android/README.md).
 
 <p align="center">
-  <img src="docs/images/ios-device-list.jpg" alt="iOS InputPilot device list showing two online hid-helpers" width="240">
+  <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two online hid-helpers" width="240">
   &nbsp;
   <img src="docs/images/ios-device-detail.jpg" alt="iOS device detail for Mover 1 with firmware 0.4.0 and jiggle toggle" width="240">
 </p>
@@ -83,7 +83,7 @@ Badges above track the latest `main` workflow run
 
 - PlatformIO **native unit tests**
 - **esp32s3 firmware compile**
-- OpenAPI YAML sanity check
+- OpenAPI 3 schema validation and required-path audit
 - **InputPilot iOS** build + unit tests (`macos-26`, Xcode 26+ Simulator)
 - **InputPilot Android** unit tests + `assembleDebug` (`ubuntu-latest`)
 

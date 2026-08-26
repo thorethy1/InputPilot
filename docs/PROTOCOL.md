@@ -1,4 +1,4 @@
-# InputPilot Control Protocol v1
+# InputPilot HID Control Protocol v1
 
 This protocol carries semantic HID events from a trusted phone to the ESP32-S3. The firmware turns them into USB HID reports; it never captures input from the attached computer. BLE, persistent TCP, and REST share the same command sink.
 
