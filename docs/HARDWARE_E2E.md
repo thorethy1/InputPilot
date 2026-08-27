@@ -49,6 +49,22 @@ Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS vers
 - Abort each transport mid-transfer, power-cycle, and verify the previous firmware remains bootable. Then retry successfully.
 - Attempt initial-flash.bin, bootloader.bin, partitions.bin, boot_app0.bin, wrong SHA/size/version/product/board/protocol/schema and an interrupted upload; every case must fail without selecting a boot partition.
 
+### HID executor and BLE reboot regression
+
+- Boot in `wifi+ble`, record the new `reset_reason=...` line, connect BLE without sending input, and verify stability for at least 30 seconds.
+- Send one BLE mouse move, then continuous trackpad movement for 30 seconds. Verify movement remains responsive, queue-overflow warnings do not repeat, and the ESP does not reboot.
+- Test left/right/middle click, keyboard typing, key combinations, and drag with a final button-up. Verify no stuck key or mouse button.
+- Hold a mouse button and disconnect BLE. Verify the queued `releaseAll` executes and reconnect/advertising remain healthy.
+- Send Wi-Fi control after BLE control, BLE control after Wi-Fi control, then rapidly alternate transports for 30 seconds. Verify ordering remains usable, USB HID stays enumerated, and no reboot occurs.
+- If a reboot occurs, capture `reset_reason`, the last HID queue/executor warnings, uptime, and whether a panic/core dump is reported by the serial boot log.
+
+### Physical-device transport merge
+
+- A: clear app data, add by Wi-Fi, then discover/add Bluetooth. Verify one StoredDevice remains, friendly name/token/IP/mDNS are preserved, and both connections are shown.
+- B: clear app data, add by Bluetooth, then provision/discover Wi-Fi. Choose “Add Wi-Fi to existing InputPilot”; verify IP/mDNS and Wi-Fi capabilities are merged into the same device ID without an Already Added error.
+- Repeat discovery for a transport already recorded. Verify the app reports that transport as already configured and never creates a second device row.
+- Open Firmware Logs, load history, then generate live logs and reconnect BLE. Verify each `(sequence, line)` appears once and polling `/api/logs` does not duplicate existing rows.
+
 - Mouse: move in every direction; left/right/middle click; vertical scroll; long-press drag and release.
 - German host layout: verify `y z ä ö ü ß @ € ? ! / \` plus upper-case umlauts and the documented symbol set.
 - US host layout: verify lower/upper-case letters, digits, shifted and unshifted symbols.

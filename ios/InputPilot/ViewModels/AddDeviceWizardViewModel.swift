@@ -42,6 +42,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
     @Published var softAPManualHost = ""
     @Published private(set) var expectedDeviceId: String?
     @Published private(set) var probedWifiStatus: WifiStatus?
+    @Published private(set) var mergeMessage: String?
 
     /// Saved devices used to hide duplicates from scan results and reject re-adds.
     @Published private(set) var knownDevices = SavedDeviceIndex.empty
@@ -86,12 +87,18 @@ final class AddDeviceWizardViewModel: ObservableObject {
         } else {
             base = candidates
         }
-        return base.filter { knownDevices.match(candidate: $0) == nil }
+        return base.filter { candidate in
+            guard let existing = knownDevices.match(candidate: candidate) else { return true }
+            return existing.hosts.isEmpty
+        }
     }
 
     /// Scan-network list excludes devices already saved.
     var newCandidates: [DiscoveredService] {
-        candidates.filter { knownDevices.match(candidate: $0) == nil }
+        candidates.filter { candidate in
+            guard let existing = knownDevices.match(candidate: candidate) else { return true }
+            return existing.hosts.isEmpty
+        }
     }
 
     var hasHiddenKnownCandidates: Bool {
@@ -100,18 +107,25 @@ final class AddDeviceWizardViewModel: ObservableObject {
 
     func chooseScan() {
         resetSoftAPState()
+        mergeMessage = nil
         errorMessage = nil
         step = .scanning
         startBrowsing()
     }
 
-    func chooseBluetooth() { browser.stopBrowsing(); resetSoftAPState(); errorMessage = nil; step = .bleScanning }
+    func chooseBluetooth() { browser.stopBrowsing(); resetSoftAPState(); mergeMessage = nil; errorMessage = nil; step = .bleScanning }
 
     func selectBluetooth(_ metadata: BLEDeviceMetadata) {
         if let existing = knownDevices.match(deviceId: metadata.deviceId) {
-            errorMessage = SavedDeviceIndex.alreadyExistsMessage(displayName: existing.displayName); return
+            if existing.hasBluetooth {
+                errorMessage = "This device is already configured for Bluetooth."; return
+            }
+            displayName = existing.displayName
+            mergeMessage = "Bluetooth will be added to this existing InputPilot."
+        } else {
+            displayName = metadata.deviceName.isEmpty ? "InputPilot" : metadata.deviceName
+            mergeMessage = nil
         }
-        displayName = metadata.deviceName.isEmpty ? "InputPilot" : metadata.deviceName
         apiToken = ""; step = .confirmBLE(metadata)
     }
 
@@ -231,6 +245,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
 
     func backFromConfirm() {
         errorMessage = nil
+        mergeMessage = nil
         if case .confirmBLE = step { step = .bleScanning; return }
         if expectedDeviceId != nil {
             step = .softAPDiscover
@@ -270,6 +285,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         errorMessage = nil
         displayName = ""
         apiToken = ""
+        mergeMessage = nil
         resetSoftAPState()
     }
 
@@ -278,7 +294,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         errorMessage = nil
         defer { isProbing = false }
 
-        if let existing = knownDevices.match(candidate: candidate) {
+        if let existing = knownDevices.match(candidate: candidate), !existing.hosts.isEmpty {
             errorMessage = SavedDeviceIndex.alreadyExistsMessage(displayName: existing.displayName)
             return
         }
@@ -295,10 +311,12 @@ final class AddDeviceWizardViewModel: ObservableObject {
                 return
             }
             if let existing = knownDevices.match(status: status, host: candidate.host) {
-                errorMessage = SavedDeviceIndex.alreadyExistsMessage(displayName: existing.displayName)
-                return
+                displayName = existing.displayName
+                mergeMessage = "Wi-Fi will be added to this existing InputPilot."
+            } else {
+                displayName = Self.defaultDisplayName(for: status)
+                mergeMessage = nil
             }
-            displayName = Self.defaultDisplayName(for: status)
             apiToken = ""
             step = .confirm(ProbedDevice(candidate: candidate, status: status, baseURL: baseURL))
         } catch {
@@ -330,11 +348,8 @@ final class AddDeviceWizardViewModel: ObservableObject {
             let repository = DeviceRepository(context: context)
             _ = try await repository.addFromDiscovery(status: probed.status, fallbackHost: probed.candidate.host, displayName: trimmedName, token: token, api: apiClient)
         } else if case let .confirmBLE(metadata) = step {
-            context.insert(StoredDevice(deviceId: metadata.deviceId, displayName: trimmedName, mdnsHost: "", staIP: nil,
-                apiToken: token, lastSeen: Date(), firmwareVersion: metadata.firmware,
-                protocolVersion: metadata.protocolVersion, capabilities: metadata.capabilities,
-                lastCapabilitiesUpdate: Date(), otaSchema: metadata.otaSchema))
-            try context.save()
+            let repository = DeviceRepository(context: context)
+            _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName, token: token)
         } else { return }
 
         browser.stopBrowsing()

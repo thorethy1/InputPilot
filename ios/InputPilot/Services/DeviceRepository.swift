@@ -85,12 +85,12 @@ final class DeviceRepository {
         token: String?,
         api: any DeviceAPIClientProtocol
     ) async throws -> StoredDevice {
-        let index = SavedDeviceIndex(devices: try fetchAll())
-        if let existing = index.match(status: status, host: fallbackHost) {
-            throw DeviceRepositoryError.alreadyExists(displayName: existing.displayName)
-        }
-
         let deviceId = status.deviceId ?? fallbackHost
+        if let existing = try fetchStored(deviceId: deviceId) {
+            DeviceMerge.wifi(status, fallbackHost: fallbackHost, token: token, into: existing)
+            try context.save()
+            return existing
+        }
         var device = Device(status: status, fallbackHost: fallbackHost)
         device.displayName = displayName
         device.apiToken = token
@@ -102,7 +102,22 @@ final class DeviceRepository {
         return stored
     }
 
-    /// Probes a host without saving. Throws `alreadyExists` when the device is already saved.
+    func addOrMergeBluetooth(metadata: BLEDeviceMetadata, displayName: String, token: String?) throws -> StoredDevice {
+        if let existing = try fetchStored(deviceId: metadata.deviceId) {
+            DeviceMerge.bluetooth(metadata, token: token, into: existing)
+            try context.save()
+            return existing
+        }
+        let stored = StoredDevice(deviceId: metadata.deviceId, displayName: displayName, mdnsHost: "", staIP: nil,
+            apiToken: token, lastSeen: Date(), firmwareVersion: metadata.firmware,
+            protocolVersion: metadata.protocolVersion, capabilities: metadata.capabilities,
+            lastCapabilitiesUpdate: Date(), otaSchema: metadata.otaSchema, bluetoothDiscovered: true)
+        context.insert(stored)
+        try context.save()
+        return stored
+    }
+    /// Probes a host without saving. A matching device ID is returned so the
+    /// caller can enrich the existing physical device with this Wi-Fi endpoint.
     func probeByAddress(
         host: String,
         token: String?,
@@ -111,16 +126,12 @@ final class DeviceRepository {
         let urls = DeviceEndpointResolver.endpointURLs(mdnsHost: host, staIP: nil)
         guard !urls.isEmpty else { throw DeviceRepositoryError.deviceUnreachable }
 
-        let index = SavedDeviceIndex(devices: try fetchAll())
         var lastError: Error = DeviceRepositoryError.deviceUnreachable
 
         for url in urls {
             do {
                 let status = try await api.status(baseURL: url, token: token)
                 let fallbackHost = url.host ?? host
-                if let existing = index.match(status: status, host: fallbackHost) {
-                    throw DeviceRepositoryError.alreadyExists(displayName: existing.displayName)
-                }
                 let candidate = DiscoveredService(
                     id: "manual-\(fallbackHost)",
                     deviceId: status.deviceId,
@@ -173,21 +184,7 @@ final class DeviceRepository {
     }
 
     private func applyStatus(_ status: DeviceStatus, to stored: StoredDevice, fallbackHost: String) {
-        if let mdns = status.mdns, !mdns.isEmpty {
-            stored.mdnsHost = mdns
-        } else if stored.mdnsHost.isEmpty {
-            stored.mdnsHost = fallbackHost
-        }
-        if let staIP = status.staIp {
-            stored.staIP = staIP
-        }
-        stored.jiggleEnabled = status.jiggle
-        stored.lastSeen = Date()
-        stored.firmwareVersion = status.version
-        stored.protocolVersion = status.protocolVersion
-        stored.capabilities = status.capabilities
-        stored.otaSchema = status.otaSchema
-        stored.lastCapabilitiesUpdate = Date()
+        DeviceMerge.wifi(status, fallbackHost: fallbackHost, token: nil, into: stored)
     }
 
     private func fetchAll() throws -> [StoredDevice] {

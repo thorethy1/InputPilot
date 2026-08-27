@@ -222,9 +222,7 @@ private struct FirmwareDeviceView: View {
         let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken)
         transport.metadataHandler = { [weak device] metadata in
             guard let device, metadata.deviceId.lowercased() == device.deviceId.lowercased() else { return }
-            device.firmwareVersion = metadata.firmware; device.protocolVersion = metadata.protocolVersion
-            device.capabilities = metadata.capabilities; device.otaSchema = metadata.otaSchema
-            device.lastCapabilitiesUpdate = Date(); device.lastSeen = Date()
+            DeviceMerge.bluetooth(metadata, token: nil, into: device)
         }
         self.transport = transport; _updater = StateObject(wrappedValue: transport.firmwareUpdater)
     }

@@ -18,6 +18,7 @@
 #include "BLEOTA.h"
 #include "BLEDiagnostics.h"
 #include "OTAEngine.h"
+#include "KeyMap.h"
 
 RadioManager g_radio;
 
@@ -114,9 +115,33 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
       LOG_WARN("binary control rejected: %s", error.c_str());
       return;
     }
-    const std::string command = HIDProtocol::command(message);
-    if (!command.empty()) handleCommandLine(command, "ble-binary");
-    else if (message.type == HIDMessageType::Ping && s_bleTx) {
+    HIDEvent event;
+    bool isEvent = true;
+    switch (message.type) {
+      case HIDMessageType::MouseMove: event = HIDEvent::move(message.x, message.y); break;
+      case HIDMessageType::MouseScroll: event = HIDEvent::move(0, 0, message.wheel); break;
+      case HIDMessageType::MouseButtonDown: event.type = HIDEventType::ButtonDown; event.button = message.button; break;
+      case HIDMessageType::MouseButtonUp: event.type = HIDEventType::ButtonUp; event.button = message.button; break;
+      case HIDMessageType::MouseClick: event.type = HIDEventType::Click; event.button = message.button; break;
+      case HIDMessageType::KeyboardText:
+        event.type = HIDEventType::TypeText;
+        strncpy(event.text, message.text.c_str(), sizeof(event.text) - 1);
+        break;
+      case HIDMessageType::KeyboardKey:
+      case HIDMessageType::KeyboardCombo: {
+        const KeyCode key = KeyMap::lookup(message.text);
+        if (!key.found) { LOG_WARN("binary key rejected: unknown key"); return; }
+        event.type = HIDEventType::KeyboardReport; event.modifier = key.modifier; event.keycode = key.keycode;
+        break;
+      }
+      case HIDMessageType::KeyboardReport:
+        event.type = HIDEventType::KeyboardReport; event.modifier = message.modifier; event.keycode = message.keycode;
+        break;
+      case HIDMessageType::ReleaseAll: event = HIDEvent::releaseAll(); break;
+      case HIDMessageType::Ping: isEvent = false; break;
+    }
+    if (isEvent) enqueueHIDEvent(event, "ble-binary");
+    else if (s_bleTx) {
       const uint8_t pong[] = {HIDProtocol::Version, 0x7f};
       s_bleTx->setValue(pong, sizeof(pong));
       s_bleTx->notify();
@@ -135,7 +160,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_bleAuthed = false;
     g_bleOta.disconnected();
     g_bleDiagnostics.disconnected();
-    deviceReleaseAll();
+    requestReleaseAll("ble-disconnect");
     if (s_bleTearingDown) {
       LOG_BLE("central disconnected reason=%d during teardown", reason);
       return;
@@ -486,7 +511,7 @@ void RadioManager::loop() {
       }
     }
   } else {
-    if (s_tcpAuthed) deviceReleaseAll();
+    if (s_tcpAuthed) requestReleaseAll("tcp-disconnect");
     s_tcpAuthed = false;
   }
 }

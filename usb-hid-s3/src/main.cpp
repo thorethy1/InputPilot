@@ -29,6 +29,9 @@
 #include "BLEOTA.h"
 #include "OTAEngine.h"
 #include "FirmwareMetadata.h"
+#include "HIDEventQueue.h"
+#include <esp_system.h>
+#include <atomic>
 
 // Kept in the application image so both the device and clients can reject a
 // valid ESP32 image built for another product or board before activation.
@@ -54,6 +57,12 @@ static USBHID g_hid;  // standalone handle used only for ready() (global HID sta
 // ---------------------------------------------------------------------------
 static JiggleEngine g_jiggle(JIGGLE_MAX_DELTA, JIGGLE_INTERVAL_MS);
 static SemaphoreHandle_t g_hidMutex = nullptr;
+static SemaphoreHandle_t g_hidQueueMutex = nullptr;
+static TaskHandle_t g_hidExecutorTask = nullptr;
+static HIDEventQueue g_hidQueue;
+static std::atomic<uint32_t> g_hidEnqueueSequence{0};
+static std::atomic<uint32_t> g_hidProcessedSequence{0};
+static uint32_t g_lastMoveQueueLogMs = 0;
 
 static char g_cmdBuf[SERIAL_CMD_MAXLEN];
 static size_t g_cmdLen = 0;
@@ -133,7 +142,7 @@ static bool hidMouseButton(MouseBtn b, bool down) {
   return true;
 }
 
-void deviceReleaseAll() {
+static void executeReleaseAll() {
   if (!lockHid()) return;
   Mouse.release(MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE);
   Keyboard.releaseAll();
@@ -178,6 +187,98 @@ static bool hidReport(uint8_t modifier, uint8_t keycode) {
   kc.modifier = modifier;
   kc.keycode = keycode;
   return hidKey(kc);
+}
+
+static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *source,
+                                        uint32_t *queuedSequence) {
+  if (!g_hidQueueMutex) return false;
+  if (g_otaEngine.active() && input.type != HIDEventType::ReleaseAll) {
+    LOG_WARN("HID event blocked during OTA type=%u src=%s",
+             static_cast<unsigned>(input.type), source ? source : "?");
+    return false;
+  }
+  HIDEvent event = input;
+  event.sequence = g_hidEnqueueSequence.fetch_add(1) + 1;
+  if (xSemaphoreTake(g_hidQueueMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+    LOG_WARN("HID queue lock timeout src=%s", source ? source : "?");
+    return false;
+  }
+  const bool accepted = g_hidQueue.push(event);
+  const size_t depth = g_hidQueue.size();
+  xSemaphoreGive(g_hidQueueMutex);
+  if (!accepted) {
+    LOG_WARN("HID %s event queue failure type=%u depth=%u src=%s",
+             event.critical() ? "critical" : "queue overflow",
+             static_cast<unsigned>(event.type), static_cast<unsigned>(depth),
+             source ? source : "?");
+    if (event.type == HIDEventType::ButtonUp) requestReleaseAll("button-up-recovery");
+    return false;
+  }
+  if (queuedSequence) *queuedSequence = event.sequence;
+  if (event.type != HIDEventType::MouseMove || millis() - g_lastMoveQueueLogMs >= 1000) {
+    if (event.type == HIDEventType::MouseMove) g_lastMoveQueueLogMs = millis();
+    LOG_HID_DEBUG("queue enqueue type=%u depth=%u src=%s",
+                  static_cast<unsigned>(event.type), static_cast<unsigned>(depth),
+                  source ? source : "?");
+  }
+  if (g_hidExecutorTask) xTaskNotifyGive(g_hidExecutorTask);
+  return true;
+}
+
+bool enqueueHIDEvent(const HIDEvent &input, const char *source) {
+  return enqueueHIDEventWithSequence(input, source, nullptr);
+}
+
+void requestReleaseAll(const char *source) {
+  if (!enqueueHIDEvent(HIDEvent::releaseAll(), source))
+    LOG_ERROR("HID releaseAll queue failure src=%s", source ? source : "?");
+}
+
+bool requestReleaseAllAndWait(const char *source, uint32_t timeoutMs) {
+  uint32_t sequence = 0;
+  if (!enqueueHIDEventWithSequence(HIDEvent::releaseAll(), source, &sequence)) return false;
+  const uint32_t start = millis();
+  while (g_hidProcessedSequence.load() < sequence && millis() - start < timeoutMs) vTaskDelay(1);
+  if (g_hidProcessedSequence.load() < sequence) {
+    LOG_ERROR("HID executor timeout waiting releaseAll src=%s", source ? source : "?");
+    return false;
+  }
+  return true;
+}
+
+static bool popHIDEvent(HIDEvent &event) {
+  if (xSemaphoreTake(g_hidQueueMutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+  const bool available = g_hidQueue.pop(event);
+  xSemaphoreGive(g_hidQueueMutex);
+  return available;
+}
+
+static void hidExecutorTask(void *) {
+  g_hidExecutorTask = xTaskGetCurrentTaskHandle();
+  uint32_t lastMoveExecutionLogMs = 0;
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+    HIDEvent event;
+    while (popHIDEvent(event)) {
+      LOG_HID_DEBUG("executor event type=%u", static_cast<unsigned>(event.type));
+      switch (event.type) {
+        case HIDEventType::MouseMove:
+          if (hidMouseMove(event.dx, event.dy, event.wheel) && millis() - lastMoveExecutionLogMs >= 500) {
+            lastMoveExecutionLogMs = millis();
+            LOG_HID_DEBUG("move ok dx=%ld dy=%ld wheel=%ld", static_cast<long>(event.dx),
+                          static_cast<long>(event.dy), static_cast<long>(event.wheel));
+          }
+          break;
+        case HIDEventType::Click: hidClick(static_cast<MouseBtn>(event.button)); break;
+        case HIDEventType::ButtonDown: hidMouseButton(static_cast<MouseBtn>(event.button), true); break;
+        case HIDEventType::ButtonUp: hidMouseButton(static_cast<MouseBtn>(event.button), false); break;
+        case HIDEventType::TypeText: hidType(event.text); break;
+        case HIDEventType::KeyboardReport: hidReport(event.modifier, event.keycode); break;
+        case HIDEventType::ReleaseAll: executeReleaseAll(); break;
+      }
+      g_hidProcessedSequence.store(event.sequence);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,25 +329,24 @@ void handleCommandLine(const std::string &line, const char *source) {
       break;
     case CmdType::Move:
       LOG_CMD("move dx=%d dy=%d wheel=%d", c.dx, c.dy, c.wheel);
-      if (hidMouseMove(c.dx, c.dy, c.wheel))
-        LOG_HID("move ok dx=%d dy=%d wheel=%d", c.dx, c.dy, c.wheel);
+      enqueueHIDEvent(HIDEvent::move(c.dx, c.dy, c.wheel), source);
       break;
     case CmdType::Click:
       LOG_CMD("click %d", (int)c.button);
-      if (hidClick(c.button)) LOG_HID("click ok");
+      { HIDEvent e; e.type = HIDEventType::Click; e.button = static_cast<uint8_t>(c.button); enqueueHIDEvent(e, source); }
       break;
     case CmdType::ButtonDown:
     case CmdType::ButtonUp:
-      if (hidMouseButton(c.button, c.type == CmdType::ButtonDown))
-        LOG_HID("button %d %s", (int)c.button,
-                c.type == CmdType::ButtonDown ? "down" : "up");
+      { HIDEvent e; e.type = c.type == CmdType::ButtonDown ? HIDEventType::ButtonDown : HIDEventType::ButtonUp;
+        e.button = static_cast<uint8_t>(c.button); enqueueHIDEvent(e, source); }
       break;
     case CmdType::ReleaseAll:
-      deviceReleaseAll();
+      requestReleaseAll(source);
       break;
     case CmdType::Type:
       LOG_CMD("type len=%u", (unsigned)c.text.size());
-      if (hidType(c.text)) LOG_HID("type ok len=%u", (unsigned)c.text.size());
+      { HIDEvent e; e.type = HIDEventType::TypeText;
+        strncpy(e.text, c.text.c_str(), sizeof(e.text) - 1); enqueueHIDEvent(e, source); }
       break;
     case CmdType::Key: {
       KeyCode kc = KeyMap::lookup(c.text);
@@ -255,12 +355,14 @@ void handleCommandLine(const std::string &line, const char *source) {
         break;
       }
       LOG_CMD("key %s mod=0x%02x kc=0x%02x", c.text.c_str(), kc.modifier, kc.keycode);
-      if (hidKey(kc)) LOG_HID("key ok %s", c.text.c_str());
+      { HIDEvent e; e.type = HIDEventType::KeyboardReport; e.modifier = kc.modifier;
+        e.keycode = kc.keycode; enqueueHIDEvent(e, source); }
       break;
     }
     case CmdType::KeyboardReport:
       LOG_CMD("report mod=0x%02x kc=0x%02x", c.modifier, c.keycode);
-      if (hidReport((uint8_t)c.modifier, (uint8_t)c.keycode)) LOG_HID("report ok");
+      { HIDEvent e; e.type = HIDEventType::KeyboardReport; e.modifier = c.modifier;
+        e.keycode = c.keycode; enqueueHIDEvent(e, source); }
       break;
     case CmdType::JiggleOn:
       g_jiggle.setEnabled(true);
@@ -348,7 +450,7 @@ static void jiggleTask(void *) {
   for (;;) {
     int dx = 0, dy = 0;
     if (g_jiggle.update(millis(), dx, dy)) {
-      if (hidMouseMove(dx, dy, 0)) LOG_JIG("auto dx=%d dy=%d", dx, dy);
+      if (enqueueHIDEvent(HIDEvent::move(dx, dy), "jiggle")) LOG_JIG("auto dx=%d dy=%d", dx, dy);
     }
     vTaskDelay(pdMS_TO_TICKS(50));
   }
@@ -367,9 +469,25 @@ static void printBanner() {
   LOG_INFO("boot-ok");
 }
 
+static const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "POWERON";
+    case ESP_RST_SW: return "SW_RESET";
+    case ESP_RST_PANIC: return "PANIC";
+    case ESP_RST_INT_WDT: return "INT_WDT";
+    case ESP_RST_TASK_WDT: return "TASK_WDT";
+    case ESP_RST_WDT: return "WDT";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_EXT: return "EXTERNAL";
+    default: return "UNKNOWN";
+  }
+}
+
 // ---------------------------------------------------------------------------
 void setup() {
   g_hidMutex = xSemaphoreCreateMutex();
+  g_hidQueueMutex = xSemaphoreCreateMutex();
   DeviceIdentity::begin();
 
   // Full USB bring-up, in order, BEFORE the single USB.begin():
@@ -391,6 +509,8 @@ void setup() {
   while (!UsbSerial && (millis() - start) < 2000) delay(10);
   delay(200);
 
+  LOG_INFO("reset_reason=%s code=%d", resetReasonName(esp_reset_reason()),
+           static_cast<int>(esp_reset_reason()));
   printBanner();
 
   g_statusLed.begin();
@@ -399,6 +519,7 @@ void setup() {
   g_jiggle.setEnabled(true);
 #endif
 
+  xTaskCreatePinnedToCore(hidExecutorTask, "hid-executor", 4096, nullptr, 3, nullptr, 0);
   xTaskCreatePinnedToCore(jiggleTask, "jiggle", 4096, nullptr, 1, nullptr, 0);
 
   // NVS WiFi creds (seed from compile-time WIFI_SSID on first boot).

@@ -72,8 +72,16 @@ void BLEDiagnostics::loop(bool otaActive) {
   if (!count) return;
   lastNotifyMs_ = millis();
   for (size_t i = 0; i < count; ++i) {
-    log_->setValue(reinterpret_cast<const uint8_t *>(entries[i].line),
-                   strlen(entries[i].line));
+    char frame[224];
+    snprintf(frame, sizeof(frame), "{\"sequence\":%lu,\"line\":\"",
+             static_cast<unsigned long>(entries[i].sequence));
+    std::string json(frame);
+    for (const char *p = entries[i].line; *p; ++p) {
+      if (*p == '"' || *p == '\\') json += '\\';
+      if (*p == '\n') json += "\\n"; else if (*p != '\r') json += *p;
+    }
+    json += "\"}";
+    log_->setValue(reinterpret_cast<const uint8_t *>(json.data()), json.size());
     if (!log_->notify()) break;
     cursor_ = entries[i].sequence;
   }

@@ -16,6 +16,7 @@ final class StoredDevice {
     var otaSchema: Int = 0
     var runningPartition: String?
     var bootPartition: String?
+    var bluetoothDiscovered: Bool = false
     var lastCapabilitiesUpdate: Date?
 
     init(
@@ -30,7 +31,8 @@ final class StoredDevice {
         protocolVersion: Int = 0,
         capabilities: [String] = [],
         lastCapabilitiesUpdate: Date? = nil,
-        otaSchema: Int = 0
+        otaSchema: Int = 0,
+        bluetoothDiscovered: Bool = false
     ) {
         self.deviceId = deviceId
         self.displayName = displayName
@@ -46,6 +48,7 @@ final class StoredDevice {
         self.otaSchema = otaSchema
         self.runningPartition = nil
         self.bootPartition = nil
+        self.bluetoothDiscovered = bluetoothDiscovered
     }
 
     convenience init(device: Device) {
@@ -91,20 +94,52 @@ enum DeviceStore {
         descriptor.fetchLimit = 1
 
         if let existing = try context.fetch(descriptor).first {
-            existing.displayName = device.displayName
-            existing.mdnsHost = device.mdnsHost
-            existing.staIP = device.staIP
-            existing.apiToken = device.apiToken
+            if !device.mdnsHost.isEmpty { existing.mdnsHost = device.mdnsHost }
+            if let staIP = device.staIP { existing.staIP = staIP }
+            if let apiToken = device.apiToken { existing.apiToken = apiToken }
             existing.jiggleEnabled = device.jiggleEnabled
             existing.lastSeen = device.lastSeen
             existing.firmwareVersion = device.firmwareVersion
             existing.protocolVersion = device.protocolVersion
-            existing.capabilities = device.capabilities
+            existing.capabilities = Array(Set(existing.capabilities).union(device.capabilities)).sorted()
             existing.otaSchema = device.otaSchema
             existing.lastCapabilitiesUpdate = device.capabilities.isEmpty ? existing.lastCapabilitiesUpdate : Date()
         } else {
             context.insert(StoredDevice(device: device))
         }
         try context.save()
+    }
+}
+
+enum DeviceMerge {
+    static func wifi(_ status: DeviceStatus, fallbackHost: String, token: String?, into stored: StoredDevice) {
+        if let discoveredId = status.deviceId,
+           stored.deviceId.caseInsensitiveCompare(discoveredId) != .orderedSame { return }
+        if let mdns = status.mdns?.trimmingCharacters(in: .whitespacesAndNewlines), !mdns.isEmpty {
+            stored.mdnsHost = mdns
+        } else if stored.mdnsHost.isEmpty {
+            stored.mdnsHost = fallbackHost
+        }
+        if let ip = status.staIp?.trimmingCharacters(in: .whitespacesAndNewlines), !ip.isEmpty { stored.staIP = ip }
+        if let token, !token.isEmpty { stored.apiToken = token }
+        stored.jiggleEnabled = status.jiggle
+        stored.lastSeen = Date()
+        stored.firmwareVersion = status.version
+        stored.protocolVersion = status.protocolVersion
+        stored.otaSchema = status.otaSchema
+        stored.capabilities = Array(Set(stored.capabilities).union(status.capabilities)).sorted()
+        stored.lastCapabilitiesUpdate = Date()
+    }
+
+    static func bluetooth(_ metadata: BLEDeviceMetadata, token: String?, into stored: StoredDevice) {
+        guard stored.deviceId.caseInsensitiveCompare(metadata.deviceId) == .orderedSame else { return }
+        if let token, !token.isEmpty { stored.apiToken = token }
+        stored.lastSeen = Date()
+        stored.firmwareVersion = metadata.firmware
+        stored.protocolVersion = metadata.protocolVersion
+        stored.otaSchema = metadata.otaSchema
+        stored.capabilities = Array(Set(stored.capabilities).union(metadata.capabilities)).sorted()
+        stored.lastCapabilitiesUpdate = Date()
+        stored.bluetoothDiscovered = true
     }
 }

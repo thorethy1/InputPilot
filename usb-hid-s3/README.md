@@ -55,6 +55,11 @@ With creds, STA joins and exposes:
   `POST /api/move|type|key|click`, plus `/api/wifi`
 - **TCP line control** on `:3333` (same grammar as serial)
 
+BLE, TCP, REST, serial, jiggle, disconnect, and OTA safety paths enqueue into a
+fixed 32-entry HID event queue. A dedicated executor task is the only runtime
+context that calls the USB mouse/keyboard report APIs; adjacent mouse moves are
+coalesced and six queue slots are reserved for release-critical events.
+
 On STA the device also advertises **mDNS** as `hid-helper-xxxx.local` (lowercase
 suffix; HTTP service on port 80 with TXT `path`, `id`, `fw`), so apps can
 discover it without a hard-coded IP. `GET /api/status` returns `mdns` and

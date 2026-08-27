@@ -3,12 +3,15 @@
 
 #include <stdint.h>
 #include <string>
+#include "../lib/HIDExecutor/HIDEventQueue.h"
 
 // Single entry point for a command line, regardless of transport
 // (USB-CDC serial, BLE NUS, WiFi TCP, or HTTP REST). Defined in main.cpp.
 // `source` is a short tag for logs, e.g. "serial", "ble", "wifi", "http".
 void handleCommandLine(const std::string &line, const char *source);
-void deviceReleaseAll();
+bool enqueueHIDEvent(const HIDEvent &event, const char *source);
+void requestReleaseAll(const char *source);
+bool requestReleaseAllAndWait(const char *source, uint32_t timeoutMs);
 
 // Status hooks for HTTP GET endpoints (implemented in main.cpp).
 bool deviceJiggleEnabled();

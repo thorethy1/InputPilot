@@ -74,8 +74,8 @@ final class SavedDeviceIndexTests: XCTestCase {
 }
 
 @MainActor
-final class DeviceRepositoryDuplicateTests: XCTestCase {
-    func testProbeByAddressThrowsAlreadyExists() async throws {
+final class DeviceRepositoryMergeTests: XCTestCase {
+    func testProbeByAddressReturnsKnownDeviceForConnectionUpdate() async throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: StoredDevice.self, configurations: config)
         let context = ModelContext(container)
@@ -105,18 +105,11 @@ final class DeviceRepositoryDuplicateTests: XCTestCase {
         )
 
         let repository = DeviceRepository(context: context)
-        do {
-            _ = try await repository.probeByAddress(host: "192.168.2.50", token: nil, api: mockAPI)
-            XCTFail("Expected alreadyExists")
-        } catch let error as DeviceRepositoryError {
-            guard case let .alreadyExists(name) = error else {
-                return XCTFail("Unexpected error \(error)")
-            }
-            XCTAssertEqual(name, "Already Here")
-        }
+        let probed = try await repository.probeByAddress(host: "192.168.2.50", token: nil, api: mockAPI)
+        XCTAssertEqual(probed.status.deviceId, "dup-id")
     }
 
-    func testAddFromDiscoveryThrowsAlreadyExists() async throws {
+    func testBLEFirstThenWiFiDiscoveryMergesWithoutDuplicate() async throws {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: StoredDevice.self, configurations: config)
         let context = ModelContext(container)
@@ -124,7 +117,10 @@ final class DeviceRepositoryDuplicateTests: XCTestCase {
             StoredDevice(
                 deviceId: "save-dup",
                 displayName: "Saved",
-                mdnsHost: "hid-helper-save.local"
+                mdnsHost: "",
+                apiToken: "keep-token",
+                capabilities: ["ble_control"],
+                bluetoothDiscovered: true
             )
         )
         try context.save()
@@ -136,22 +132,42 @@ final class DeviceRepositoryDuplicateTests: XCTestCase {
             deviceId: "save-dup",
             jiggle: false,
             jiggleIntervalMs: 10000,
-            mdns: "hid-helper-save.local"
+            staIp: "192.168.2.88",
+            mdns: "hid-helper-save.local",
+            protocolVersion: 1,
+            capabilities: ["wifi_control", "wifi_diagnostics"],
+            otaSchema: 1
         )
         let repository = DeviceRepository(context: context)
-        do {
-            _ = try await repository.addFromDiscovery(
-                status: status,
-                fallbackHost: "hid-helper-save.local",
-                displayName: "New Name",
-                token: nil,
-                api: MockAPIClient()
-            )
-            XCTFail("Expected alreadyExists")
-        } catch let error as DeviceRepositoryError {
-            guard case .alreadyExists = error else {
-                return XCTFail("Unexpected error \(error)")
-            }
-        }
+        let merged = try await repository.addFromDiscovery(status: status,
+            fallbackHost: "hid-helper-save.local", displayName: "New Name", token: nil, api: MockAPIClient())
+        XCTAssertEqual(merged.displayName, "Saved")
+        XCTAssertEqual(merged.mdnsHost, "hid-helper-save.local")
+        XCTAssertEqual(merged.staIP, "192.168.2.88")
+        XCTAssertEqual(merged.apiToken, "keep-token")
+        XCTAssertTrue(merged.capabilities.contains("ble_control"))
+        XCTAssertTrue(merged.capabilities.contains("wifi_control"))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoredDevice>()).count, 1)
+    }
+
+    func testWiFiFirstThenBLEMergePreservesExistingFields() throws {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: StoredDevice.self, configurations: config)
+        let context = ModelContext(container)
+        let existing = StoredDevice(deviceId: "same-id", displayName: "Friendly", mdnsHost: "hid-helper.local",
+            staIP: "10.0.0.8", apiToken: "secret", capabilities: ["wifi_control"])
+        context.insert(existing); try context.save()
+        let metadata = BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "same-id",
+            deviceName: "usb-hid-s3", firmware: "0.8.0", protocolVersion: 1, otaSchema: 1,
+            capabilities: ["ble_control"], authRequired: false)
+        let merged = try DeviceRepository(context: context).addOrMergeBluetooth(metadata: metadata,
+            displayName: "Replacement", token: nil)
+        XCTAssertEqual(merged.displayName, "Friendly")
+        XCTAssertEqual(merged.mdnsHost, "hid-helper.local")
+        XCTAssertEqual(merged.staIP, "10.0.0.8")
+        XCTAssertEqual(merged.apiToken, "secret")
+        XCTAssertTrue(merged.bluetoothDiscovered)
+        XCTAssertEqual(Set(merged.capabilities), Set(["wifi_control", "ble_control"]))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<StoredDevice>()).count, 1)
     }
 }

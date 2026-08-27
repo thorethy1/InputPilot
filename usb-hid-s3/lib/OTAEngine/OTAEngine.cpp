@@ -38,7 +38,8 @@ bool OTAEngine::start(const OTAStartRequest &request, OTATransportOwner owner) {
   if (!OTAEngineValidation::start(false, request, partition_->size, validationError)) return fail(validationError.c_str());
 
   request_ = request; received_ = 0; error_.clear(); owner_ = owner;
-  state_ = OTAState::Preparing; deviceReleaseAll();
+  state_ = OTAState::Preparing;
+  if (!requestReleaseAllAndWait("ota-start", 500)) return fail("hid_release_timeout");
   if (esp_ota_begin(partition_, request.size, &handle_) != ESP_OK) {
     handle_ = 0; return fail("begin_failed");
   }
@@ -95,21 +96,21 @@ bool OTAEngine::finish() {
   handle_ = 0; state_ = OTAState::Installing;
   if (esp_ota_set_boot_partition(partition_) != ESP_OK) return fail("boot_partition_failed");
   state_ = OTAState::Complete; LOG_OTA("boot partition set target=%s", partition_->label);
-  deviceReleaseAll();
+  requestReleaseAll("ota-finish");
   return true;
 }
 
 bool OTAEngine::fail(const char *error) {
   error_ = error ? error : "ota_failed";
   LOG_OTA_WARN("failed: %s", error_.c_str());
-  releaseResources(); state_ = OTAState::Failed; deviceReleaseAll();
+  releaseResources(); state_ = OTAState::Failed; requestReleaseAll("ota-failure");
   return false;
 }
 
 void OTAEngine::abort(const char *reason, bool cancelled) {
   error_ = reason ? reason : "cancelled";
   releaseResources(); state_ = cancelled ? OTAState::Cancelled : OTAState::Failed;
-  deviceReleaseAll(); LOG_OTA_WARN("%s", error_.c_str());
+  requestReleaseAll("ota-abort"); LOG_OTA_WARN("%s", error_.c_str());
 }
 
 void OTAEngine::releaseResources() {

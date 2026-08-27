@@ -439,7 +439,33 @@ struct FirmwareLogHistory {
     mutating func clear() { lines.removeAll(keepingCapacity: true) }
 }
 
-private struct FirmwareLogsResponse: Decodable { let lines: [String] }
+struct FirmwareLogRecord: Codable, Equatable {
+    let sequence: UInt32
+    let line: String
+}
+
+struct FirmwareLogSequenceHistory {
+    static let capacity = 500
+    private(set) var records: [FirmwareLogRecord] = []
+    private var identities = Set<String>()
+    mutating func append(_ incoming: [FirmwareLogRecord]) -> [String] {
+        var added: [String] = []
+        for record in incoming {
+            let identity = "\(record.sequence):\(record.line)"
+            guard identities.insert(identity).inserted else { continue }
+            records.append(record); added.append(record.line)
+        }
+        if records.count > Self.capacity {
+            let removed = records.prefix(records.count - Self.capacity)
+            for record in removed { identities.remove("\(record.sequence):\(record.line)") }
+            records.removeFirst(records.count - Self.capacity)
+        }
+        return added
+    }
+    mutating func clear() { records.removeAll(keepingCapacity: true); identities.removeAll(keepingCapacity: true) }
+}
+
+private struct FirmwareLogsResponse: Decodable { let entries: [FirmwareLogRecord] }
 
 @MainActor final class FirmwareDiagnosticsManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var lines: [FirmwareLogLine] = []
@@ -448,7 +474,7 @@ private struct FirmwareLogsResponse: Decodable { let lines: [String] }
     @Published var paused = false
     private let deviceId: String; private let mdnsHost: String; private let staIP: String?; private let token: String?
     private let mode: ConnectionMode; private let deviceCapabilities: Set<String>
-    private var history = FirmwareLogHistory(); private var pending: [String] = []
+    private var history = FirmwareLogHistory(); private var sequenceHistory = FirmwareLogSequenceHistory(); private var pending: [FirmwareLogRecord] = []
     private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var logCharacteristic: CBCharacteristic?
     private var fallbackTask: Task<Void, Never>?; private var pollTask: Task<Void, Never>?
     private var bluetoothScanEnabled = false
@@ -472,8 +498,8 @@ private struct FirmwareLogsResponse: Decodable { let lines: [String] }
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
         self.peripheral = nil; logCharacteristic = nil
     }
-    func clear() { history.clear(); pending.removeAll(); lines = [] }
-    func setPaused(_ value: Bool) { paused = value; if !value, !pending.isEmpty { history.append(pending); pending.removeAll(); lines = history.lines } }
+    func clear() { history.clear(); sequenceHistory.clear(); pending.removeAll(); lines = [] }
+    func setPaused(_ value: Bool) { paused = value; if !value, !pending.isEmpty { history.append(sequenceHistory.append(pending)); pending.removeAll(); lines = history.lines } }
     func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn, allowsBluetooth, bluetoothScanEnabled { scan() } else if central.state != .poweredOn && mode == .bluetoothOnly { status = "Bluetooth unavailable" } }
     private func scan() {
         guard !central.isScanning, peripheral == nil else { return }
@@ -501,9 +527,9 @@ private struct FirmwareLogsResponse: Decodable { let lines: [String] }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard error == nil, let data = characteristic.value else { return }
         if characteristic.uuid == info { metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: data) }
-        else if characteristic.uuid == log, let line = String(data: data, encoding: .utf8), line.hasPrefix("[") { receive([line]) }
+        else if characteristic.uuid == log, let record = try? JSONDecoder().decode(FirmwareLogRecord.self, from: data) { receive([record]) }
     }
-    private func receive(_ incoming: [String]) { if paused { pending.append(contentsOf: incoming); if pending.count > FirmwareLogHistory.capacity { pending.removeFirst(pending.count - FirmwareLogHistory.capacity) } } else { history.append(incoming); lines = history.lines } }
+    private func receive(_ incoming: [FirmwareLogRecord]) { if paused { pending.append(contentsOf: incoming); if pending.count > FirmwareLogSequenceHistory.capacity { pending.removeFirst(pending.count - FirmwareLogSequenceHistory.capacity) } } else { history.append(sequenceHistory.append(incoming)); lines = history.lines } }
     private func scheduleReconnectAndFallback() {
         if central.state == .poweredOn, allowsBluetooth { scan() }
         fallbackTask?.cancel(); fallbackTask = Task { [weak self] in try? await Task.sleep(for: .seconds(6)); guard !Task.isCancelled else { return }; await self?.startRESTFallback() }
@@ -518,7 +544,7 @@ private struct FirmwareLogsResponse: Decodable { let lines: [String] }
                 guard let self else { return }
                 var loaded = false
                 for base in endpoints where !loaded {
-                    do { var request = URLRequest(url: base.appendingPathComponent("api/logs")); if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }; let (data, response) = try await URLSession.shared.data(for: request); guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }; let decoded = try JSONDecoder().decode(FirmwareLogsResponse.self, from: data); self.replaceREST(decoded.lines); var infoRequest = URLRequest(url: base.appendingPathComponent("api/diagnostics")); if let token, !token.isEmpty { infoRequest.setValue(token, forHTTPHeaderField: "X-API-Token") }; if let (infoData, _) = try? await URLSession.shared.data(for: infoRequest) { self.metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: infoData) }; loaded = true; self.status = "Live via Wi-Fi" } catch { continue }
+                    do { var request = URLRequest(url: base.appendingPathComponent("api/logs")); if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }; let (data, response) = try await URLSession.shared.data(for: request); guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }; let decoded = try JSONDecoder().decode(FirmwareLogsResponse.self, from: data); self.receive(decoded.entries); var infoRequest = URLRequest(url: base.appendingPathComponent("api/diagnostics")); if let token, !token.isEmpty { infoRequest.setValue(token, forHTTPHeaderField: "X-API-Token") }; if let (infoData, _) = try? await URLSession.shared.data(for: infoRequest) { self.metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: infoData) }; loaded = true; self.status = "Live via Wi-Fi" } catch { continue }
                 }
                 if !loaded {
                     self.status = "Diagnostics unavailable"
@@ -531,7 +557,6 @@ private struct FirmwareLogsResponse: Decodable { let lines: [String] }
             }
         }
     }
-    private func replaceREST(_ raw: [String]) { guard !paused else { return }; history.clear(); history.append(raw); lines = history.lines }
 }
 
 enum FirmwareManifestValidator {
@@ -947,9 +972,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken)
         bluetooth.metadataHandler = { [weak device] metadata in
             guard let device, metadata.deviceId.lowercased() == device.deviceId.lowercased() else { return }
-            device.firmwareVersion = metadata.firmware; device.protocolVersion = metadata.protocolVersion
-            device.capabilities = metadata.capabilities; device.otaSchema = metadata.otaSchema
-            device.lastCapabilitiesUpdate = Date(); device.lastSeen = Date()
+            DeviceMerge.bluetooth(metadata, token: nil, into: device)
         }
         ble = bluetooth
         if host.isEmpty { tcp = UnavailableHIDControlTransport(kind: .tcp); rest = UnavailableHIDControlTransport(kind: .rest) }

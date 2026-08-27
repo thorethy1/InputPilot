@@ -94,9 +94,11 @@ def test_http_status(base_url):
 def test_http_logs_are_bounded_and_formatted(base_url):
     code, body = _http("GET", f"{base_url}/api/logs")
     assert code == 200
-    lines = body.get("lines")
-    assert isinstance(lines, list) and len(lines) <= 64
-    assert all(re.match(r"^\[\d+\]\[(DEBUG|INFO|WARN|ERROR)\]\[[A-Z]+\] ", line) for line in lines)
+    entries = body.get("entries")
+    assert isinstance(entries, list) and len(entries) <= 64
+    assert all(isinstance(entry.get("sequence"), int) and re.match(
+        r"^\[\d+\]\[(DEBUG|INFO|WARN|ERROR)\]\[[A-Z]+\] ", entry.get("line", "")
+    ) for entry in entries)
     assert "latestSequence" in body
 
 

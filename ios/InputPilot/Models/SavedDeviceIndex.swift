@@ -6,6 +6,7 @@ struct SavedDeviceIndex: Equatable, Sendable {
         let deviceId: String
         let displayName: String
         let hosts: Set<String>
+        let hasBluetooth: Bool
     }
 
     private let byId: [String: Entry]
@@ -22,7 +23,7 @@ struct SavedDeviceIndex: Equatable, Sendable {
                 let ip = DeviceEndpointResolver.sanitizeHost(staIP).lowercased()
                 if !ip.isEmpty { hosts.insert(ip) }
             }
-            return Entry(deviceId: device.deviceId, displayName: device.displayName, hosts: hosts)
+            return Entry(deviceId: device.deviceId, displayName: device.displayName, hosts: hosts, hasBluetooth: device.bluetoothDiscovered)
         })
     }
 

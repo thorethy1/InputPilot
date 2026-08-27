@@ -108,17 +108,22 @@ paths:
       operationId: getLogs
       responses:
         "200":
-          description: At most 64 formatted lines; history is cleared on reboot
+          description: At most 64 sequence-tagged lines; history is cleared on reboot
           content:
             application/json:
               schema:
                 type: object
-                required: [lines, latestSequence]
+                required: [entries, latestSequence]
                 properties:
-                  lines:
+                  entries:
                     type: array
                     maxItems: 64
-                    items: { type: string }
+                    items:
+                      type: object
+                      required: [sequence, line]
+                      properties:
+                        sequence: { type: integer, format: int64 }
+                        line: { type: string }
                   latestSequence: { type: integer, format: int64 }
     options:
       tags: [status]

@@ -220,6 +220,31 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
         XCTAssertFalse(mockBrowser.isBrowsing)
     }
 
+    func testKnownWiFiDeviceCanAddBluetoothMetadata() {
+        let known = StoredDevice(deviceId: "abcd1234efgh", displayName: "Desk", mdnsHost: "hid-helper.local",
+            staIP: "192.168.2.10", capabilities: ["wifi_control"], bluetoothDiscovered: false)
+        viewModel.updateKnownDevices([known])
+        let metadata = BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb",
+            deviceId: "abcd1234efgh", deviceName: "usb-hid-s3", firmware: "0.8.0",
+            protocolVersion: 1, otaSchema: 1, capabilities: ["ble_control"], authRequired: false)
+        viewModel.selectBluetooth(metadata)
+        XCTAssertEqual(viewModel.step, .confirmBLE(metadata))
+        XCTAssertEqual(viewModel.displayName, "Desk")
+        XCTAssertEqual(viewModel.mergeMessage, "Bluetooth will be added to this existing InputPilot.")
+    }
+
+    func testKnownBluetoothDeviceRejectsSameBluetoothTransport() {
+        let known = StoredDevice(deviceId: "abcd1234efgh", displayName: "Desk", mdnsHost: "",
+            bluetoothDiscovered: true)
+        viewModel.updateKnownDevices([known])
+        let metadata = BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb",
+            deviceId: "abcd1234efgh", deviceName: "usb-hid-s3", firmware: "0.8.0",
+            protocolVersion: 1, otaSchema: 1, capabilities: ["ble_control"], authRequired: false)
+        viewModel.selectBluetooth(metadata)
+        XCTAssertEqual(viewModel.step, .choosePath)
+        XCTAssertEqual(viewModel.errorMessage, "This device is already configured for Bluetooth.")
+    }
+
     func testChooseBluetoothAndSaveBLEOnlyDevice() async throws {
         let metadata = BLEDeviceMetadata(
             product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "aabbccddeeff",

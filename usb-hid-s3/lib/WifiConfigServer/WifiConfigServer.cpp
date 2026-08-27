@@ -340,7 +340,7 @@ void WifiConfigServer::handleGetStatus() {
 void WifiConfigServer::handleGetLogs() {
   if (!requireApiAuth()) return;
   handleCors();
-  String json = "{\"lines\":[";
+  String json = "{\"entries\":[";
   bool first = true;
   uint32_t cursor = 0;
   FirmwareLogEntry entries[4];
@@ -350,9 +350,11 @@ void WifiConfigServer::handleGetLogs() {
     for (size_t i = 0; i < count; ++i) {
       if (!first) json += ',';
       first = false;
-      json += '"';
+      json += "{\"sequence\":";
+      json += String(entries[i].sequence);
+      json += ",\"line\":\"";
       json += jsonEscape(String(entries[i].line));
-      json += '"';
+      json += "\"}";
       cursor = entries[i].sequence;
     }
   }

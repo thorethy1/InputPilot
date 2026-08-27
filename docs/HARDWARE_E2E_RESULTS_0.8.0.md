@@ -63,6 +63,21 @@ Use `PASS`, `FAIL`, or `NOT RUN`, and attach concise evidence or observations.
 | Concurrent OTA attempt rejected | NOT RUN | |
 | Wi-Fi OTA abort/recovery | NOT RUN | |
 | BLE OTA abort/recovery | NOT RUN | |
+| BLE connected idle for 30 s without reboot | NOT RUN | |
+| BLE single mouse move without reboot | NOT RUN | |
+| BLE continuous mouse movement for 30 s | NOT RUN | |
+| BLE left/right/middle click | NOT RUN | |
+| BLE keyboard typing and key combinations | NOT RUN | |
+| BLE drag and release without stuck button | NOT RUN | |
+| BLE disconnect while button held queues releaseAll | NOT RUN | |
+| Wi-Fi control after BLE control | NOT RUN | |
+| BLE control after Wi-Fi control | NOT RUN | |
+| Rapid alternating Wi-Fi/BLE control without reboot | NOT RUN | |
+| Boot reset reason is visible and plausible | NOT RUN | |
+| Wi-Fi-first then BLE produces one merged device | NOT RUN | |
+| BLE-first then Wi-Fi produces one merged device | NOT RUN | |
+| Existing transport rediscovery creates no duplicate | NOT RUN | |
+| Diagnostics history/live sequences have no duplicates | NOT RUN | |
 | BLE-only onboarding | NOT RUN | |
 | BLE auth success | NOT RUN | |
 | BLE auth failure | NOT RUN | |

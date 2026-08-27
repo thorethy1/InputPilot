@@ -152,7 +152,10 @@ struct AddDeviceWizardView: View {
 
     private var bluetoothScanningStep: some View {
         Group {
-            let candidates = bluetooth.devices.filter { viewModel.knownDevices.match(deviceId: $0.deviceId) == nil }
+            let candidates = bluetooth.devices.filter { device in
+                guard let existing = viewModel.knownDevices.match(deviceId: device.deviceId) else { return true }
+                return !existing.hasBluetooth
+            }
             if candidates.isEmpty {
                 ContentUnavailableView("Scanning…", systemImage: "antenna.radiowaves.left.and.right", description: Text("Looking for nearby InputPilot devices."))
             } else {
@@ -414,23 +417,23 @@ struct AddDeviceWizardView: View {
     @ViewBuilder
     private var confirmStep: some View {
         if let probed = viewModel.probedDevice {
-            ConfirmDeviceForm(
-                probed: probed,
-                displayName: $viewModel.displayName,
-                apiToken: $viewModel.apiToken,
-                showsAuthTokenField: viewModel.showsAuthTokenField
-            )
+            VStack(spacing: 0) {
+                if let message = viewModel.mergeMessage { Label(message, systemImage: "link.badge.plus").padding() }
+                ConfirmDeviceForm(probed: probed, displayName: $viewModel.displayName,
+                    apiToken: $viewModel.apiToken, showsAuthTokenField: viewModel.showsAuthTokenField)
+            }
         }
     }
 
     @ViewBuilder private var confirmBLEStep: some View {
         if let metadata = viewModel.bleMetadata {
             Form {
+                if let message = viewModel.mergeMessage { Section { Label(message, systemImage: "link.badge.plus") } }
                 Section("Device") {
                     LabeledContent("Name", value: metadata.deviceName)
                     LabeledContent("Version", value: metadata.firmware)
                     LabeledContent("Device ID", value: metadata.deviceId)
-                    LabeledContent("Connection", value: "Bluetooth only")
+                    LabeledContent("Connection", value: viewModel.mergeMessage == nil ? "Bluetooth" : "Bluetooth + existing connections")
                 }
                 Section("Friendly name") { TextField("Name", text: $viewModel.displayName) }
                 if metadata.authRequired {

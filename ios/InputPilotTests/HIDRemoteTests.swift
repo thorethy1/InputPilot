@@ -73,6 +73,16 @@ final class HIDRemoteTests: XCTestCase {
         history.clear(); XCTAssertTrue(history.lines.isEmpty)
     }
 
+    func testDiagnosticsSequenceHistoryDeduplicatesHistoryAndLiveFrames() {
+        var history = FirmwareLogSequenceHistory()
+        let boot = FirmwareLogRecord(sequence: 12, line: "[100][INFO][APP] boot")
+        XCTAssertEqual(history.append([boot]), [boot.line])
+        XCTAssertTrue(history.append([boot]).isEmpty)
+        let live = FirmwareLogRecord(sequence: 13, line: "[200][INFO][BLE] connected")
+        XCTAssertEqual(history.append([boot, live]), [live.line])
+        XCTAssertEqual(history.records, [boot, live])
+    }
+
     func testDiagnosticsMetadataAndStoredFirmwareFallback() throws {
         let metadata = try JSONDecoder().decode(DiagnosticsMetadata.self, from: Data(#"{"product":"InputPilot","firmware":"0.8.0","board":"esp32-s3-zero-4mb","protocol":1,"otaSchema":1,"deviceId":"aabbccddeeff","runningPartition":"ota_1","bootPartition":"ota_1"}"#.utf8))
         XCTAssertEqual(metadata.firmware, "0.8.0"); XCTAssertEqual(metadata.protocolVersion, 1); XCTAssertEqual(metadata.otaSchema, 1)
