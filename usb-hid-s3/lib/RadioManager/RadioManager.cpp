@@ -112,9 +112,11 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
     std::string error;
     if (!HIDProtocol::decode(reinterpret_cast<const uint8_t *>(value.data()),
                              value.size(), message, error)) {
+      recordHIDDecodeError("ble-binary", value.size());
       LOG_WARN("binary control rejected: %s", error.c_str());
       return;
     }
+    recordHIDBleFrame(static_cast<uint8_t>(message.type), value.size());
     HIDEvent event;
     bool isEvent = true;
     switch (message.type) {
@@ -165,7 +167,18 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       LOG_BLE("central disconnected reason=%d during teardown", reason);
       return;
     }
-    LOG_BLE("central disconnected reason=%d; re-advertising", reason);
+    const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
+    const char *reasonName = "UNKNOWN";
+    switch (reason) {
+      case 0x08: reasonName = "CONNECTION_TIMEOUT"; break;
+      case 0x13: reasonName = "REMOTE_USER_TERMINATED"; break;
+      case 0x16: reasonName = "LOCAL_HOST_TERMINATED"; break;
+      case 0x3e: reasonName = "CONNECTION_ESTABLISHMENT_FAILED"; break;
+    }
+    LOG_BLE("central disconnected reason=%d reasonName=%s uptime=%lu heap=%u lastBleRxType=%u lastBleRxLength=%lu lastHidSequence=%lu lastQueuedEvent=%s lastExecutedEvent=%s; re-advertising",
+            reason, reasonName, static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
+            hid.lastBleRxType, static_cast<unsigned long>(hid.lastBleRxLength),
+            static_cast<unsigned long>(hid.lastSequence), hid.lastQueuedEvent, hid.lastExecutedEvent);
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     if (!s_bleReady || !adv || !adv->start() || !adv->isAdvertising()) {
       g_radio.setBleAdvertisingStatus(false);

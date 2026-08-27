@@ -225,7 +225,8 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/InputPilotDerived" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}"
 
       - name: Build unsigned iOS device app
         if: steps.guard.outputs.present == 'true'
@@ -243,7 +244,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            PRODUCT_BUNDLE_IDENTIFIER=com.thorethy.inputpilot
+            PRODUCT_BUNDLE_IDENTIFIER=com.thorethy.inputpilot \
+            INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}"
 
           app="$derived/Build/Products/Release-iphoneos/InputPilot.app"
           [[ -d "$app" ]] || { echo "::error::Unsigned device app was not produced."; exit 1; }

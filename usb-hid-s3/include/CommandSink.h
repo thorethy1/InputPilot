@@ -18,5 +18,10 @@ bool deviceJiggleEnabled();
 uint32_t deviceJiggleIntervalMs();
 bool deviceHidReady();
 bool deviceOtaActive();
+HIDDiagnosticsSnapshot deviceHidDiagnostics();
+void recordHIDDecodeError(const char *source, size_t length);
+void recordHIDInput(const char *source, uint8_t type, size_t length);
+void recordHIDBleFrame(uint8_t type, size_t length);
+const char *deviceResetReason();
 
 #endif // COMMAND_SINK_H

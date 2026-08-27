@@ -49,10 +49,10 @@ The preferred single-image method is:
 
 ```bash
 esptool --chip esp32s3 erase-flash
-esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.0-initial-flash.bin
+esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.1-initial-flash.bin
 ```
 
-Alternatively, extract `InputPilot-v0.8.0-initial-flash.zip` and flash the individual images. These offsets are exported from the actual pinned PlatformIO/pioarduino build and recorded in `initial-flash-manifest.json` and `flash_args`:
+Alternatively, extract `InputPilot-v0.8.1-initial-flash.zip` and flash the individual images. These offsets are exported from the actual pinned PlatformIO/pioarduino build and recorded in `initial-flash-manifest.json` and `flash_args`:
 
 ```bash
 esptool --chip esp32s3 write-flash \

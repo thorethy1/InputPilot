@@ -315,10 +315,13 @@ private struct ConnectionSettingsView: View {
             Section("Diagnostics") {
                 if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
                 else { LabeledContent("Firmware Logs", value: "Add a device first") }
+                NavigationLink("App Logs") { AppLogsView() }
+                if let selected { NavigationLink("Export Diagnostics") { DiagnosticsExportView(device: selected) } }
             }
             Section("About") {
                 LabeledContent("App Version", value: appVersion.version)
                 LabeledContent("Build", value: appVersion.build)
+                LabeledContent("App Commit", value: appVersion.commit)
                 if let selected {
                     if devices.count > 1 { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
                     LabeledContent("Firmware", value: selected.firmwareVersion ?? "Unknown")
@@ -331,6 +334,38 @@ private struct ConnectionSettingsView: View {
         }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
     }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "InputPilot automatically chooses the best available connection for each operation."; case .preferBluetooth: "Uses nearby Bluetooth first, then Wi-Fi when needed."; case .preferWiFi: "Uses Wi-Fi first, with Bluetooth as fallback."; case .bluetoothOnly: "Controls InputPilot nearby without Wi-Fi or internet."; case .wifiOnly: "Uses TCP or REST over your local Wi-Fi network." } }
+}
+
+private struct AppLogsView: View {
+    @ObservedObject private var log = AppLog.shared
+    @State private var filter = AppLogCategory.all
+    @State private var paused = false
+    @State private var frozen: [AppLogRecord] = []
+    private var source: [AppLogRecord] { paused ? frozen : log.records }
+    private var visible: [AppLogRecord] { source.filter { $0.matches(filter) } }
+    private var text: String { source.map(\.line).joined(separator: "\n") }
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Filter", selection: $filter) { ForEach(AppLogCategory.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).padding()
+            ScrollViewReader { proxy in ScrollView { LazyVStack(alignment: .leading, spacing: 4) { ForEach(visible) { entry in Text(entry.line).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).id(entry.id) } }.padding() }.onChange(of: visible.count) { _, _ in if !paused, let last = visible.last { proxy.scrollTo(last.id, anchor: .bottom) } } }
+        }
+        .navigationTitle("App Logs").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItemGroup(placement: .topBarTrailing) { Button(paused ? "Resume" : "Pause") { if !paused { frozen = log.records }; paused.toggle() }; Button { log.clear(); frozen = [] } label: { Image(systemName: "trash") }; Button { UIPasteboard.general.string = text } label: { Image(systemName: "doc.on.doc") }; ShareLink(item: text) { Image(systemName: "square.and.arrow.up") } } }
+    }
+}
+
+private struct DiagnosticsExportView: View {
+    let device: StoredDevice
+    private let app = AppVersionInfo.read()
+    @StateObject private var diagnostics: FirmwareDiagnosticsManager
+    @State private var exporting = false
+    init(device: StoredDevice) { self.device = device; _diagnostics = StateObject(wrappedValue: FirmwareDiagnosticsManager(device: device, mode: ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic)) }
+    private var text: String {
+        let metadata = diagnostics.metadata
+        let hid = metadata?.hid
+        return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
+    }
+    var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes API tokens, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
 }
 
 private struct FirmwareLogDocument: FileDocument {
@@ -354,6 +389,7 @@ private struct FirmwareLogsView: View {
             Form {
                 if devices.count > 1 { Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
                 LabeledContent("Connection", value: manager.status)
+                if let metadata = manager.metadata { LabeledContent("Firmware Commit", value: metadata.firmwareCommit ?? "Unknown"); LabeledContent("Reset Reason", value: metadata.resetReason ?? "Unknown") }
                 Picker("Filter", selection: $filter) { ForEach(FirmwareLogFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu)
             }.frame(maxHeight: devices.count > 1 ? 170 : 125)
             ScrollViewReader { proxy in

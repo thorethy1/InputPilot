@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1] - 2026-08-27
+
+### Fixed
+
+- USB mouse and keyboard reports now execute in the bounded Arduino main-loop executor instead of a dedicated FreeRTOS task.
+- Mouse button transitions emit actual USB reports, BLE HID writes prefer acknowledged writes, and stateful events are not blindly retried after uncertain delivery.
+- Added end-to-end HID counters, BLE disconnect context, bounded app logs, backwards-compatible firmware log decoding, and build commit diagnostics.
+
 ## [0.8.0] - 2026-08-26
 
 ### Added

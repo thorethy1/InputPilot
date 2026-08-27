@@ -369,14 +369,23 @@ void WifiConfigServer::handleGetDiagnostics() {
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
   DeviceIdentity::begin(); handleCors();
+  const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
   String json = "{\"product\":\"" + String(FW_PRODUCT) + "\",\"board\":\"" + String(FW_BOARD) +
                 "\",\"deviceId\":\"" + String(DeviceIdentity::deviceId()) + "\",\"firmware\":\"" + String(FW_VERSION) +
                 "\",\"protocol\":" + String(OTA_PROTOCOL_VERSION) + ",\"otaSchema\":" + String(OTA_SCHEMA_VERSION) +
                 ",\"runningPartition\":\"" + String(running ? running->label : "unknown") +
                 "\",\"bootPartition\":\"" + String(boot ? boot->label : "unknown") +
+                "\",\"firmwareCommit\":\"" + String(FW_GIT_COMMIT) + "\",\"resetReason\":\"" + String(deviceResetReason()) +
                 "\",\"uptime\":" + String(millis()) + ",\"heap\":" + String(ESP.getFreeHeap()) +
                 ",\"usbReady\":" + String(deviceHidReady() ? "true" : "false") +
-                ",\"otaState\":\"" + String(OTAProtocol::stateName(g_otaEngine.state())) + "\"}";
+                ",\"otaState\":\"" + String(OTAProtocol::stateName(g_otaEngine.state())) + "\",\"hid\":{" +
+                "\"rxBle\":" + String(hid.rxBle) + ",\"rxTcp\":" + String(hid.rxTcp) + ",\"rxRest\":" + String(hid.rxRest) +
+                ",\"rxSerial\":" + String(hid.rxSerial) + ",\"decoded\":" + String(hid.decoded) +
+                ",\"decodeErrors\":" + String(hid.decodeErrors) + ",\"queued\":" + String(hid.queued) +
+                ",\"queueRejected\":" + String(hid.queueRejected) + ",\"executed\":" + String(hid.executed) +
+                ",\"failed\":" + String(hid.executeFailed) + ",\"mouseExecuted\":" + String(hid.mouseExecuted) +
+                ",\"keyboardExecuted\":" + String(hid.keyboardExecuted) + ",\"lastSource\":\"" + String(hid.lastSource) +
+                "\",\"lastType\":\"" + String(hid.lastType) + "\",\"lastSequence\":" + String(hid.lastSequence) + "}}";
   s_server->send(200, "application/json", json);
 }
 

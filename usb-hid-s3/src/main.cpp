@@ -37,7 +37,7 @@
 // valid ESP32 image built for another product or board before activation.
 extern "C" const char inputPilotFirmwareMetadata[] __attribute__((used)) =
     FW_METADATA_PREFIX "product=" FW_PRODUCT ";board=" FW_BOARD ";version=" FW_VERSION
-    ";protocol=1;otaSchema=1;";
+    ";protocol=1;otaSchema=1;commit=" FW_GIT_COMMIT ";";
 
 // ---------------------------------------------------------------------------
 // USB devices (core stack). ARDUINO_USB_CDC_ON_BOOT=0, so the core does NOT
@@ -56,13 +56,20 @@ static USBHID g_hid;  // standalone handle used only for ready() (global HID sta
 // Shared state
 // ---------------------------------------------------------------------------
 static JiggleEngine g_jiggle(JIGGLE_MAX_DELTA, JIGGLE_INTERVAL_MS);
-static SemaphoreHandle_t g_hidMutex = nullptr;
 static SemaphoreHandle_t g_hidQueueMutex = nullptr;
-static TaskHandle_t g_hidExecutorTask = nullptr;
 static HIDEventQueue g_hidQueue;
 static std::atomic<uint32_t> g_hidEnqueueSequence{0};
 static std::atomic<uint32_t> g_hidProcessedSequence{0};
 static uint32_t g_lastMoveQueueLogMs = 0;
+static HIDDiagnosticsSnapshot g_hidStats;
+static portMUX_TYPE g_hidStatsMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t g_mouseButtons = 0;
+static char g_activeText[256]{};
+static size_t g_activeTextOffset = 0;
+static HIDEvent g_activeTextEvent;
+static bool g_activeTextOK = true;
+static std::atomic<bool> g_cancelActiveText{false};
+static uint32_t g_hidPauseUntil = 0;
 
 static char g_cmdBuf[SERIAL_CMD_MAXLEN];
 static size_t g_cmdLen = 0;
@@ -70,18 +77,11 @@ static uint32_t g_lastHeartbeatMs = 0;
 static const uint32_t HEARTBEAT_MS = 10000;
 
 // ---------------------------------------------------------------------------
-// HID helpers (all serialized via g_hidMutex; safe from task + loop)
+// HID helpers. These functions are called only by processHIDQueue() from the
+// Arduino loop. Transport callbacks only decode and enqueue.
 // ---------------------------------------------------------------------------
 static bool hidReady() {
   return g_hid.ready();
-}
-
-static bool lockHid(uint32_t waitMs = 500) {
-  if (!g_hidMutex) return false;
-  return xSemaphoreTake(g_hidMutex, pdMS_TO_TICKS(waitMs)) == pdTRUE;
-}
-static void unlockHid() {
-  if (g_hidMutex) xSemaphoreGive(g_hidMutex);
 }
 
 static int8_t clamp8(int v) {
@@ -96,20 +96,19 @@ static bool hidMouseMove(int dx, int dy, int wheel) {
     LOG_HID("mouse move skipped: not-ready");
     return false;
   }
-  if (!lockHid()) return false;
   int rx = dx, ry = dy, rw = wheel;
+  bool ok = true;
   do {
     int8_t sx = clamp8(rx);
     int8_t sy = clamp8(ry);
     int8_t sw = clamp8(rw);
-    Mouse.move(sx, sy, sw);
+    hid_mouse_report_t report = {.buttons = g_mouseButtons, .x = sx, .y = sy, .wheel = sw, .pan = 0};
+    ok = Mouse.sendReport(report) && ok;
     rx -= sx;
     ry -= sy;
     rw -= sw;
-    if (rx || ry || rw) delay(2);
   } while (rx || ry || rw);
-  unlockHid();
-  return true;
+  return ok;
 }
 
 static uint8_t buttonMask(MouseBtn b) {
@@ -126,42 +125,37 @@ static bool hidClick(MouseBtn b) {
     LOG_HID("click skipped: not-ready");
     return false;
   }
-  if (!lockHid()) return false;
   const uint8_t mask = buttonMask(b);
-  Mouse.press(mask);
-  delay(15);
-  Mouse.release(mask);
-  unlockHid();
-  return true;
+  g_mouseButtons |= mask;
+  hid_mouse_report_t down = {.buttons = g_mouseButtons, .x = 0, .y = 0, .wheel = 0, .pan = 0};
+  const bool downOk = Mouse.sendReport(down);
+  g_mouseButtons &= ~mask;
+  hid_mouse_report_t up = {.buttons = g_mouseButtons, .x = 0, .y = 0, .wheel = 0, .pan = 0};
+  return Mouse.sendReport(up) && downOk;
 }
 
 static bool hidMouseButton(MouseBtn b, bool down) {
-  if (!hidReady() || !lockHid()) return false;
-  if (down) Mouse.press(buttonMask(b)); else Mouse.release(buttonMask(b));
-  unlockHid();
-  return true;
+  if (!hidReady()) return false;
+  if (down) g_mouseButtons |= buttonMask(b); else g_mouseButtons &= ~buttonMask(b);
+  hid_mouse_report_t report = {.buttons = g_mouseButtons, .x = 0, .y = 0, .wheel = 0, .pan = 0};
+  return Mouse.sendReport(report);
 }
 
-static void executeReleaseAll() {
-  if (!lockHid()) return;
-  Mouse.release(MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE);
-  Keyboard.releaseAll();
-  unlockHid();
+static bool executeReleaseAll() {
+  g_activeText[0] = '\0'; g_activeTextOffset = 0; g_mouseButtons = 0;
+  hid_mouse_report_t mouse = {.buttons = 0, .x = 0, .y = 0, .wheel = 0, .pan = 0};
+  hid_keyboard_report_t keyboard = {};
+  const bool ok = Mouse.sendReport(mouse) && g_hid.SendReport(HID_REPORT_ID_KEYBOARD, &keyboard, sizeof(keyboard));
   LOG_HID("release all");
+  return ok;
 }
 
-static bool hidType(const std::string &text) {
+static bool hidTypeCharacter(uint8_t character) {
   if (!hidReady()) {
     LOG_HID("type skipped: not-ready");
     return false;
   }
-  if (!lockHid(1500)) return false;
-  for (char ch : text) {
-    Keyboard.write((uint8_t)ch);
-    delay(8);
-  }
-  unlockHid();
-  return true;
+  return Keyboard.write(character) > 0;
 }
 
 static bool hidKey(const KeyCode &kc) {
@@ -169,16 +163,12 @@ static bool hidKey(const KeyCode &kc) {
     LOG_HID("key skipped: not-ready");
     return false;
   }
-  if (!lockHid()) return false;
-  KeyReport report = {};
-  report.modifiers = kc.modifier;
-  report.keys[0] = kc.keycode;  // raw HID usage code from KeyMap
-  Keyboard.sendReport(&report);
-  delay(15);
-  KeyReport empty = {};
-  Keyboard.sendReport(&empty);
-  unlockHid();
-  return true;
+  hid_keyboard_report_t report = {};
+  report.modifier = kc.modifier;
+  report.keycode[0] = kc.keycode;
+  hid_keyboard_report_t empty = {};
+  return g_hid.SendReport(HID_REPORT_ID_KEYBOARD, &report, sizeof(report)) &&
+         g_hid.SendReport(HID_REPORT_ID_KEYBOARD, &empty, sizeof(empty));
 }
 
 static bool hidReport(uint8_t modifier, uint8_t keycode) {
@@ -188,6 +178,8 @@ static bool hidReport(uint8_t modifier, uint8_t keycode) {
   kc.keycode = keycode;
   return hidKey(kc);
 }
+
+static const char *hidEventName(HIDEventType type);
 
 static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *source,
                                         uint32_t *queuedSequence) {
@@ -199,6 +191,10 @@ static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *sourc
   }
   HIDEvent event = input;
   event.sequence = g_hidEnqueueSequence.fetch_add(1) + 1;
+  snprintf(event.source, sizeof(event.source), "%s", source ? source : "unknown");
+  if (source && (strncmp(source, "ble", 3) == 0 || strcmp(source, "wifi") == 0 ||
+                 strcmp(source, "http") == 0 || strcmp(source, "serial") == 0))
+    recordHIDInput(source, static_cast<uint8_t>(event.type), 0);
   if (xSemaphoreTake(g_hidQueueMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
     LOG_WARN("HID queue lock timeout src=%s", source ? source : "?");
     return false;
@@ -207,6 +203,7 @@ static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *sourc
   const size_t depth = g_hidQueue.size();
   xSemaphoreGive(g_hidQueueMutex);
   if (!accepted) {
+    portENTER_CRITICAL(&g_hidStatsMux); ++g_hidStats.queueRejected; portEXIT_CRITICAL(&g_hidStatsMux);
     LOG_WARN("HID %s event queue failure type=%u depth=%u src=%s",
              event.critical() ? "critical" : "queue overflow",
              static_cast<unsigned>(event.type), static_cast<unsigned>(depth),
@@ -214,6 +211,12 @@ static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *sourc
     if (event.type == HIDEventType::ButtonUp) requestReleaseAll("button-up-recovery");
     return false;
   }
+  portENTER_CRITICAL(&g_hidStatsMux);
+  ++g_hidStats.queued;
+  g_hidStats.lastSequence = event.sequence;
+  snprintf(g_hidStats.lastSource, sizeof(g_hidStats.lastSource), "%s", event.source);
+  snprintf(g_hidStats.lastQueuedEvent, sizeof(g_hidStats.lastQueuedEvent), "%s", hidEventName(event.type));
+  portEXIT_CRITICAL(&g_hidStatsMux);
   if (queuedSequence) *queuedSequence = event.sequence;
   if (event.type != HIDEventType::MouseMove || millis() - g_lastMoveQueueLogMs >= 1000) {
     if (event.type == HIDEventType::MouseMove) g_lastMoveQueueLogMs = millis();
@@ -221,7 +224,6 @@ static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *sourc
                   static_cast<unsigned>(event.type), static_cast<unsigned>(depth),
                   source ? source : "?");
   }
-  if (g_hidExecutorTask) xTaskNotifyGive(g_hidExecutorTask);
   return true;
 }
 
@@ -230,6 +232,7 @@ bool enqueueHIDEvent(const HIDEvent &input, const char *source) {
 }
 
 void requestReleaseAll(const char *source) {
+  g_cancelActiveText.store(true);
   if (!enqueueHIDEvent(HIDEvent::releaseAll(), source))
     LOG_ERROR("HID releaseAll queue failure src=%s", source ? source : "?");
 }
@@ -238,7 +241,7 @@ bool requestReleaseAllAndWait(const char *source, uint32_t timeoutMs) {
   uint32_t sequence = 0;
   if (!enqueueHIDEventWithSequence(HIDEvent::releaseAll(), source, &sequence)) return false;
   const uint32_t start = millis();
-  while (g_hidProcessedSequence.load() < sequence && millis() - start < timeoutMs) vTaskDelay(1);
+  while (g_hidProcessedSequence.load() < sequence && millis() - start < timeoutMs) delay(1);
   if (g_hidProcessedSequence.load() < sequence) {
     LOG_ERROR("HID executor timeout waiting releaseAll src=%s", source ? source : "?");
     return false;
@@ -253,31 +256,67 @@ static bool popHIDEvent(HIDEvent &event) {
   return available;
 }
 
-static void hidExecutorTask(void *) {
-  g_hidExecutorTask = xTaskGetCurrentTaskHandle();
-  uint32_t lastMoveExecutionLogMs = 0;
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+static const char *hidEventName(HIDEventType type) {
+  switch (type) {
+    case HIDEventType::MouseMove: return "mouse_move"; case HIDEventType::Click: return "click";
+    case HIDEventType::ButtonDown: return "button_down"; case HIDEventType::ButtonUp: return "button_up";
+    case HIDEventType::TypeText: return "keyboard_text"; case HIDEventType::KeyboardReport: return "keyboard_report";
+    case HIDEventType::ReleaseAll: return "release_all"; case HIDEventType::Pause: return "pause";
+  }
+  return "unknown";
+}
+
+static void recordExecution(const HIDEvent &event, bool ok) {
+  portENTER_CRITICAL(&g_hidStatsMux);
+  if (ok) ++g_hidStats.executed; else ++g_hidStats.executeFailed;
+  if (event.type == HIDEventType::MouseMove || event.type == HIDEventType::Click ||
+      event.type == HIDEventType::ButtonDown || event.type == HIDEventType::ButtonUp) ++g_hidStats.mouseExecuted;
+  if (event.type == HIDEventType::TypeText || event.type == HIDEventType::KeyboardReport) ++g_hidStats.keyboardExecuted;
+  g_hidStats.lastSequence = event.sequence;
+  snprintf(g_hidStats.lastSource, sizeof(g_hidStats.lastSource), "%s", event.source);
+  snprintf(g_hidStats.lastType, sizeof(g_hidStats.lastType), "%s", hidEventName(event.type));
+  snprintf(g_hidStats.lastExecutedEvent, sizeof(g_hidStats.lastExecutedEvent), "%s", hidEventName(event.type));
+  portEXIT_CRITICAL(&g_hidStatsMux);
+  if (!ok) LOG_ERROR("HID execute failed sequence=%lu type=%s src=%s usbReady=%s",
+                     static_cast<unsigned long>(event.sequence), hidEventName(event.type), event.source,
+                     hidReady() ? "true" : "false");
+}
+
+static void processHIDQueue(size_t budget = 6) {
+  if (g_cancelActiveText.exchange(false)) { g_activeText[0] = '\0'; g_activeTextOffset = 0; }
+  if (static_cast<int32_t>(millis() - g_hidPauseUntil) < 0) return;
+  if (g_activeText[g_activeTextOffset]) {
+    const bool ok = hidTypeCharacter(static_cast<uint8_t>(g_activeText[g_activeTextOffset++]));
+    g_activeTextOK = g_activeTextOK && ok;
+    if (!g_activeText[g_activeTextOffset]) { recordExecution(g_activeTextEvent, g_activeTextOK); g_activeText[0] = '\0'; g_activeTextOffset = 0; }
+    return;
+  }
+  static uint32_t lastMoveExecutionLogMs = 0;
+  for (size_t processed = 0; processed < budget; ++processed) {
     HIDEvent event;
-    while (popHIDEvent(event)) {
-      LOG_HID_DEBUG("executor event type=%u", static_cast<unsigned>(event.type));
-      switch (event.type) {
-        case HIDEventType::MouseMove:
-          if (hidMouseMove(event.dx, event.dy, event.wheel) && millis() - lastMoveExecutionLogMs >= 500) {
-            lastMoveExecutionLogMs = millis();
-            LOG_HID_DEBUG("move ok dx=%ld dy=%ld wheel=%ld", static_cast<long>(event.dx),
-                          static_cast<long>(event.dy), static_cast<long>(event.wheel));
-          }
-          break;
-        case HIDEventType::Click: hidClick(static_cast<MouseBtn>(event.button)); break;
-        case HIDEventType::ButtonDown: hidMouseButton(static_cast<MouseBtn>(event.button), true); break;
-        case HIDEventType::ButtonUp: hidMouseButton(static_cast<MouseBtn>(event.button), false); break;
-        case HIDEventType::TypeText: hidType(event.text); break;
-        case HIDEventType::KeyboardReport: hidReport(event.modifier, event.keycode); break;
-        case HIDEventType::ReleaseAll: executeReleaseAll(); break;
-      }
-      g_hidProcessedSequence.store(event.sequence);
+    if (!popHIDEvent(event)) break;
+    bool ok = true;
+    switch (event.type) {
+      case HIDEventType::MouseMove: ok = hidMouseMove(event.dx, event.dy, event.wheel); break;
+      case HIDEventType::Click: ok = hidClick(static_cast<MouseBtn>(event.button)); break;
+      case HIDEventType::ButtonDown: ok = hidMouseButton(static_cast<MouseBtn>(event.button), true); break;
+      case HIDEventType::ButtonUp: ok = hidMouseButton(static_cast<MouseBtn>(event.button), false); break;
+      case HIDEventType::TypeText:
+        snprintf(g_activeText, sizeof(g_activeText), "%s", event.text); g_activeTextOffset = 0; g_activeTextEvent = event; g_activeTextOK = true;
+        if (g_activeText[0]) { g_activeTextOK = hidTypeCharacter(static_cast<uint8_t>(g_activeText[g_activeTextOffset++])); }
+        if (!g_activeText[g_activeTextOffset]) { ok = g_activeTextOK; g_activeText[0] = '\0'; g_activeTextOffset = 0; }
+        else { g_hidProcessedSequence.store(event.sequence); return; }
+        break;
+      case HIDEventType::KeyboardReport: ok = hidReport(event.modifier, event.keycode); break;
+      case HIDEventType::ReleaseAll: ok = executeReleaseAll(); break;
+      case HIDEventType::Pause: g_hidPauseUntil = millis() + event.pauseMs; break;
     }
+    recordExecution(event, ok);
+    g_hidProcessedSequence.store(event.sequence);
+    if (event.type == HIDEventType::MouseMove && millis() - lastMoveExecutionLogMs >= 1000) {
+      lastMoveExecutionLogMs = millis(); LOG_HID_DEBUG("executor sequence=%lu move ok=%s", static_cast<unsigned long>(event.sequence), ok ? "true" : "false");
+    }
+    if (event.type == HIDEventType::Pause || g_activeText[0]) break;
   }
 }
 
@@ -293,6 +332,7 @@ static void printHelp() {
   LOG_INFO("  type <text>              type a string");
   LOG_INFO("  key <name[+name...]>     press a key/combo (enter,esc,cmd+space,...)");
   LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report");
+  LOG_INFO("  hidtest mouse|keyboard   exercise USB HID without a radio transport");
   LOG_INFO("  jiggle on|off|status");
   LOG_INFO("  radio wifi|ble|both|none enable control radios");
   LOG_INFO("  wifi status|set|clear    NVS WiFi creds (Soft-AP if none)");
@@ -312,8 +352,39 @@ bool deviceJiggleEnabled() { return g_jiggle.isEnabled(); }
 uint32_t deviceJiggleIntervalMs() { return g_jiggle.intervalMs(); }
 bool deviceHidReady() { return hidReady(); }
 bool deviceOtaActive() { return g_otaEngine.active(); }
+HIDDiagnosticsSnapshot deviceHidDiagnostics() {
+  portENTER_CRITICAL(&g_hidStatsMux); HIDDiagnosticsSnapshot copy = g_hidStats; portEXIT_CRITICAL(&g_hidStatsMux);
+  return copy;
+}
+
+void recordHIDInput(const char *source, uint8_t type, size_t length) {
+  portENTER_CRITICAL(&g_hidStatsMux);
+  if (source && strncmp(source, "ble", 3) == 0) { ++g_hidStats.rxBle; g_hidStats.lastBleRxLength = length; g_hidStats.lastBleRxType = type; }
+  else if (source && strcmp(source, "wifi") == 0) ++g_hidStats.rxTcp;
+  else if (source && strcmp(source, "http") == 0) ++g_hidStats.rxRest;
+  else if (source && strcmp(source, "serial") == 0) ++g_hidStats.rxSerial;
+  ++g_hidStats.decoded;
+  portEXIT_CRITICAL(&g_hidStatsMux);
+}
+
+void recordHIDDecodeError(const char *source, size_t length) {
+  portENTER_CRITICAL(&g_hidStatsMux); ++g_hidStats.decodeErrors;
+  if (source && strncmp(source, "ble", 3) == 0) { ++g_hidStats.rxBle; g_hidStats.lastBleRxLength = length; }
+  portEXIT_CRITICAL(&g_hidStatsMux);
+}
+void recordHIDBleFrame(uint8_t type, size_t length) {
+  portENTER_CRITICAL(&g_hidStatsMux); g_hidStats.lastBleRxType = type; g_hidStats.lastBleRxLength = length; portEXIT_CRITICAL(&g_hidStatsMux);
+}
 
 void handleCommandLine(const std::string &line, const char *source) {
+  if (line == "hidtest mouse") {
+    enqueueHIDEvent(HIDEvent::move(20, 0), source); enqueueHIDEvent(HIDEvent::pause(150), source);
+    enqueueHIDEvent(HIDEvent::move(-20, 0), source); LOG_HID("hidtest mouse queued"); return;
+  }
+  if (line == "hidtest keyboard") {
+    HIDEvent e; e.type = HIDEventType::KeyboardReport; e.keycode = 0x04;
+    enqueueHIDEvent(e, source); LOG_HID("hidtest keyboard queued key=a"); return;
+  }
   ParsedCommand c = CommandParser::parse(line);
   if (g_otaEngine.active() && c.type != CmdType::ReleaseAll) {
     LOG_WARN("command blocked during OTA src=%s", source ? source : "?");
@@ -483,10 +554,10 @@ static const char *resetReasonName(esp_reset_reason_t reason) {
     default: return "UNKNOWN";
   }
 }
+const char *deviceResetReason() { return resetReasonName(esp_reset_reason()); }
 
 // ---------------------------------------------------------------------------
 void setup() {
-  g_hidMutex = xSemaphoreCreateMutex();
   g_hidQueueMutex = xSemaphoreCreateMutex();
   DeviceIdentity::begin();
 
@@ -519,7 +590,6 @@ void setup() {
   g_jiggle.setEnabled(true);
 #endif
 
-  xTaskCreatePinnedToCore(hidExecutorTask, "hid-executor", 4096, nullptr, 3, nullptr, 0);
   xTaskCreatePinnedToCore(jiggleTask, "jiggle", 4096, nullptr, 1, nullptr, 0);
 
   // NVS WiFi creds (seed from compile-time WIFI_SSID on first boot).
@@ -537,8 +607,10 @@ void setup() {
 }
 
 void loop() {
+  processHIDQueue(6);
   serviceSerialCommands();
   g_radio.loop();
+  processHIDQueue(6);
   g_statusLed.loop();
 
   const uint32_t now = millis();

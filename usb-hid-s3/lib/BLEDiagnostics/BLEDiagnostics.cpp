@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "DeviceIdentity.h"
 #include "FirmwareLog.h"
+#include "CommandSink.h"
 
 BLEDiagnostics g_bleDiagnostics;
 
@@ -52,16 +53,27 @@ bool BLEDiagnostics::begin(NimBLEServer *server) {
 
 void BLEDiagnostics::refreshInfo() {
   if (!info_) return;
-  char json[320];
+  char json[640];
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
+  const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
   snprintf(json, sizeof(json),
            "{\"product\":\"%s\",\"firmware\":\"%s\",\"board\":\"%s\","
            "\"protocol\":1,\"otaSchema\":1,\"deviceId\":\"%s\","
-           "\"runningPartition\":\"%s\",\"bootPartition\":\"%s\",\"uptime\":%lu,\"heap\":%u}",
+           "\"firmwareCommit\":\"%s\",\"resetReason\":\"%s\","
+           "\"runningPartition\":\"%s\",\"bootPartition\":\"%s\",\"uptime\":%lu,\"heap\":%u,"
+           "\"hid\":{\"rxBle\":%lu,\"rxTcp\":%lu,\"rxRest\":%lu,\"rxSerial\":%lu,"
+           "\"decoded\":%lu,\"decodeErrors\":%lu,\"queued\":%lu,\"queueRejected\":%lu,"
+           "\"executed\":%lu,\"failed\":%lu,\"mouseExecuted\":%lu,\"keyboardExecuted\":%lu,"
+           "\"lastSource\":\"%s\",\"lastType\":\"%s\",\"lastSequence\":%lu}}",
            FW_PRODUCT, FW_VERSION, FW_BOARD, DeviceIdentity::deviceId(),
+           FW_GIT_COMMIT, deviceResetReason(),
            running ? running->label : "unknown", boot ? boot->label : "unknown",
-           static_cast<unsigned long>(millis()), ESP.getFreeHeap());
+           static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
+           (unsigned long)hid.rxBle, (unsigned long)hid.rxTcp, (unsigned long)hid.rxRest, (unsigned long)hid.rxSerial,
+           (unsigned long)hid.decoded, (unsigned long)hid.decodeErrors, (unsigned long)hid.queued, (unsigned long)hid.queueRejected,
+           (unsigned long)hid.executed, (unsigned long)hid.executeFailed, (unsigned long)hid.mouseExecuted, (unsigned long)hid.keyboardExecuted,
+           hid.lastSource, hid.lastType, (unsigned long)hid.lastSequence);
   info_->setValue(reinterpret_cast<const uint8_t *>(json), strlen(json));
 }
 

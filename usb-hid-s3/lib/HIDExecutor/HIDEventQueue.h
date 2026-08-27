@@ -6,7 +6,7 @@
 #include <cstring>
 
 enum class HIDEventType : uint8_t {
-  MouseMove, Click, ButtonDown, ButtonUp, TypeText, KeyboardReport, ReleaseAll
+  MouseMove, Click, ButtonDown, ButtonUp, TypeText, KeyboardReport, ReleaseAll, Pause
 };
 
 struct HIDEvent {
@@ -18,16 +18,28 @@ struct HIDEvent {
   uint8_t modifier = 0;
   uint8_t keycode = 0;
   uint32_t sequence = 0;
+  uint16_t pauseMs = 0;
+  char source[16]{};
   char text[256]{};
 
   static HIDEvent move(int dx, int dy, int wheel = 0) {
     HIDEvent e; e.type = HIDEventType::MouseMove; e.dx = dx; e.dy = dy; e.wheel = wheel; return e;
   }
   static HIDEvent releaseAll() { HIDEvent e; e.type = HIDEventType::ReleaseAll; return e; }
+  static HIDEvent pause(uint16_t milliseconds) { HIDEvent e; e.type = HIDEventType::Pause; e.pauseMs = milliseconds; return e; }
   bool critical() const {
     return type == HIDEventType::ButtonDown || type == HIDEventType::ButtonUp ||
            type == HIDEventType::KeyboardReport || type == HIDEventType::ReleaseAll;
   }
+};
+
+struct HIDDiagnosticsSnapshot {
+  uint32_t rxBle = 0, rxTcp = 0, rxRest = 0, rxSerial = 0;
+  uint32_t decoded = 0, decodeErrors = 0, queued = 0, queueRejected = 0;
+  uint32_t executed = 0, executeFailed = 0, mouseExecuted = 0, keyboardExecuted = 0;
+  uint32_t lastSequence = 0, lastBleRxLength = 0;
+  uint8_t lastBleRxType = 0;
+  char lastSource[16]{}, lastType[24]{}, lastQueuedEvent[24]{}, lastExecutedEvent[24]{};
 };
 
 class HIDEventQueue {

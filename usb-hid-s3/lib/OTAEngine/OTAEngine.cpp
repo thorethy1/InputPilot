@@ -39,7 +39,9 @@ bool OTAEngine::start(const OTAStartRequest &request, OTATransportOwner owner) {
 
   request_ = request; received_ = 0; error_.clear(); owner_ = owner;
   state_ = OTAState::Preparing;
-  if (!requestReleaseAllAndWait("ota-start", 500)) return fail("hid_release_timeout");
+  // Queue a priority release. USB reports are deliberately emitted only from
+  // Arduino loop(), never from a BLE/HTTP OTA callback.
+  requestReleaseAll("ota-start");
   if (esp_ota_begin(partition_, request.size, &handle_) != ESP_OK) {
     handle_ = 0; return fail("begin_failed");
   }

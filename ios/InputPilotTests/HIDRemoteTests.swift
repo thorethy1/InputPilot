@@ -50,10 +50,18 @@ final class HIDRemoteTests: XCTestCase {
     }
 
     func testBundleVersionHelper() {
-        let version = AppVersionInfo.read(from: ["CFBundleShortVersionString": "0.8.0", "CFBundleVersion": "123"])
-        XCTAssertEqual(version, AppVersionInfo(version: "0.8.0", build: "123"))
-        XCTAssertEqual(version.display, "0.8.0 (123)")
+        let version = AppVersionInfo.read(from: ["CFBundleShortVersionString": "0.8.1", "CFBundleVersion": "123", "InputPilotGitCommit": "abc1234"])
+        XCTAssertEqual(version, AppVersionInfo(version: "0.8.1", build: "123", commit: "abc1234"))
+        XCTAssertEqual(version.display, "0.8.1 (123)")
         XCTAssertEqual(AppVersionInfo.read(from: [:]).version, "Unknown")
+    }
+
+    @MainActor func testAppLogIsBoundedClearableAndDoesNotContainTypedPayloads() {
+        let log = AppLog.shared; log.clear()
+        for index in 0..<(AppLog.capacity + 10) { log.write(.input, "id=\(index) keyboard_text length=8") }
+        XCTAssertEqual(log.records.count, AppLog.capacity)
+        XCTAssertFalse(log.records.map(\.line).joined().contains("password"))
+        log.clear(); XCTAssertTrue(log.records.isEmpty)
     }
 
     func testFirmwareLogParsingAndFiltering() {

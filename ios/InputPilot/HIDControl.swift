@@ -2,9 +2,30 @@ import CoreBluetooth
 import CryptoKit
 import Foundation
 import Network
+import OSLog
 import SwiftData
 import SwiftUI
 import UIKit
+
+enum AppLogCategory: String, CaseIterable, Identifiable { case all = "All", input = "Input", control = "Control", bluetooth = "Bluetooth", tcp = "TCP", rest = "REST", diagnostics = "Diagnostics", errors = "Errors"; var id: String { rawValue } }
+struct AppLogRecord: Identifiable, Equatable {
+    let id = UUID(); let date: Date; let category: AppLogCategory; let message: String
+    var line: String { "\(date.formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))) \(category.rawValue.uppercased()) \(message)" }
+    func matches(_ filter: AppLogCategory) -> Bool { filter == .all || filter == category || (filter == .errors && message.localizedCaseInsensitiveContains("error")) }
+}
+@MainActor final class AppLog: ObservableObject {
+    static let shared = AppLog(); static let capacity = 1000
+    @Published private(set) var records: [AppLogRecord] = []
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "InputPilot", category: "diagnostics")
+    func write(_ category: AppLogCategory, _ message: String) {
+        logger.log("[\(category.rawValue, privacy: .public)] \(message, privacy: .public)")
+        records.append(AppLogRecord(date: Date(), category: category, message: message))
+        if records.count > Self.capacity { records.removeFirst(records.count - Self.capacity) }
+    }
+    func clear() { records.removeAll(keepingCapacity: true) }
+}
+enum AppLogContext { @TaskLocal static var eventID: UInt64? }
+private func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
 
 enum MouseButton: UInt8, Codable, CaseIterable { case left = 0, right = 1, middle = 2 }
 enum HIDEvent: Codable, Equatable {
@@ -16,6 +37,10 @@ enum HIDEvent: Codable, Equatable {
     var prefersLowLatency: Bool {
         switch self { case .mouseMove, .scroll, .mouseDown, .mouseUp, .click, .key, .keyCombo, .keyboardReport, .releaseAll, .ping: true; case .typeText: false }
     }
+    var diagnosticName: String {
+        switch self { case let .mouseMove(x,y): "mouse_move dx=\(x) dy=\(y)"; case let .scroll(v): "scroll value=\(v)"; case .mouseDown: "mouse_down"; case .mouseUp: "mouse_up"; case .click: "mouse_click"; case let .typeText(text): "keyboard_text length=\(text.count)"; case .key: "keyboard_key"; case .keyCombo: "keyboard_combo"; case .keyboardReport: "keyboard_report"; case .releaseAll: "release_all"; case .ping: "ping" }
+    }
+    var safeToRetryAfterUncertainDelivery: Bool { switch self { case .mouseMove, .scroll, .ping: true; default: false } }
     var binary: Data {
         var bytes: [UInt8] = [1]
         func append(_ value: Int16) { let raw = UInt16(bitPattern: value); bytes += [UInt8(raw & 255), UInt8(raw >> 8)] }
@@ -95,6 +120,7 @@ final class RESTHIDControlTransport: HIDControlTransport {
     func connect() async { state = .connecting; do { try await send(.ping); isAvailable = true; state = .ready } catch { isAvailable = false; if state != .authenticationFailed { state = .offline } } }
     func disconnect() async { isAvailable = false; state = .offline }
     func send(_ event: HIDEvent) async throws {
+        let eid = AppLogContext.eventID.map(String.init) ?? "-"; appLog(.rest, "id=\(eid) request=\(event.restPath) event=\(event.diagnosticName)")
         let body: [String: Any]
         switch event {
         case let .mouseMove(x, y): body = ["dx": x, "dy": y]
@@ -112,7 +138,8 @@ final class RESTHIDControlTransport: HIDControlTransport {
         if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }
         let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { isAvailable = false; state = .offline; throw TransportError.failed("Invalid REST response") }
-        guard (200...299).contains(http.statusCode) else { isAvailable = false; state = http.statusCode == 401 ? .authenticationFailed : .offline; throw TransportError.failed(http.statusCode == 401 ? "Authentication failed" : "REST request failed (HTTP \(http.statusCode))") }
+        guard (200...299).contains(http.statusCode) else { appLog(.errors, "REST id=\(eid) HTTP \(http.statusCode)"); isAvailable = false; state = http.statusCode == 401 ? .authenticationFailed : .offline; throw TransportError.failed(http.statusCode == 401 ? "Authentication failed" : "REST request failed (HTTP \(http.statusCode))") }
+        appLog(.rest, "id=\(eid) delivered HTTP \(http.statusCode)")
         isAvailable = true; state = .ready
     }
 }
@@ -211,7 +238,8 @@ final class TCPHIDControlTransport: HIDControlTransport {
     }
     func send(_ event: HIDEvent) async throws {
         guard isAvailable else { throw TransportError.unavailable }
-        do { try await sendLine(event.line) } catch { isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
+        let eid = AppLogContext.eventID.map(String.init) ?? "-"; appLog(.tcp, "id=\(eid) send event=\(event.diagnosticName)")
+        do { try await sendLine(event.line); appLog(.tcp, "id=\(eid) delivered") } catch { appLog(.errors, "TCP id=\(eid) error=\(error.localizedDescription)"); isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
     }
     func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; receiveBuffer.removeAll(); isAvailable = false; state = .offline }
 }
@@ -377,14 +405,18 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
 struct AppVersionInfo: Equatable {
     let version: String
     let build: String
+    let commit: String
+    init(version: String, build: String, commit: String = "Unknown") { self.version = version; self.build = build; self.commit = commit }
     static func read(from info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> Self {
         Self(version: info["CFBundleShortVersionString"] as? String ?? "Unknown",
-             build: info["CFBundleVersion"] as? String ?? "Unknown")
+             build: info["CFBundleVersion"] as? String ?? "Unknown",
+             commit: info["InputPilotGitCommit"] as? String ?? "Unknown")
     }
     var display: String { build == "Unknown" ? version : "\(version) (\(build))" }
 }
 
 struct DiagnosticsMetadata: Codable, Equatable {
+    struct HIDCounters: Codable, Equatable { let rxBle: UInt64?; let rxTcp: UInt64?; let rxRest: UInt64?; let rxSerial: UInt64?; let decoded: UInt64?; let decodeErrors: UInt64?; let queued: UInt64?; let queueRejected: UInt64?; let executed: UInt64?; let failed: UInt64?; let mouseExecuted: UInt64?; let keyboardExecuted: UInt64?; let lastSource: String?; let lastType: String?; let lastSequence: UInt64? }
     let product: String
     let firmware: String
     let board: String
@@ -395,9 +427,12 @@ struct DiagnosticsMetadata: Codable, Equatable {
     let bootPartition: String?
     let uptime: UInt64?
     let heap: UInt64?
+    let firmwareCommit: String?
+    let resetReason: String?
+    let hid: HIDCounters?
     enum CodingKeys: String, CodingKey {
         case product, firmware, board, protocolVersion = "protocol", otaSchema, deviceId
-        case runningPartition, bootPartition, uptime, heap
+        case runningPartition, bootPartition, uptime, heap, firmwareCommit, resetReason, hid
     }
 }
 
@@ -465,7 +500,16 @@ struct FirmwareLogSequenceHistory {
     mutating func clear() { records.removeAll(keepingCapacity: true); identities.removeAll(keepingCapacity: true) }
 }
 
-private struct FirmwareLogsResponse: Decodable { let entries: [FirmwareLogRecord] }
+private struct FirmwareLogsResponse: Decodable {
+    let entries: [FirmwareLogRecord]
+    enum CodingKeys: String, CodingKey { case entries, lines }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let records = try container.decodeIfPresent([FirmwareLogRecord].self, forKey: .entries) { entries = records; return }
+        let lines = try container.decodeIfPresent([String].self, forKey: .lines) ?? []
+        entries = lines.enumerated().map { FirmwareLogRecord(sequence: UInt32($0.offset + 1), line: $0.element) }
+    }
+}
 
 @MainActor final class FirmwareDiagnosticsManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var lines: [FirmwareLogLine] = []
@@ -505,6 +549,7 @@ private struct FirmwareLogsResponse: Decodable { let entries: [FirmwareLogRecord
         guard !central.isScanning, peripheral == nil else { return }
         status = "Searching via Bluetooth…"
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        appLog(.bluetooth, "scan started deviceId=\(deviceId)")
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
         guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
@@ -525,9 +570,17 @@ private struct FirmwareLogsResponse: Decodable { let entries: [FirmwareLogRecord
         }
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil, let data = characteristic.value else { return }
-        if characteristic.uuid == info { metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: data) }
-        else if characteristic.uuid == log, let record = try? JSONDecoder().decode(FirmwareLogRecord.self, from: data) { receive([record]) }
+        guard error == nil, let data = characteristic.value else { appLog(.errors, "BLE diagnostics read error=\(error?.localizedDescription ?? "empty value")"); return }
+        if characteristic.uuid == info {
+            metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: data)
+            if metadata == nil { appLog(.errors, "BLE diagnostics JSON decode failed") }
+        } else if characteristic.uuid == log {
+            if let record = try? JSONDecoder().decode(FirmwareLogRecord.self, from: data) { receive([record]) }
+            else if let line = String(data: data, encoding: .utf8), !line.isEmpty {
+                let sequence = (sequenceHistory.records.last?.sequence ?? 0) &+ 1; receive([FirmwareLogRecord(sequence: sequence, line: line)])
+                appLog(.diagnostics, "BLE plain log fallback used sequence=\(sequence)")
+            } else { appLog(.errors, "BLE diagnostics log decode failed") }
+        }
     }
     private func receive(_ incoming: [FirmwareLogRecord]) { if paused { pending.append(contentsOf: incoming); if pending.count > FirmwareLogSequenceHistory.capacity { pending.removeFirst(pending.count - FirmwareLogSequenceHistory.capacity) } } else { history.append(sequenceHistory.append(incoming)); lines = history.lines } }
     private func scheduleReconnectAndFallback() {
@@ -544,7 +597,7 @@ private struct FirmwareLogsResponse: Decodable { let entries: [FirmwareLogRecord
                 guard let self else { return }
                 var loaded = false
                 for base in endpoints where !loaded {
-                    do { var request = URLRequest(url: base.appendingPathComponent("api/logs")); if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }; let (data, response) = try await URLSession.shared.data(for: request); guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }; let decoded = try JSONDecoder().decode(FirmwareLogsResponse.self, from: data); self.receive(decoded.entries); var infoRequest = URLRequest(url: base.appendingPathComponent("api/diagnostics")); if let token, !token.isEmpty { infoRequest.setValue(token, forHTTPHeaderField: "X-API-Token") }; if let (infoData, _) = try? await URLSession.shared.data(for: infoRequest) { self.metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: infoData) }; loaded = true; self.status = "Live via Wi-Fi" } catch { continue }
+                    do { var request = URLRequest(url: base.appendingPathComponent("api/logs")); if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }; let (data, response) = try await URLSession.shared.data(for: request); let code = (response as? HTTPURLResponse)?.statusCode ?? 0; guard code == 200 else { appLog(.errors, "REST logs HTTP \(code)"); continue }; let decoded = try JSONDecoder().decode(FirmwareLogsResponse.self, from: data); self.receive(decoded.entries); var infoRequest = URLRequest(url: base.appendingPathComponent("api/diagnostics")); if let token, !token.isEmpty { infoRequest.setValue(token, forHTTPHeaderField: "X-API-Token") }; if let (infoData, _) = try? await URLSession.shared.data(for: infoRequest) { self.metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: infoData); if self.metadata == nil { appLog(.errors, "REST diagnostics JSON decode failed") } }; loaded = true; self.status = "Live via Wi-Fi" } catch { appLog(.errors, "REST diagnostics connection/decode failed error=\(error.localizedDescription)"); continue }
                 }
                 if !loaded {
                     self.status = "Diagnostics unavailable"
@@ -886,6 +939,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         // InputPilot identity lives in manufacturer data. Service-filtered scans
         // miss valid legacy advertisements when 128-bit UUIDs do not fit.
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        appLog(.bluetooth, "control scan started deviceId=\(deviceId)")
         scanTimeoutWork?.cancel()
         let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
@@ -894,20 +948,21 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn { scan() } else { isAvailable = false; state = .offline } }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
+        appLog(.bluetooth, "discovered deviceId=\(deviceId) rssi=\(RSSI) connect requested")
         self.peripheral = peripheral
         scanTimeoutWork?.cancel()
         central.stopScan()
         state = .connecting; central.connect(peripheral)
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService, otaService]) }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; if firmwareUpdater.activeTransport != .wifi { firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot) }; let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { central.cancelPeripheralConnection(peripheral); return }; pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); peripheral.delegate = self; peripheral.discoverServices([service, legacyService, otaService]) }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { appLog(error == nil ? .bluetooth : .errors, "BLE disconnected error=\(error?.localizedDescription ?? "none") reconnect=\(shouldReconnect)"); authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; if firmwareUpdater.activeTransport != .wifi { firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot) }; let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in appLog(.bluetooth, "reconnect scheduled"); self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { appLog(.errors, "BLE service discovery error=\(error?.localizedDescription ?? "empty")"); central.cancelPeripheralConnection(peripheral); return }; appLog(.bluetooth, "services discovered count=\(services.count)"); pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        if error == nil { service.characteristics?.forEach { characteristics[$0.uuid] = $0 } }
+        if error == nil { service.characteristics?.forEach { characteristic in characteristics[characteristic.uuid] = characteristic; appLog(.bluetooth, "characteristic uuid=\(characteristic.uuid.uuidString) properties=\(characteristic.properties.rawValue)") } }
         pendingServices -= 1
         guard pendingServices == 0 else { return }
         let hasBinary = characteristics[mouse] != nil && characteristics[keyboard] != nil && characteristics[control] != nil
-        guard hasBinary else { isAvailable = false; state = .offline; return }
+        guard hasBinary else { appLog(.errors, "BLE control characteristics missing"); isAvailable = false; state = .offline; return }
         guard let token, !token.isEmpty else { isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral); return }
         guard !token.contains("\n"), !token.contains("\r"), let tx = characteristics[legacyTX], characteristics[legacyRX] != nil else { failAuthentication(peripheral); return }
         state = .authenticating
@@ -928,6 +983,10 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         default: break
         }
     }
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        let id = AppLogContext.eventID.map(String.init) ?? "-"
+        appLog(error == nil ? .bluetooth : .errors, "BLE didWrite id=\(id) uuid=\(characteristic.uuid.uuidString) result=\(error?.localizedDescription ?? "success")")
+    }
     private func prepareFirmwareUpdater(_ peripheral: CBPeripheral) {
         guard let control = characteristics[otaControl], let data = characteristics[otaData], let status = characteristics[otaStatus] else { return }
         firmwareUpdater.attach(peripheral: peripheral, control: control, data: data, status: status, hidControl: characteristics[self.control])
@@ -940,7 +999,15 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         if firmwareUpdater.blocksControl, event != .releaseAll { throw TransportError.failed("Controls are unavailable during a firmware update.") }
         let uuid: CBUUID = { switch event { case .mouseMove, .scroll, .mouseDown, .mouseUp, .click: mouse; case .typeText, .key, .keyCombo, .keyboardReport: keyboard; default: control } }()
         guard let peripheral, let characteristic = characteristics[uuid] else { throw TransportError.unavailable }
-        peripheral.writeValue(event.binary, for: characteristic, type: .withoutResponse)
+        let id = AppLogContext.eventID.map(String.init) ?? "-"; let payload = event.binary
+        let properties = characteristic.properties
+        let writeType: CBCharacteristicWriteType
+        if properties.contains(.write) { writeType = .withResponse }
+        else if properties.contains(.writeWithoutResponse) { writeType = .withoutResponse }
+        else { appLog(.errors, "BLE id=\(id) characteristic not writable properties=\(properties.rawValue)"); throw TransportError.failed("Bluetooth HID characteristic is not writable.") }
+        if writeType == .withoutResponse && !peripheral.canSendWriteWithoutResponse { appLog(.errors, "BLE id=\(id) cannot send without response"); throw TransportError.failed("Bluetooth write queue is full.") }
+        appLog(.bluetooth, "HID write requested id=\(id) uuid=\(uuid.uuidString) bytes=\(payload.count) writeType=\(writeType == .withResponse ? "withResponse" : "withoutResponse") canSendWithoutResponse=\(peripheral.canSendWriteWithoutResponse) maximum=\(peripheral.maximumWriteValueLength(for: writeType))")
+        peripheral.writeValue(payload, for: characteristic, type: writeType)
     }
     func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
 }
@@ -966,6 +1033,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     var onEvent: ((HIDEvent) -> Void)?
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport; private let rest: HIDControlTransport
     private var leasedTransport: HIDControlTransport?
+    private var nextEventID: UInt64 = 0
     init(device: StoredDevice) {
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
         let host = device.staIP ?? device.mdnsHost
@@ -991,6 +1059,8 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     func connect() async { isConnecting = true; async let b: Void = ble.connect(); async let t: Void = tcp.connect(); async let r: Void = rest.connect(); _ = await (b, t, r); isConnecting = false }
     func disconnect() async { await releaseAll(); await tcp.disconnect(); await rest.disconnect(); activeTransport = nil }
     @discardableResult func send(_ event: HIDEvent) async -> Bool {
+        nextEventID &+= 1; let eventID = nextEventID
+        appLog(.input, "id=\(eventID) \(event.diagnosticName)")
         guard protocolVersion <= 1 else { lastError = "Firmware protocol v\(protocolVersion) is unsupported."; activeTransport = nil; return false }
         if let capability = requiredCapability(for: event), !supports(capability) {
             lastError = "This firmware does not support \(capability.replacingOccurrences(of: "_", with: " "))."
@@ -1001,13 +1071,23 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
                 await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport was lost; sequence stopped.")
                 return false
             }
-            do { try await leasedTransport.send(event); activeTransport = leasedTransport.kind; lastError = nil; onEvent?(event); return true }
+            do { try await AppLogContext.$eventID.withValue(eventID) { try await leasedTransport.send(event) }; activeTransport = leasedTransport.kind; lastError = nil; onEvent?(event); return true }
             catch { await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport failed; sequence stopped."); return false }
         }
-        var failure: String?
-        for transport in candidates(for: event) where transport.isAvailable && transport.state == .ready {
-            do { try await transport.send(event); activeTransport = transport.kind; lastError = nil; onEvent?(event); return true }
-            catch { failure = error.localizedDescription }
+        var failure: String?; let available = candidates(for: event).filter { $0.isAvailable && $0.state == .ready }
+        appLog(.control, "id=\(eventID) candidates=\(available.map(\.kind.rawValue).joined(separator: ","))")
+        for (index, transport) in available.enumerated() {
+            appLog(.control, "id=\(eventID) selected=\(transport.kind.rawValue)")
+            do { try await AppLogContext.$eventID.withValue(eventID) { try await transport.send(event) }; activeTransport = transport.kind; lastError = nil; onEvent?(event); return true }
+            catch {
+                failure = error.localizedDescription; appLog(.errors, "CONTROL id=\(eventID) transport=\(transport.kind.rawValue) error=\(error.localizedDescription)")
+                if !event.safeToRetryAfterUncertainDelivery {
+                    appLog(.control, "id=\(eventID) original event retried=no; stateful recovery=releaseAll")
+                    if let recovery = available.dropFirst(index + 1).first { try? await AppLogContext.$eventID.withValue(eventID) { try await recovery.send(.releaseAll) } }
+                    break
+                }
+                if index + 1 < available.count { appLog(.control, "id=\(eventID) fallback=\(available[index + 1].kind.rawValue) original event retried=yes") }
+            }
         }
         lastError = failure ?? (allTransports.contains { $0.state == .authenticationFailed } ? "Authentication failed" : "No permitted control transport is ready.")
         activeTransport = nil

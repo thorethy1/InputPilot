@@ -49,11 +49,24 @@ void test_button_up_replaces_mouse_move_when_completely_full() {
   TEST_ASSERT_TRUE(foundUp);
 }
 
+void test_pause_keeps_serial_hidtest_moves_separate() {
+  HIDEventQueue q;
+  TEST_ASSERT_TRUE(q.push(HIDEvent::move(20, 0)));
+  TEST_ASSERT_TRUE(q.push(HIDEvent::pause(150)));
+  TEST_ASSERT_TRUE(q.push(HIDEvent::move(-20, 0)));
+  TEST_ASSERT_EQUAL_UINT32(3, q.size());
+  HIDEvent event;
+  TEST_ASSERT_TRUE(q.pop(event)); TEST_ASSERT_EQUAL_INT(20, event.dx);
+  TEST_ASSERT_TRUE(q.pop(event)); TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(HIDEventType::Pause), static_cast<uint8_t>(event.type));
+  TEST_ASSERT_TRUE(q.pop(event)); TEST_ASSERT_EQUAL_INT(-20, event.dx);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_mouse_moves_coalesce_and_preserve_order);
   RUN_TEST(test_capacity_is_bounded_and_reserved_for_critical_events);
   RUN_TEST(test_release_all_is_never_lost_and_supersedes_pending_input);
   RUN_TEST(test_button_up_replaces_mouse_move_when_completely_full);
+  RUN_TEST(test_pause_keeps_serial_hidtest_moves_separate);
   return UNITY_END();
 }

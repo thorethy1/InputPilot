@@ -21,7 +21,7 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.8.0
+  version: 0.8.1
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -149,12 +149,34 @@ paths:
                   board: { type: string }
                   deviceId: { type: string }
                   firmware: { type: string }
+                  firmwareCommit: { type: string }
+                  resetReason: { type: string }
                   protocol: { type: integer }
                   otaSchema: { type: integer }
                   runningPartition: { type: string }
                   bootPartition: { type: string }
                   uptime: { type: integer, format: int64 }
                   heap: { type: integer, format: int64 }
+                  usbReady: { type: boolean }
+                  otaState: { type: string }
+                  hid:
+                    type: object
+                    properties:
+                      rxBle: { type: integer, format: int64 }
+                      rxTcp: { type: integer, format: int64 }
+                      rxRest: { type: integer, format: int64 }
+                      rxSerial: { type: integer, format: int64 }
+                      decoded: { type: integer, format: int64 }
+                      decodeErrors: { type: integer, format: int64 }
+                      queued: { type: integer, format: int64 }
+                      queueRejected: { type: integer, format: int64 }
+                      executed: { type: integer, format: int64 }
+                      failed: { type: integer, format: int64 }
+                      mouseExecuted: { type: integer, format: int64 }
+                      keyboardExecuted: { type: integer, format: int64 }
+                      lastSource: { type: string }
+                      lastType: { type: string }
+                      lastSequence: { type: integer, format: int64 }
 
   /api/ota/start:
     post:
