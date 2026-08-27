@@ -78,8 +78,7 @@ bool WifiCredentials::save(const String &ssid, const String &pass) {
   s_prefs.putString(kKeyPass, pass);
   s_prefs.putBool(kKeyProv, true);
   s_prefs.end();
-  LOG_WIFI("nvs saved SSID=\"%s\" (pass_len=%u)", ssid.c_str(),
-           (unsigned)pass.length());
+  LOG_WIFI("nvs saved SSID=\"%s\"", ssid.c_str());
   return true;
 }
 

@@ -40,15 +40,21 @@ struct DeviceDetailView: View {
 
             Section("Device") {
                 LabeledContent("Device ID", value: device.deviceId)
-                if let version = device.firmwareVersion {
-                    LabeledContent("Firmware", value: version)
-                }
                 LabeledContent("Hostname", value: device.mdnsHost)
                 if let staIP = device.staIP,
                    DeviceEndpointResolver.sanitizeHost(staIP)
                     != DeviceEndpointResolver.sanitizeHost(device.mdnsHost) {
                     LabeledContent("IP", value: staIP)
                 }
+            }
+
+            Section("Software") {
+                LabeledContent("Firmware", value: device.firmwareVersion ?? "Unknown")
+                LabeledContent("Protocol", value: String(device.protocolVersion))
+                LabeledContent("OTA Schema", value: String(device.otaSchema))
+                LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
+                let transports = [device.capabilities.contains("wifi_control") ? "Wi-Fi" : nil, (device.capabilities.isEmpty || device.capabilities.contains("ble_control")) ? "Bluetooth" : nil].compactMap { $0 }
+                LabeledContent("Connection", value: transports.isEmpty ? "Unknown" : transports.joined(separator: " + "))
             }
 
             Section("Auth") {

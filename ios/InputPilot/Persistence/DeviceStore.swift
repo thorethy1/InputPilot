@@ -14,6 +14,8 @@ final class StoredDevice {
     var protocolVersion: Int = 0
     var capabilities: [String] = []
     var otaSchema: Int = 0
+    var runningPartition: String?
+    var bootPartition: String?
     var lastCapabilitiesUpdate: Date?
 
     init(
@@ -42,6 +44,8 @@ final class StoredDevice {
         self.capabilities = capabilities
         self.lastCapabilitiesUpdate = lastCapabilitiesUpdate
         self.otaSchema = otaSchema
+        self.runningPartition = nil
+        self.bootPartition = nil
     }
 
     convenience init(device: Device) {

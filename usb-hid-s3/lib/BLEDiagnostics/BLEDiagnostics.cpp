@@ -1,0 +1,85 @@
+#include "BLEDiagnostics.h"
+
+#include <cstdio>
+#include <cstring>
+#include <esp_ota_ops.h>
+
+#include "Config.h"
+#include "DeviceIdentity.h"
+#include "FirmwareLog.h"
+
+BLEDiagnostics g_bleDiagnostics;
+
+class BLEDiagnostics::InfoCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  explicit InfoCallbacks(BLEDiagnostics &owner) : owner_(owner) {}
+  void onRead(NimBLECharacteristic *, NimBLEConnInfo &) override {
+    owner_.refreshInfo();
+  }
+ private:
+  BLEDiagnostics &owner_;
+};
+
+class BLEDiagnostics::LogCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  explicit LogCallbacks(BLEDiagnostics &owner) : owner_(owner) {}
+  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t value) override {
+    owner_.subscribed_ = (value & 0x0001) != 0;
+    if (owner_.subscribed_) owner_.cursor_ = 0;
+  }
+ private:
+  BLEDiagnostics &owner_;
+};
+
+bool BLEDiagnostics::begin(NimBLEServer *server) {
+  if (!server) return false;
+  NimBLEService *service = server->createService(BLE_DIAGNOSTICS_SERVICE_UUID);
+  if (!service) return false;
+  info_ = service->createCharacteristic(
+      BLE_DIAGNOSTICS_INFO_UUID, NIMBLE_PROPERTY::READ);
+  log_ = service->createCharacteristic(
+      BLE_DIAGNOSTICS_LOG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  if (!info_ || !log_) return false;
+
+  infoCallbacks_ = new InfoCallbacks(*this);
+  info_->setCallbacks(infoCallbacks_);
+  refreshInfo();
+  log_->setValue("Subscribe for recent and live logs");
+  callbacks_ = new LogCallbacks(*this);
+  log_->setCallbacks(callbacks_);
+  return true;
+}
+
+void BLEDiagnostics::refreshInfo() {
+  if (!info_) return;
+  char json[320];
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  const esp_partition_t *boot = esp_ota_get_boot_partition();
+  snprintf(json, sizeof(json),
+           "{\"product\":\"%s\",\"firmware\":\"%s\",\"board\":\"%s\","
+           "\"protocol\":1,\"otaSchema\":1,\"deviceId\":\"%s\","
+           "\"runningPartition\":\"%s\",\"bootPartition\":\"%s\",\"uptime\":%lu,\"heap\":%u}",
+           FW_PRODUCT, FW_VERSION, FW_BOARD, DeviceIdentity::deviceId(),
+           running ? running->label : "unknown", boot ? boot->label : "unknown",
+           static_cast<unsigned long>(millis()), ESP.getFreeHeap());
+  info_->setValue(reinterpret_cast<const uint8_t *>(json), strlen(json));
+}
+
+void BLEDiagnostics::loop(bool otaActive) {
+  if (!subscribed_ || !log_ || otaActive || millis() - lastNotifyMs_ < 100) return;
+  FirmwareLogEntry entries[3];
+  const size_t count = firmwareLogCopySince(cursor_, entries, 3);
+  if (!count) return;
+  lastNotifyMs_ = millis();
+  for (size_t i = 0; i < count; ++i) {
+    log_->setValue(reinterpret_cast<const uint8_t *>(entries[i].line),
+                   strlen(entries[i].line));
+    if (!log_->notify()) break;
+    cursor_ = entries[i].sequence;
+  }
+}
+
+void BLEDiagnostics::disconnected() {
+  subscribed_ = false;
+  cursor_ = 0;
+}

@@ -5,6 +5,7 @@ Gated behind RUN_WIFI=1.
 
 Endpoints:
   GET  /api/status
+  GET  /api/logs
   GET  /api/jiggle
   POST /api/jiggle  {"enabled": true|false}
   POST /api/move    {"dx","dy"}
@@ -88,6 +89,15 @@ def test_http_status(base_url):
     assert body.get("name") == "usb-hid-s3"
     assert body.get("version")
     assert "jiggle" in body
+
+
+def test_http_logs_are_bounded_and_formatted(base_url):
+    code, body = _http("GET", f"{base_url}/api/logs")
+    assert code == 200
+    lines = body.get("lines")
+    assert isinstance(lines, list) and len(lines) <= 64
+    assert all(re.match(r"^\[\d+\]\[(DEBUG|INFO|WARN|ERROR)\]\[[A-Z]+\] ", line) for line in lines)
+    assert "latestSequence" in body
 
 
 def test_http_jiggle_toggle(base_url, serial_harness):

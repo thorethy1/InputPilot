@@ -100,6 +100,11 @@
 #define BLE_OTA_TIMEOUT_MS 15000UL
 #define BLE_OTA_ACK_BYTES (32UL * 1024UL)
 
+// InputPilot read-only diagnostics. Not included in the compact advertisement.
+#define BLE_DIAGNOSTICS_SERVICE_UUID "7d9f2001-4f4d-4f56-4552-484944000001"
+#define BLE_DIAGNOSTICS_INFO_UUID    "7d9f2002-4f4d-4f56-4552-484944000001"
+#define BLE_DIAGNOSTICS_LOG_UUID     "7d9f2003-4f4d-4f56-4552-484944000001"
+
 // WiFi STA control: TCP line server (same command grammar as serial).
 #define WIFI_CONTROL_PORT 3333
 

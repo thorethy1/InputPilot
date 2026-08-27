@@ -43,6 +43,26 @@ Use `PASS`, `FAIL`, or `NOT RUN`, and attach concise evidence or observations.
 | Re-advertising after disconnect | NOT RUN | |
 | BLE control while Wi-Fi enabled | NOT RUN | |
 | BLE OTA metadata/status while Wi-Fi enabled | NOT RUN | |
+| Firmware logs visible via BLE | NOT RUN | |
+| Firmware logs visible via Wi-Fi `/api/logs` | NOT RUN | |
+| BLE initial history and live notification | NOT RUN | |
+| Logs continue after BLE reconnect | NOT RUN | |
+| Diagnostics paused during BLE OTA | NOT RUN | |
+| Firmware version matches flashed image | NOT RUN | |
+| App version/build shown correctly | NOT RUN | |
+| Diagnostics contain no credentials or tokens | NOT RUN | |
+| Automatic OTA chooses Wi-Fi | NOT RUN | |
+| Prefer Bluetooth OTA chooses BLE | NOT RUN | |
+| Wi-Fi-only OTA | NOT RUN | |
+| BLE-only OTA | NOT RUN | |
+| Wi-Fi OTA reboot and reconnect | NOT RUN | |
+| BLE OTA reboot and reconnect | NOT RUN | |
+| Running/boot OTA partition switches | NOT RUN | |
+| BLE loss does not abort Wi-Fi OTA | NOT RUN | |
+| Wi-Fi loss does not abort BLE OTA | NOT RUN | |
+| Concurrent OTA attempt rejected | NOT RUN | |
+| Wi-Fi OTA abort/recovery | NOT RUN | |
+| BLE OTA abort/recovery | NOT RUN | |
 | BLE-only onboarding | NOT RUN | |
 | BLE auth success | NOT RUN | |
 | BLE auth failure | NOT RUN | |

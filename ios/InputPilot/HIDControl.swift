@@ -374,6 +374,166 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
 }
 
+struct AppVersionInfo: Equatable {
+    let version: String
+    let build: String
+    static func read(from info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> Self {
+        Self(version: info["CFBundleShortVersionString"] as? String ?? "Unknown",
+             build: info["CFBundleVersion"] as? String ?? "Unknown")
+    }
+    var display: String { build == "Unknown" ? version : "\(version) (\(build))" }
+}
+
+struct DiagnosticsMetadata: Codable, Equatable {
+    let product: String
+    let firmware: String
+    let board: String
+    let protocolVersion: Int
+    let otaSchema: Int
+    let deviceId: String
+    let runningPartition: String?
+    let bootPartition: String?
+    let uptime: UInt64?
+    let heap: UInt64?
+    enum CodingKeys: String, CodingKey {
+        case product, firmware, board, protocolVersion = "protocol", otaSchema, deviceId
+        case runningPartition, bootPartition, uptime, heap
+    }
+}
+
+struct FirmwareLogLine: Identifiable, Equatable {
+    let id = UUID()
+    let raw: String
+    let milliseconds: UInt64?
+    let level: String
+    let tag: String
+    init(_ raw: String) {
+        self.raw = raw
+        let parts = raw.split(separator: "]", maxSplits: 3, omittingEmptySubsequences: false)
+        milliseconds = parts.count >= 3 ? UInt64(parts[0].dropFirst()) : nil
+        level = parts.count >= 3 ? String(parts[1].dropFirst()).uppercased() : "UNKNOWN"
+        tag = parts.count >= 3 ? String(parts[2].dropFirst()).uppercased() : "UNKNOWN"
+    }
+    func matches(_ filter: FirmwareLogFilter) -> Bool {
+        switch filter {
+        case .all: true
+        case .warnings: level == "WARN" || level == "ERROR"
+        case .wifi: tag == "WIFI"
+        default: tag == filter.rawValue.uppercased()
+        }
+    }
+}
+
+enum FirmwareLogFilter: String, CaseIterable, Identifiable {
+    case all = "All", ble = "BLE", wifi = "Wi-Fi", ota = "OTA", hid = "HID", usb = "USB", warnings = "Warnings / Errors"
+    var id: String { rawValue }
+}
+
+struct FirmwareLogHistory {
+    static let capacity = 500
+    private(set) var lines: [FirmwareLogLine] = []
+    mutating func append(_ rawLines: [String]) {
+        lines.append(contentsOf: rawLines.filter { !$0.isEmpty }.map(FirmwareLogLine.init))
+        if lines.count > Self.capacity { lines.removeFirst(lines.count - Self.capacity) }
+    }
+    mutating func clear() { lines.removeAll(keepingCapacity: true) }
+}
+
+private struct FirmwareLogsResponse: Decodable { let lines: [String] }
+
+@MainActor final class FirmwareDiagnosticsManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+    @Published private(set) var lines: [FirmwareLogLine] = []
+    @Published private(set) var status = "Connecting…"
+    @Published private(set) var metadata: DiagnosticsMetadata?
+    @Published var paused = false
+    private let deviceId: String; private let mdnsHost: String; private let staIP: String?; private let token: String?
+    private let mode: ConnectionMode; private let deviceCapabilities: Set<String>
+    private var history = FirmwareLogHistory(); private var pending: [String] = []
+    private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var logCharacteristic: CBCharacteristic?
+    private var fallbackTask: Task<Void, Never>?; private var pollTask: Task<Void, Never>?
+    private var bluetoothScanEnabled = false
+    private let service = CBUUID(string: "7D9F2001-4F4D-4F56-4552-484944000001")
+    private let info = CBUUID(string: "7D9F2002-4F4D-4F56-4552-484944000001")
+    private let log = CBUUID(string: "7D9F2003-4F4D-4F56-4552-484944000001")
+    private var allowsBluetooth: Bool { mode != .wifiOnly && (deviceCapabilities.isEmpty || deviceCapabilities.contains("ble_diagnostics")) }
+    init(device: StoredDevice, mode: ConnectionMode = .automatic) { deviceId = device.deviceId.lowercased(); mdnsHost = device.mdnsHost; staIP = device.staIP; token = device.apiToken; self.mode = mode; deviceCapabilities = Set(device.capabilities); super.init(); central = CBCentralManager(delegate: self, queue: .main) }
+    func start() {
+        let wifi = !DeviceEndpointResolver.endpointURLs(mdnsHost: mdnsHost, staIP: staIP).isEmpty && deviceCapabilities.contains("wifi_diagnostics")
+        let ble = deviceCapabilities.isEmpty || deviceCapabilities.contains("ble_diagnostics")
+        let order = FirmwareUpdateManager.transportOrder(mode: mode, wifiAvailable: wifi, bluetoothAvailable: ble)
+        bluetoothScanEnabled = order.first == .bluetooth
+        if order.first == .wifi { Task { await startRESTFallback() } }
+        else if bluetoothScanEnabled, central.state == .poweredOn { scan() }
+        if order.dropFirst().contains(.wifi) { fallbackTask = Task { [weak self] in try? await Task.sleep(for: .seconds(6)); guard !Task.isCancelled else { return }; await self?.startRESTFallback() } }
+    }
+    func stop() {
+        fallbackTask?.cancel(); pollTask?.cancel(); central.stopScan()
+        if let peripheral, let logCharacteristic, logCharacteristic.isNotifying { peripheral.setNotifyValue(false, for: logCharacteristic) }
+        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        self.peripheral = nil; logCharacteristic = nil
+    }
+    func clear() { history.clear(); pending.removeAll(); lines = [] }
+    func setPaused(_ value: Bool) { paused = value; if !value, !pending.isEmpty { history.append(pending); pending.removeAll(); lines = history.lines } }
+    func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn, allowsBluetooth, bluetoothScanEnabled { scan() } else if central.state != .poweredOn && mode == .bluetoothOnly { status = "Bluetooth unavailable" } }
+    private func scan() {
+        guard !central.isScanning, peripheral == nil else { return }
+        status = "Searching via Bluetooth…"
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    }
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
+        guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
+        self.peripheral = peripheral; central.stopScan(); central.connect(peripheral)
+    }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { status = "Live via Bluetooth"; fallbackTask?.cancel(); pollTask?.cancel(); peripheral.delegate = self; peripheral.discoverServices([service]) }
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) { self.peripheral = nil; scheduleReconnectAndFallback() }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { status = "Bluetooth disconnected"; self.peripheral = nil; logCharacteristic = nil; scheduleReconnectAndFallback() }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == service }) else { Task { await startRESTFallback() }; return }
+        peripheral.discoverCharacteristics([info, log], for: service)
+    }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard error == nil else { return }
+        for characteristic in service.characteristics ?? [] {
+            if characteristic.uuid == info { peripheral.readValue(for: characteristic) }
+            if characteristic.uuid == log { logCharacteristic = characteristic; peripheral.setNotifyValue(true, for: characteristic) }
+        }
+    }
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard error == nil, let data = characteristic.value else { return }
+        if characteristic.uuid == info { metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: data) }
+        else if characteristic.uuid == log, let line = String(data: data, encoding: .utf8), line.hasPrefix("[") { receive([line]) }
+    }
+    private func receive(_ incoming: [String]) { if paused { pending.append(contentsOf: incoming); if pending.count > FirmwareLogHistory.capacity { pending.removeFirst(pending.count - FirmwareLogHistory.capacity) } } else { history.append(incoming); lines = history.lines } }
+    private func scheduleReconnectAndFallback() {
+        if central.state == .poweredOn, allowsBluetooth { scan() }
+        fallbackTask?.cancel(); fallbackTask = Task { [weak self] in try? await Task.sleep(for: .seconds(6)); guard !Task.isCancelled else { return }; await self?.startRESTFallback() }
+    }
+    private func startRESTFallback() async {
+        guard peripheral == nil, pollTask == nil else { return }
+        let endpoints = DeviceEndpointResolver.endpointURLs(mdnsHost: mdnsHost, staIP: staIP)
+        guard !endpoints.isEmpty else { status = "No diagnostics transport available"; return }
+        status = "Connecting via Wi-Fi…"
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                var loaded = false
+                for base in endpoints where !loaded {
+                    do { var request = URLRequest(url: base.appendingPathComponent("api/logs")); if let token, !token.isEmpty { request.setValue(token, forHTTPHeaderField: "X-API-Token") }; let (data, response) = try await URLSession.shared.data(for: request); guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }; let decoded = try JSONDecoder().decode(FirmwareLogsResponse.self, from: data); self.replaceREST(decoded.lines); var infoRequest = URLRequest(url: base.appendingPathComponent("api/diagnostics")); if let token, !token.isEmpty { infoRequest.setValue(token, forHTTPHeaderField: "X-API-Token") }; if let (infoData, _) = try? await URLSession.shared.data(for: infoRequest) { self.metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: infoData) }; loaded = true; self.status = "Live via Wi-Fi" } catch { continue }
+                }
+                if !loaded {
+                    self.status = "Diagnostics unavailable"
+                    if self.allowsBluetooth, self.central.state == .poweredOn, self.peripheral == nil {
+                        self.bluetoothScanEnabled = true
+                        self.scan()
+                    }
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+    private func replaceREST(_ raw: [String]) { guard !paused else { return }; history.clear(); history.append(raw); lines = history.lines }
+}
+
 enum FirmwareManifestValidator {
     static func validate(_ manifest: FirmwareManifest, firmware: Data? = nil) throws {
         guard manifest.product == "InputPilot" else { throw FirmwareValidationError.wrongProduct }
@@ -410,12 +570,15 @@ struct SemanticVersion: Comparable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { !(lhs < rhs) && !(rhs < lhs) }
 }
 
-final class FirmwareUpdateManager: ObservableObject {
+enum FirmwareUpdateTransportKind: String, Equatable { case wifi = "Wi-Fi", bluetooth = "Bluetooth" }
+
+final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDelegate {
     @Published private(set) var state: FirmwareUpdateState = .idle
     @Published private(set) var bytesSent = 0
     @Published private(set) var totalBytes = 0
     @Published private(set) var bytesPerSecond = 0.0
     @Published private(set) var installedVersion: String?
+    @Published private(set) var activeTransport: FirmwareUpdateTransportKind?
     var progress: Double { totalBytes == 0 ? 0 : Double(bytesSent) / Double(totalBytes) }
     var expectsReboot: Bool { Self.disconnectIsExpected(during: state) }
     static func disconnectIsExpected(during state: FirmwareUpdateState) -> Bool {
@@ -442,7 +605,28 @@ final class FirmwareUpdateManager: ObservableObject {
     private var preUpdateDeviceId: String?
     private var requiredSchema = 1
     private var rebootTimeoutWork: DispatchWorkItem?
+    private var wifiEndpoints: [URL] = []
+    private var wifiToken: String?
+    private var connectionMode: ConnectionMode = .automatic
+    private var capabilities: Set<String> = []
     var metadataHandler: ((BLEDeviceMetadata) -> Void)?
+
+    static func transportOrder(mode: ConnectionMode, wifiAvailable: Bool, bluetoothAvailable: Bool) -> [FirmwareUpdateTransportKind] {
+        let wifi = wifiAvailable ? [FirmwareUpdateTransportKind.wifi] : []
+        let ble = bluetoothAvailable ? [FirmwareUpdateTransportKind.bluetooth] : []
+        switch mode {
+        case .automatic, .preferWiFi: return wifi + ble
+        case .preferBluetooth: return ble + wifi
+        case .bluetoothOnly: return ble
+        case .wifiOnly: return wifi
+        }
+    }
+
+    func configure(device: StoredDevice, mode: ConnectionMode) {
+        wifiEndpoints = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
+        wifiToken = device.apiToken; connectionMode = mode; capabilities = Set(device.capabilities)
+        preUpdateDeviceId = device.deviceId
+    }
 
     func attach(peripheral: CBPeripheral, control: CBCharacteristic, data: CBCharacteristic, status: CBCharacteristic, hidControl: CBCharacteristic? = nil) {
         self.peripheral = peripheral; self.control = control; self.data = data; self.status = status; self.hidControl = hidControl
@@ -487,6 +671,21 @@ final class FirmwareUpdateManager: ObservableObject {
     }
 
     func install(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+        let wifiCapable = capabilities.contains("wifi_ota") && !wifiEndpoints.isEmpty
+        let bleCapable = (capabilities.isEmpty || capabilities.contains("ble_ota")) &&
+                         peripheral != nil && control != nil && data != nil
+        let order = Self.transportOrder(mode: connectionMode, wifiAvailable: wifiCapable, bluetoothAvailable: bleCapable)
+        guard let selected = order.first else { state = .failed("No permitted firmware update transport is available."); return }
+        if selected == .wifi {
+            do { try await installWiFi(firmware, version: version, expectedSHA256: expectedSHA256); return }
+            catch where order.contains(.bluetooth) && state == .preparing { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256); return }
+            catch { state = .failed(error.localizedDescription); return }
+        }
+        await installBLE(firmware, version: version, expectedSHA256: expectedSHA256)
+    }
+
+    private func installBLE(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+        activeTransport = .bluetooth
         guard let peripheral, let control, let data else { state = .failed("Connect to this InputPilot over Bluetooth first."); return }
         let metadata: FirmwareImageMetadata
         do { metadata = try FirmwareImageMetadata.parseAndValidate(firmware) }
@@ -527,8 +726,52 @@ final class FirmwareUpdateManager: ObservableObject {
 
     func cancel() {
         cancelled = true
-        if let peripheral, let control { peripheral.writeValue(Data("ABORT".utf8), for: control, type: .withResponse) }
+        if activeTransport == .wifi { Task { [wifiEndpoints, wifiToken] in for base in wifiEndpoints { var request = URLRequest(url: base.appendingPathComponent("api/ota/abort")); request.httpMethod = "POST"; if let wifiToken, !wifiToken.isEmpty { request.setValue(wifiToken, forHTTPHeaderField: "X-API-Token") }; if (try? await URLSession.shared.data(for: request)) != nil { break } } } }
+        else if let peripheral, let control { peripheral.writeValue(Data("ABORT".utf8), for: control, type: .withResponse) }
         state = .cancelled
+    }
+
+    private func installWiFi(_ firmware: Data, version: String, expectedSHA256: String?) async throws {
+        let metadata = try FirmwareImageMetadata.parseAndValidate(firmware)
+        guard metadata.version == version else { throw TransportError.failed("The target version does not match the firmware image metadata.") }
+        let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
+        if let expectedSHA256, expectedSHA256.lowercased() != digest { throw TransportError.failed("Firmware verification failed before transfer.") }
+        guard let base = wifiEndpoints.first else { throw TransportError.unavailable }
+        activeTransport = .wifi; cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema
+        totalBytes = firmware.count; bytesSent = 0; state = .preparing
+        var start = authorized(URLRequest(url: base.appendingPathComponent("api/ota/start")))
+        start.httpMethod = "POST"; start.timeoutInterval = 5; start.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        start.httpBody = try JSONSerialization.data(withJSONObject: ["protocol": 1, "version": version, "size": firmware.count, "sha256": digest])
+        let (_, startResponse) = try await URLSession.shared.data(for: start)
+        guard (startResponse as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw TransportError.failed("Wi-Fi OTA start was rejected.") }
+        state = .transferring; let boundary = "InputPilot-\(UUID().uuidString)"
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"firmware\"; filename=\"firmware.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8)
+        body.append(firmware); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var upload = authorized(URLRequest(url: base.appendingPathComponent("api/ota/firmware")))
+        upload.httpMethod = "POST"; upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        let started = Date()
+        let (responseData, response) = try await URLSession.shared.upload(for: upload, from: body, delegate: self)
+        guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else {
+            let message = (try? JSONSerialization.jsonObject(with: responseData) as? [String: Any])?["error"] as? String
+            throw TransportError.failed(message ?? "Wi-Fi firmware upload failed.")
+        }
+        bytesSent = firmware.count; bytesPerSecond = Double(firmware.count) / max(0.1, Date().timeIntervalSince(started)); state = .rebooting
+        try await verifyWiFiReboot(base: base, version: version)
+    }
+
+    private func authorized(_ request: URLRequest) -> URLRequest { var request = request; if let wifiToken, !wifiToken.isEmpty { request.setValue(wifiToken, forHTTPHeaderField: "X-API-Token") }; return request }
+    private func verifyWiFiReboot(base: URL, version: String) async throws {
+        state = .reconnecting; try? await Task.sleep(for: .seconds(2)); let deadline = Date().addingTimeInterval(60)
+        while Date() < deadline && !cancelled {
+            do { let status = try await DeviceAPIClient().status(baseURL: base, token: wifiToken); if status.deviceId?.lowercased() == preUpdateDeviceId?.lowercased(), status.version == version, status.otaSchema >= requiredSchema { installedVersion = status.version; if let id = status.deviceId { metadataHandler?(BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: id, deviceName: status.name, firmware: status.version, protocolVersion: status.protocolVersion, otaSchema: status.otaSchema, capabilities: status.capabilities, authRequired: status.authRequired)) }; state = .completed; return } } catch {}
+            try? await Task.sleep(for: .seconds(1))
+        }
+        throw TransportError.failed("Update could not be verified after Wi-Fi restart.")
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSentNow: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        guard activeTransport == .wifi, totalBytesExpectedToSend > 0 else { return }
+        DispatchQueue.main.async { self.bytesSent = min(self.totalBytes, Int(Double(totalBytesSent) / Double(totalBytesExpectedToSend) * Double(self.totalBytes))) }
     }
     func disconnected(expected: Bool) {
         guard expected else { state = .failed("Bluetooth connection lost. The existing firmware is still installed."); return }
@@ -632,7 +875,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         state = .connecting; central.connect(peripheral)
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([service, legacyService, otaService]) }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot); let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; if firmwareUpdater.activeTransport != .wifi { firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot) }; let authFailed = state == .authenticationFailed; state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline); characteristics.removeAll(); pendingServices = 0; self.peripheral = nil; reconnectWork?.cancel(); guard shouldReconnect && !authFailed else { return }; let work = DispatchWorkItem { [weak self] in self?.scan() }; reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work) }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { central.cancelPeripheralConnection(peripheral); return }; pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if error == nil { service.characteristics?.forEach { characteristics[$0.uuid] = $0 } }

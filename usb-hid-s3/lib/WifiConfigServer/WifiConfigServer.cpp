@@ -9,6 +9,9 @@
 #include "ControlAuth.h"
 #include "DeviceIdentity.h"
 #include "Logging.h"
+#include "FirmwareLog.h"
+#include "OTAEngine.h"
+#include <esp_ota_ops.h>
 #include "WifiCredentials.h"
 
 WifiConfigServer g_wifiConfig;
@@ -213,9 +216,9 @@ document.getElementById('save').onclick=save;
   json += "\"name\":\"" + String(FW_NAME) + "\",";
   json += "\"version\":\"" + String(FW_VERSION) + "\",";
   json += "\"endpoints\":[";
-  json += "\"GET /api/status\",\"GET /api/jiggle\",\"POST /api/jiggle\",";
+  json += "\"GET /api/status\",\"GET /api/diagnostics\",\"GET /api/logs\",\"GET /api/jiggle\",\"POST /api/jiggle\",";
   json += "\"POST /api/move\",\"POST /api/type\",\"POST /api/key\",\"POST /api/click\",";
-  json += "\"GET /api/wifi\",\"POST /api/wifi\"";
+  json += "\"GET /api/wifi\",\"POST /api/wifi\",\"POST /api/ota/start\",\"POST /api/ota/firmware\",\"GET /api/ota/status\",\"POST /api/ota/abort\"";
   json += "]}";
   s_server->send(200, "application/json", json);
 }
@@ -255,7 +258,7 @@ void WifiConfigServer::handleGetWifi() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"ble_ota\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
@@ -329,9 +332,109 @@ void WifiConfigServer::handleGetStatus() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"ble_ota\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handleGetLogs() {
+  if (!requireApiAuth()) return;
+  handleCors();
+  String json = "{\"lines\":[";
+  bool first = true;
+  uint32_t cursor = 0;
+  FirmwareLogEntry entries[4];
+  while (true) {
+    const size_t count = firmwareLogCopySince(cursor, entries, 4);
+    if (!count) break;
+    for (size_t i = 0; i < count; ++i) {
+      if (!first) json += ',';
+      first = false;
+      json += '"';
+      json += jsonEscape(String(entries[i].line));
+      json += '"';
+      cursor = entries[i].sequence;
+    }
+  }
+  json += "],\"latestSequence\":";
+  json += String(firmwareLogLatestSequence());
+  json += '}';
+  s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handleGetDiagnostics() {
+  if (!requireApiAuth()) return;
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  const esp_partition_t *boot = esp_ota_get_boot_partition();
+  DeviceIdentity::begin(); handleCors();
+  String json = "{\"product\":\"" + String(FW_PRODUCT) + "\",\"board\":\"" + String(FW_BOARD) +
+                "\",\"deviceId\":\"" + String(DeviceIdentity::deviceId()) + "\",\"firmware\":\"" + String(FW_VERSION) +
+                "\",\"protocol\":" + String(OTA_PROTOCOL_VERSION) + ",\"otaSchema\":" + String(OTA_SCHEMA_VERSION) +
+                ",\"runningPartition\":\"" + String(running ? running->label : "unknown") +
+                "\",\"bootPartition\":\"" + String(boot ? boot->label : "unknown") +
+                "\",\"uptime\":" + String(millis()) + ",\"heap\":" + String(ESP.getFreeHeap()) +
+                ",\"usbReady\":" + String(deviceHidReady() ? "true" : "false") +
+                ",\"otaState\":\"" + String(OTAProtocol::stateName(g_otaEngine.state())) + "\"}";
+  s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handleOtaStart() {
+  if (!requireApiAuth()) return;
+  const String body = bodyOrEmpty(); int protocol = 0, size = 0; String version, sha;
+  if (!jsonGetInt(body, "protocol", protocol) || !jsonGetInt(body, "size", size) ||
+      !jsonGetString(body, "version", version) || !jsonGetString(body, "sha256", sha)) {
+    sendErr(400, "invalid_metadata"); return;
+  }
+  OTAStartRequest request{static_cast<uint32_t>(protocol), static_cast<uint32_t>(size), version.c_str(), sha.c_str()};
+  if (g_otaEngine.active()) { sendErr(409, "update_in_progress"); return; }
+  if (!g_otaEngine.start(request, OTATransportOwner::WiFi)) {
+    sendErr(strcmp(g_otaEngine.error(), "update_in_progress") == 0 ? 409 : 400, g_otaEngine.error()); return;
+  }
+  otaUploadComplete_ = false;
+  otaLastActivityMs_ = millis();
+  sendOk("\"state\":\"receiving\",\"offset\":0");
+}
+
+void WifiConfigServer::handleOtaStatus() {
+  if (!requireApiAuth()) return;
+  handleCors();
+  const uint32_t total = g_otaEngine.total(), offset = g_otaEngine.received();
+  String json = "{\"state\":\"" + String(OTAProtocol::stateName(g_otaEngine.state())) +
+                "\",\"offset\":" + String(offset) + ",\"size\":" + String(total) +
+                ",\"progress\":" + String(total ? (offset * 100ULL / total) : 0) +
+                ",\"firmware\":\"" + String(FW_VERSION) + "\"";
+  if (strlen(g_otaEngine.error())) json += ",\"error\":\"" + String(g_otaEngine.error()) + "\"";
+  json += "}"; s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handleOtaAbort() {
+  if (!requireApiAuth()) return;
+  if (g_otaEngine.owner() != OTATransportOwner::WiFi || !g_otaEngine.active()) { sendErr(409, "not_receiving"); return; }
+  g_otaEngine.abort("user_cancelled", true); sendOk("\"state\":\"cancelled\"");
+}
+
+void WifiConfigServer::handleOtaUpload() {
+  HTTPUpload &upload = s_server->upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    const bool authOk = requireApiAuth();
+    otaUploadAuthorized_ = authOk && g_otaEngine.owner() == OTATransportOwner::WiFi && g_otaEngine.active() && upload.filename == "firmware.bin";
+    otaUploadComplete_ = false;
+    if (authOk && !otaUploadAuthorized_ && g_otaEngine.owner() == OTATransportOwner::WiFi) g_otaEngine.abort("invalid_upload");
+  } else if (upload.status == UPLOAD_FILE_WRITE && otaUploadAuthorized_) {
+    otaLastActivityMs_ = millis();
+    if (!g_otaEngine.write(g_otaEngine.received(), upload.buf, upload.currentSize)) otaUploadAuthorized_ = false;
+  } else if (upload.status == UPLOAD_FILE_END && otaUploadAuthorized_) {
+    otaUploadComplete_ = g_otaEngine.finish();
+    otaUploadAuthorized_ = false;
+  } else if (upload.status == UPLOAD_FILE_ABORTED && g_otaEngine.owner() == OTATransportOwner::WiFi) {
+    g_otaEngine.abort("upload_aborted"); otaUploadAuthorized_ = false;
+  }
+}
+
+void WifiConfigServer::handleOtaUploadComplete() {
+  if (!requireApiAuth()) return;
+  if (!otaUploadComplete_) { sendErr(400, strlen(g_otaEngine.error()) ? g_otaEngine.error() : "upload_failed"); return; }
+  sendOk("\"state\":\"rebooting\""); otaRebootAtMs_ = millis() + 1200;
 }
 
 void WifiConfigServer::handleGetJiggle() {
@@ -479,6 +582,14 @@ void WifiConfigServer::begin() {
 
   s_server->on("/api/status", HTTP_GET, [this]() { handleGetStatus(); });
   s_server->on("/api/status", HTTP_OPTIONS, [this]() { handleOptions(); });
+  s_server->on("/api/logs", HTTP_GET, [this]() { handleGetLogs(); });
+  s_server->on("/api/logs", HTTP_OPTIONS, [this]() { handleOptions(); });
+  s_server->on("/api/diagnostics", HTTP_GET, [this]() { handleGetDiagnostics(); });
+  s_server->on("/api/diagnostics", HTTP_OPTIONS, [this]() { handleOptions(); });
+  s_server->on("/api/ota/start", HTTP_POST, [this]() { handleOtaStart(); });
+  s_server->on("/api/ota/status", HTTP_GET, [this]() { handleOtaStatus(); });
+  s_server->on("/api/ota/abort", HTTP_POST, [this]() { handleOtaAbort(); });
+  s_server->on("/api/ota/firmware", HTTP_POST, [this]() { handleOtaUploadComplete(); }, [this]() { handleOtaUpload(); });
 
   s_server->on("/api/jiggle", HTTP_GET, [this]() { handleGetJiggle(); });
   s_server->on("/api/jiggle", HTTP_POST, [this]() { handlePostJiggle(); });
@@ -520,6 +631,9 @@ void WifiConfigServer::stop() {
 
 void WifiConfigServer::loop() {
   if (running_ && s_server) s_server->handleClient();
+  if (g_otaEngine.owner() == OTATransportOwner::WiFi && g_otaEngine.active() &&
+      millis() - otaLastActivityMs_ > 30000) g_otaEngine.abort("timeout");
+  if (otaRebootAtMs_ && static_cast<int32_t>(millis() - otaRebootAtMs_) >= 0) ESP.restart();
 }
 
 bool WifiConfigServer::takeReconnectRequest() {

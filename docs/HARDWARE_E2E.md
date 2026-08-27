@@ -29,6 +29,26 @@ Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS vers
 - With Wi-Fi connected and BLE active, repeat onboarding, HID control, OTA metadata/status read, disconnect, and reconnect. Confirm TCP/REST and Wi-Fi setup still work afterward.
 - From the Firmware screen verify BLE OTA capability and metadata, then begin an update far enough to receive `READY` before cancelling safely (or complete the release-candidate OTA test below).
 
+### Diagnostics and version information
+
+- Open Settings → Firmware Logs for a BLE-only device. Verify recent boot logs appear first, new logs arrive live, Pause/Resume works, reconnect resumes logging, and closing the view removes the notification subscription.
+- Repeat with a Wi-Fi-only device and verify authenticated `GET /api/logs` supplies the same bounded recent log format.
+- Exercise All, BLE, Wi-Fi, OTA, HID, USB, and Warnings / Errors filters; verify Clear affects only the local display and Copy All / text-file export work.
+- During BLE OTA verify diagnostics notifications pause rather than competing with the transfer, then resume afterward.
+- Confirm Settings About shows app version/build from the installed bundle and the selected device's last-known firmware, protocol, and OTA schema. Confirm Device Detail shows the same software values.
+- Compare the shown firmware version with the flashed image and inspect exported diagnostics for credentials. SSID/IP may appear; Wi-Fi passwords, API/auth tokens, and private credentials must not.
+
+### Transport-neutral OTA and recovery
+
+- With both transports available and Connection Mode Automatic, install `firmware.bin`; verify the UI says `Wi-Fi`, upload progress/speed advance, the device reboots, `/api/status` reconnects, and identity/version/schema verification completes.
+- Repeat in Prefer Bluetooth and Bluetooth Only; verify the existing BLE START/DATA/FINISH/ACK protocol remains compatible and the UI says `Bluetooth`.
+- Verify Prefer Wi-Fi, Wi-Fi Only, BLE-only, and Wi-Fi-only devices select only permitted/capable transports, with fallback only when the selected Connection Mode allows it.
+- Record `/api/diagnostics` before and after same-version OTA. Verify `runningPartition` and `bootPartition` switch together from `ota_0` to `ota_1` (or vice versa).
+- During Wi-Fi OTA disconnect BLE and confirm the HTTP upload continues. During BLE OTA disable Wi-Fi and confirm BLE transfer continues.
+- Start a second BLE or Wi-Fi OTA while one is receiving; verify `update_in_progress`, no second partition writer, and the first session remains healthy.
+- Abort each transport mid-transfer, power-cycle, and verify the previous firmware remains bootable. Then retry successfully.
+- Attempt initial-flash.bin, bootloader.bin, partitions.bin, boot_app0.bin, wrong SHA/size/version/product/board/protocol/schema and an interrupted upload; every case must fail without selecting a boot partition.
+
 - Mouse: move in every direction; left/right/middle click; vertical scroll; long-press drag and release.
 - German host layout: verify `y z ä ö ü ß @ € ? ! / \` plus upper-case umlauts and the documented symbol set.
 - US host layout: verify lower/upper-case letters, digits, shifted and unshifted symbols.

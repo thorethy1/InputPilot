@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -215,6 +216,7 @@ private struct FirmwareDeviceView: View {
     @State private var selectedName = ""
     @State private var targetVersion = ""
     @State private var manualValidationError: String?
+    @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
         let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken)
@@ -229,9 +231,9 @@ private struct FirmwareDeviceView: View {
     var body: some View {
         Form {
             Section("Device") { Picker("Active device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } }; LabeledContent("Installed", value: device.firmwareVersion ?? "Unknown"); if let manifest = releaseSource.manifest { LabeledContent("Available", value: manifest.version) } }
-            Section("Bluetooth OTA") {
-                if !device.capabilities.contains("ble_ota") || device.otaSchema < 1 {
-                    Label("This device needs a one-time USB migration before Bluetooth updates are available.", systemImage: "cable.connector").foregroundStyle(.secondary)
+            Section("Firmware Update") {
+                if !device.capabilities.isEmpty && !device.capabilities.contains("ble_ota") && !device.capabilities.contains("wifi_ota") || device.otaSchema < 1 {
+                    Label("This device needs a one-time USB migration before firmware updates are available.", systemImage: "cable.connector").foregroundStyle(.secondary)
                 } else {
                     Label("Available", systemImage: "checkmark.circle").foregroundStyle(AppColors.success)
                     Button("Check GitHub Releases") { Task { await releaseSource.check(installed: device.firmwareVersion) } }
@@ -241,19 +243,20 @@ private struct FirmwareDeviceView: View {
                     if let manualValidationError { Label(manualValidationError, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     Button("Choose Firmware File") { importing = true }
                     if selectedData != nil { TextField("Firmware version", text: $targetVersion).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                    if let selectedData { Button("Update Firmware") { Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: releaseSource.manifest?.version == targetVersion ? releaseSource.manifest?.sha256 : nil) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
+                    if let selectedData { Button("Update Firmware") { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: releaseSource.manifest?.version == targetVersion ? releaseSource.manifest?.sha256 : nil) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
                 }
             }
             if updater.state != .idle {
                 Section("Update status") {
                     ProgressView(value: updater.progress)
                     Text(statusText).accessibilityLabel("Firmware update status: \(statusText)")
+                    if let transport = updater.activeTransport { LabeledContent("Transport", value: transport.rawValue) }
                     if updater.totalBytes > 0 { Text("\(Int(updater.progress * 100))% · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesSent), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(updater.totalBytes), countStyle: .file)) · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesPerSecond), countStyle: .file))/s").font(.caption).foregroundStyle(.secondary) }
                     if case .transferring = updater.state { Button("Cancel", role: .cancel) { updater.cancel() }.tint(AppColors.primary) }
                 }
             }
         }
-        .task { await transport.connect() }
+        .task { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); await transport.connect() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data]) { result in
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
@@ -303,9 +306,71 @@ private struct FirmwareDeviceView: View {
 }
 
 private struct ConnectionSettingsView: View {
+    @Query(sort: \StoredDevice.displayName) private var devices: [StoredDevice]
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
-    var body: some View { Form { Section("Connection") { Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }; Text(explanation).font(.caption).foregroundStyle(.secondary) }; Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") } }.navigationTitle("Settings") }
+    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    private let appVersion = AppVersionInfo.read()
+    var body: some View {
+        Form {
+            Section("Connection") { Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }; Text(explanation).font(.caption).foregroundStyle(.secondary) }
+            Section("Diagnostics") {
+                if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
+                else { LabeledContent("Firmware Logs", value: "Add a device first") }
+            }
+            Section("About") {
+                LabeledContent("App Version", value: appVersion.version)
+                LabeledContent("Build", value: appVersion.build)
+                if let selected {
+                    if devices.count > 1 { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
+                    LabeledContent("Firmware", value: selected.firmwareVersion ?? "Unknown")
+                    LabeledContent("Protocol", value: String(selected.protocolVersion))
+                    LabeledContent("OTA Schema", value: String(selected.otaSchema))
+                    if let lastSeen = selected.lastSeen { LabeledContent("Last seen", value: lastSeen.formatted(date: .abbreviated, time: .shortened)) }
+                }
+            }
+            Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") }
+        }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+    }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "InputPilot automatically chooses the best available connection for each operation."; case .preferBluetooth: "Uses nearby Bluetooth first, then Wi-Fi when needed."; case .preferWiFi: "Uses Wi-Fi first, with Bluetooth as fallback."; case .bluetoothOnly: "Controls InputPilot nearby without Wi-Fi or internet."; case .wifiOnly: "Uses TCP or REST over your local Wi-Fi network." } }
+}
+
+private struct FirmwareLogDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+    var text: String
+    init(text: String) { self.text = text }
+    init(configuration: ReadConfiguration) throws { text = configuration.file.regularFileContents.flatMap { String(data: $0, encoding: .utf8) } ?? "" }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: Data(text.utf8)) }
+}
+
+private struct FirmwareLogsView: View {
+    let device: StoredDevice; let devices: [StoredDevice]; @Binding var selection: String
+    @StateObject private var manager: FirmwareDiagnosticsManager
+    @State private var filter = FirmwareLogFilter.all
+    @State private var exporting = false
+    init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) { self.device = device; self.devices = devices; _selection = selection; _manager = StateObject(wrappedValue: FirmwareDiagnosticsManager(device: device, mode: ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic)) }
+    private var visible: [FirmwareLogLine] { manager.lines.filter { $0.matches(filter) } }
+    private var allText: String { manager.lines.map(\.raw).joined(separator: "\n") }
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                if devices.count > 1 { Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
+                LabeledContent("Connection", value: manager.status)
+                Picker("Filter", selection: $filter) { ForEach(FirmwareLogFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu)
+            }.frame(maxHeight: devices.count > 1 ? 170 : 125)
+            ScrollViewReader { proxy in
+                ScrollView { LazyVStack(alignment: .leading, spacing: 4) { ForEach(visible) { line in Text(line.raw).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(line.level == "ERROR" ? .red : line.level == "WARN" ? .orange : .primary).frame(maxWidth: .infinity, alignment: .leading).id(line.id) } }.padding() }
+                    .background(.black.opacity(0.04))
+                    .onChange(of: visible.count) { _, _ in if !manager.paused, let last = visible.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } }
+            }
+        }
+        .navigationTitle("Firmware Logs").navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItemGroup(placement: .topBarTrailing) { Button(manager.paused ? "Resume" : "Pause") { manager.setPaused(!manager.paused) }; Button { manager.clear() } label: { Image(systemName: "trash") }; Button { UIPasteboard.general.string = allText } label: { Image(systemName: "doc.on.doc") }.accessibilityLabel("Copy All"); ShareLink(item: allText) { Image(systemName: "square.and.arrow.up") }; Button { exporting = true } label: { Image(systemName: "arrow.down.doc") }.accessibilityLabel("Export text file") } }
+        .fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: allText), contentType: .plainText, defaultFilename: "InputPilot-\(device.deviceId)-logs.txt") { _ in }
+        .task { manager.start() }
+        .onChange(of: manager.metadata) { _, metadata in guard let metadata else { return }; device.firmwareVersion = metadata.firmware; device.protocolVersion = metadata.protocolVersion; device.otaSchema = metadata.otaSchema; device.runningPartition = metadata.runningPartition; device.bootPartition = metadata.bootPartition; device.lastSeen = Date() }
+        .onDisappear { manager.stop() }
+    }
 }
 
 #Preview {

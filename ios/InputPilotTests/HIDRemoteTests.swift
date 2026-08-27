@@ -49,6 +49,49 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertFalse(BLEDeviceDiscoveryManager.advertisement(advertisement, matches: "00bbccddeeff"))
     }
 
+    func testBundleVersionHelper() {
+        let version = AppVersionInfo.read(from: ["CFBundleShortVersionString": "0.8.0", "CFBundleVersion": "123"])
+        XCTAssertEqual(version, AppVersionInfo(version: "0.8.0", build: "123"))
+        XCTAssertEqual(version.display, "0.8.0 (123)")
+        XCTAssertEqual(AppVersionInfo.read(from: [:]).version, "Unknown")
+    }
+
+    func testFirmwareLogParsingAndFiltering() {
+        let ble = FirmwareLogLine("[1234][INFO][BLE] advertising started")
+        let warning = FirmwareLogLine("[4321][WARN][APP] OTA failed")
+        let wifi = FirmwareLogLine("[5000][INFO][WIFI] connected")
+        XCTAssertEqual(ble.milliseconds, 1234); XCTAssertEqual(ble.level, "INFO"); XCTAssertEqual(ble.tag, "BLE")
+        XCTAssertTrue(ble.matches(.ble)); XCTAssertFalse(ble.matches(.ota))
+        XCTAssertTrue(warning.matches(.warnings)); XCTAssertTrue(wifi.matches(.wifi))
+    }
+
+    func testClientFirmwareLogHistoryIsBoundedAndClearable() {
+        var history = FirmwareLogHistory()
+        history.append((0..<(FirmwareLogHistory.capacity + 10)).map { "[\($0)][INFO][APP] line-\($0)" })
+        XCTAssertEqual(history.lines.count, FirmwareLogHistory.capacity)
+        XCTAssertTrue(history.lines.first?.raw.contains("line-10") == true)
+        history.clear(); XCTAssertTrue(history.lines.isEmpty)
+    }
+
+    func testDiagnosticsMetadataAndStoredFirmwareFallback() throws {
+        let metadata = try JSONDecoder().decode(DiagnosticsMetadata.self, from: Data(#"{"product":"InputPilot","firmware":"0.8.0","board":"esp32-s3-zero-4mb","protocol":1,"otaSchema":1,"deviceId":"aabbccddeeff","runningPartition":"ota_1","bootPartition":"ota_1"}"#.utf8))
+        XCTAssertEqual(metadata.firmware, "0.8.0"); XCTAssertEqual(metadata.protocolVersion, 1); XCTAssertEqual(metadata.otaSchema, 1)
+        XCTAssertEqual(metadata.runningPartition, "ota_1"); XCTAssertEqual(metadata.bootPartition, "ota_1")
+        let stored = StoredDevice(deviceId: "abc", displayName: "Desk", mdnsHost: "", firmwareVersion: "0.7.9", protocolVersion: 1, otaSchema: 1)
+        XCTAssertEqual(stored.firmwareVersion ?? "Unknown", "0.7.9")
+        stored.firmwareVersion = nil; XCTAssertEqual(stored.firmwareVersion ?? "Unknown", "Unknown")
+    }
+
+    func testFirmwareUpdateTransportSelectionRespectsConnectionMode() {
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .automatic, wifiAvailable: true, bluetoothAvailable: true), [.wifi, .bluetooth])
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .preferWiFi, wifiAvailable: true, bluetoothAvailable: true), [.wifi, .bluetooth])
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .preferBluetooth, wifiAvailable: true, bluetoothAvailable: true), [.bluetooth, .wifi])
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .wifiOnly, wifiAvailable: true, bluetoothAvailable: true), [.wifi])
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .bluetoothOnly, wifiAvailable: true, bluetoothAvailable: true), [.bluetooth])
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .automatic, wifiAvailable: false, bluetoothAvailable: true), [.bluetooth])
+        XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .automatic, wifiAvailable: true, bluetoothAvailable: false), [.wifi])
+    }
+
     func testManualFirmwareVersionComesFromImageMetadata() throws {
         XCTAssertEqual(try FirmwareImageMetadata.parseAndValidate(firmwareImage()).version, "0.8.1")
     }

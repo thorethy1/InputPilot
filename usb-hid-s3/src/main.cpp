@@ -27,6 +27,7 @@
 #include "StatusLed.h"
 #include "WifiCredentials.h"
 #include "BLEOTA.h"
+#include "OTAEngine.h"
 #include "FirmwareMetadata.h"
 
 // Kept in the application image so both the device and clients can reject a
@@ -209,16 +210,19 @@ static void printStatus() {
 bool deviceJiggleEnabled() { return g_jiggle.isEnabled(); }
 uint32_t deviceJiggleIntervalMs() { return g_jiggle.intervalMs(); }
 bool deviceHidReady() { return hidReady(); }
-bool deviceOtaActive() { return g_bleOta.active(); }
+bool deviceOtaActive() { return g_otaEngine.active(); }
 
 void handleCommandLine(const std::string &line, const char *source) {
   ParsedCommand c = CommandParser::parse(line);
-  if (g_bleOta.active() && c.type != CmdType::ReleaseAll) {
+  if (g_otaEngine.active() && c.type != CmdType::ReleaseAll) {
     LOG_WARN("command blocked during OTA src=%s", source ? source : "?");
     return;
   }
   if (c.type != CmdType::None)
-    LOG_CMD_DEBUG("src=%s line=\"%s\"", source ? source : "?", line.c_str());
+    // Never mirror raw commands into diagnostics: they may contain typed text,
+    // Wi-Fi passwords, or authentication tokens.
+    LOG_CMD_DEBUG("src=%s type=%u", source ? source : "?",
+                  static_cast<unsigned>(c.type));
   switch (c.type) {
     case CmdType::None:
       break;
@@ -285,9 +289,9 @@ void handleCommandLine(const std::string &line, const char *source) {
     }
     case CmdType::WifiStatus: {
       WifiCreds wc = WifiCredentials::get();
-      LOG_WIFI("wifi configured=%s ssid=\"%s\" pass_len=%u soft_ap=%s radio=%s",
+      LOG_WIFI("wifi configured=%s ssid=\"%s\" soft_ap=%s radio=%s",
                WifiCredentials::hasSsid() ? "yes" : "no",
-               wc.ssid.c_str(), (unsigned)wc.pass.length(),
+               wc.ssid.c_str(),
                g_radio.isSoftAp() ? "yes" : "no",
                g_radio.statusStr());
       break;

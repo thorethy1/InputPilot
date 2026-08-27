@@ -51,7 +51,7 @@ WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts Soft-AP
 `http://192.168.4.1/api/wifi`.
 With creds, STA joins and exposes:
 
-- **HTTP REST** on `:80` — `GET /api/status`, `GET|POST /api/jiggle`,
+- **HTTP REST** on `:80` — status/diagnostics/logs, control, and authenticated streaming Wi-Fi OTA via `/api/ota/*`.
   `POST /api/move|type|key|click`, plus `/api/wifi`
 - **TCP line control** on `:3333` (same grammar as serial)
 

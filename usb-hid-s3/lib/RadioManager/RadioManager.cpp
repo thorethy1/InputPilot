@@ -16,6 +16,8 @@
 #include "WifiCredentials.h"
 #include "WifiConfigServer.h"
 #include "BLEOTA.h"
+#include "BLEDiagnostics.h"
+#include "OTAEngine.h"
 
 RadioManager g_radio;
 
@@ -132,6 +134,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_bleConnected = false;
     s_bleAuthed = false;
     g_bleOta.disconnected();
+    g_bleDiagnostics.disconnected();
     deviceReleaseAll();
     if (s_bleTearingDown) {
       LOG_BLE("central disconnected reason=%d during teardown", reason);
@@ -166,7 +169,7 @@ void RadioManager::begin(RadioMode initial) {
 
 bool RadioManager::setMode(RadioMode m) {
   if (m == mode_) return true;
-  if (g_bleOta.active()) {
+  if (g_otaEngine.active()) {
     LOG_WARN("radio mode change blocked during OTA");
     return false;
   }
@@ -355,6 +358,12 @@ void RadioManager::startBle() {
       return;
     }
     LOG_BLE("OTA service created");
+    if (!g_bleDiagnostics.begin(s_bleServer)) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("diagnostics service creation failed");
+      return;
+    }
+    LOG_BLE("diagnostics service created");
 
     // NimBLE-Arduino 2.x registers all services together when the server is
     // started. NimBLEService::start() is a deprecated no-op in this version.
@@ -363,7 +372,7 @@ void RadioManager::startBle() {
       LOG_BLE("GATT server/service start failed");
       return;
     }
-    LOG_BLE("GATT services started (NUS, HID, OTA)");
+    LOG_BLE("GATT services started (NUS, HID, OTA, Diagnostics)");
 
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     if (!adv) {
@@ -439,6 +448,7 @@ void RadioManager::stopBle() {
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
   g_bleOta.loop();
+  g_bleDiagnostics.loop(g_otaEngine.active());
   if (!wifiEnabled()) return;
 
   // Soft-AP HTTP portal / REST (also handles reconnect requests from POST).

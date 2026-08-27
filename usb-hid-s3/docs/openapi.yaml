@@ -45,6 +45,8 @@ tags:
     description: USB HID mouse / keyboard / jiggle actions
   - name: wifi
     description: NVS WiFi credentials and Soft-AP provisioning
+  - name: firmware
+    description: Authenticated transport-neutral OTA operations
 
 paths:
   /:
@@ -98,6 +100,121 @@ paths:
       responses:
         "204":
           description: No content
+
+  /api/logs:
+    get:
+      tags: [status]
+      summary: Bounded recent in-memory firmware logs
+      operationId: getLogs
+      responses:
+        "200":
+          description: At most 64 formatted lines; history is cleared on reboot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lines, latestSequence]
+                properties:
+                  lines:
+                    type: array
+                    maxItems: 64
+                    items: { type: string }
+                  latestSequence: { type: integer, format: int64 }
+    options:
+      tags: [status]
+      summary: CORS preflight
+      responses:
+        "204":
+          description: No content
+
+  /api/diagnostics:
+    get:
+      tags: [status]
+      summary: Transport-neutral device and OTA-slot diagnostics
+      responses:
+        "200":
+          description: Device identity, software, partitions, uptime and heap
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [product, board, deviceId, firmware, protocol, otaSchema, runningPartition, bootPartition]
+                properties:
+                  product: { type: string }
+                  board: { type: string }
+                  deviceId: { type: string }
+                  firmware: { type: string }
+                  protocol: { type: integer }
+                  otaSchema: { type: integer }
+                  runningPartition: { type: string }
+                  bootPartition: { type: string }
+                  uptime: { type: integer, format: int64 }
+                  heap: { type: integer, format: int64 }
+
+  /api/ota/start:
+    post:
+      tags: [firmware]
+      summary: Start an authenticated Wi-Fi firmware update session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocol, version, size, sha256]
+              properties:
+                protocol: { type: integer, enum: [1] }
+                version: { type: string }
+                size: { type: integer, minimum: 1 }
+                sha256: { type: string, pattern: '^[0-9a-fA-F]{64}$' }
+      responses:
+        "200": { description: OTA engine ready for streaming upload }
+        "400": { description: Invalid or incompatible request }
+        "409": { description: Another OTA session is active }
+
+  /api/ota/firmware:
+    post:
+      tags: [firmware]
+      summary: Stream firmware.bin into the active Wi-Fi OTA session
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [firmware]
+              properties:
+                firmware: { type: string, format: binary }
+      responses:
+        "200": { description: "Image verified, boot partition selected, reboot scheduled" }
+        "400": { description: "Upload, hash, image, metadata, size, or version validation failed" }
+
+  /api/ota/status:
+    get:
+      tags: [firmware]
+      summary: Read shared OTA engine state and progress
+      responses:
+        "200":
+          description: Current OTA state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state: { type: string }
+                  offset: { type: integer }
+                  size: { type: integer }
+                  progress: { type: integer, minimum: 0, maximum: 100 }
+                  firmware: { type: string }
+                  error: { type: string }
+
+  /api/ota/abort:
+    post:
+      tags: [firmware]
+      summary: Abort the active Wi-Fi OTA session
+      responses:
+        "200": { description: Update cancelled safely }
+        "409": { description: No Wi-Fi OTA is receiving }
 
   /api/jiggle:
     get:

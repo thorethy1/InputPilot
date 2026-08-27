@@ -1,8 +1,7 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
-#include <Arduino.h>
-#include "USBCDC.h"
+void firmwareLog(const char *level, const char *tag, const char *format, ...);
 
 /**
  * Tagged logging for the USB HID S3 firmware.
@@ -17,16 +16,12 @@
  * main.cpp.
  */
 
-extern USBCDC UsbSerial;
-
 #ifndef DEBUG_LOGGING
 #define DEBUG_LOGGING 1
 #endif
 
-#define _LOG_PRINT(level, tag, fmt, ...) do { \
-  UsbSerial.printf("[%lu][%s][%s] " fmt "\n", \
-    (unsigned long)millis(), level, tag, ##__VA_ARGS__); \
-} while (0)
+#define _LOG_PRINT(level, tag, fmt, ...) \
+  firmwareLog(level, tag, fmt, ##__VA_ARGS__)
 
 #if DEBUG_LOGGING
   #define LOG_DEBUG(fmt, ...)       _LOG_PRINT("DEBUG", "APP", fmt, ##__VA_ARGS__)
@@ -53,5 +48,7 @@ extern USBCDC UsbSerial;
 #define LOG_RADIO(fmt, ...)  _LOG_PRINT("INFO", "RADIO", fmt, ##__VA_ARGS__)
 #define LOG_WIFI(fmt, ...)   _LOG_PRINT("INFO", "WIFI", fmt, ##__VA_ARGS__)
 #define LOG_BLE(fmt, ...)    _LOG_PRINT("INFO", "BLE", fmt, ##__VA_ARGS__)
+#define LOG_OTA(fmt, ...)    _LOG_PRINT("INFO", "OTA", fmt, ##__VA_ARGS__)
+#define LOG_OTA_WARN(fmt, ...) _LOG_PRINT("WARN", "OTA", fmt, ##__VA_ARGS__)
 
 #endif // LOGGING_H

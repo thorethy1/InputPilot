@@ -16,6 +16,7 @@
  *
  * Device control (same command sink as serial/TCP):
  *   GET  /api/status       device status JSON
+ *   GET  /api/logs         bounded recent firmware logs
  *   GET  /api/jiggle       {"enabled", "interval_ms"}
  *   POST /api/jiggle       {"enabled": true|false}
  *   POST /api/move         {"dx", "dy", "wheel"?}
@@ -50,6 +51,13 @@ private:
   void handlePostWifi();
   void handleClearWifi();
   void handleGetStatus();
+  void handleGetLogs();
+  void handleGetDiagnostics();
+  void handleOtaStart();
+  void handleOtaStatus();
+  void handleOtaAbort();
+  void handleOtaUpload();
+  void handleOtaUploadComplete();
   void handleGetJiggle();
   void handlePostJiggle();
   void handlePostMove();
@@ -66,6 +74,10 @@ private:
 
   bool running_ = false;
   bool reconnectPending_ = false;
+  bool otaUploadAuthorized_ = false;
+  bool otaUploadComplete_ = false;
+  uint32_t otaRebootAtMs_ = 0;
+  uint32_t otaLastActivityMs_ = 0;
 };
 
 extern WifiConfigServer g_wifiConfig;
