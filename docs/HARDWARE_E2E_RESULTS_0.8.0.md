@@ -32,6 +32,17 @@ Use `PASS`, `FAIL`, or `NOT RUN`, and attach concise evidence or observations.
 | BLE metadata and OTA schema 1 after clean install | NOT RUN | |
 | First OTA after clean install uses inactive slot | NOT RUN | |
 | BLE discovery | NOT RUN | |
+| BLE advertising visible (wifi+ble) | NOT RUN | |
+| BLE advertising visible (BLE-only) | NOT RUN | |
+| Manufacturer data is exact `IP` + device ID | NOT RUN | |
+| Device name present in scan response | NOT RUN | |
+| NUS, HID, and OTA services connectable | NOT RUN | |
+| Scan Nearby onboarding finds device | NOT RUN | |
+| Onboarding metadata read / save | NOT RUN | |
+| Stored-device BLE reconnect | NOT RUN | |
+| Re-advertising after disconnect | NOT RUN | |
+| BLE control while Wi-Fi enabled | NOT RUN | |
+| BLE OTA metadata/status while Wi-Fi enabled | NOT RUN | |
 | BLE-only onboarding | NOT RUN | |
 | BLE auth success | NOT RUN | |
 | BLE auth failure | NOT RUN | |

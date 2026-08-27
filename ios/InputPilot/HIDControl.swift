@@ -316,6 +316,13 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
               value.hasPrefix("IP"), value.dropFirst(2).allSatisfy({ $0.isHexDigit }) else { return nil }
         return String(value.dropFirst(2)).lowercased()
     }
+    static func advertisementDeviceId(_ advertisementData: [String: Any]) -> String? {
+        guard let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data else { return nil }
+        return deviceId(from: data)
+    }
+    static func advertisement(_ advertisementData: [String: Any], matches deviceId: String) -> Bool {
+        advertisementDeviceId(advertisementData) == deviceId.lowercased()
+    }
     func start() { devices = []; errorMessage = nil; isScanning = true; if central.state == .poweredOn { central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]) } }
     func stop() { central.stopScan(); isScanning = false }
     func metadata(for device: BLEDiscoveredDevice) async throws -> BLEDeviceMetadata {
@@ -336,8 +343,7 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         else if central.state != .poweredOn { isScanning = false }
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
-              let deviceId = Self.deviceId(from: data) else { return }
+        guard let deviceId = Self.advertisementDeviceId(advertisementData) else { return }
         peripherals[peripheral.identifier] = peripheral
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? "InputPilot"
         let found = BLEDiscoveredDevice(id: peripheral.identifier, deviceId: deviceId, name: name, rssi: RSSI.intValue)
@@ -609,7 +615,9 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
         state = state == .offline ? .connecting : .reconnecting
-        central.scanForPeripherals(withServices: [service, legacyService])
+        // InputPilot identity lives in manufacturer data. Service-filtered scans
+        // miss valid legacy advertisements when 128-bit UUIDs do not fit.
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         scanTimeoutWork?.cancel()
         let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
@@ -617,9 +625,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
     func connect() async { shouldReconnect = true; scan() }
     func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn { scan() } else { isAvailable = false; state = .offline } }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
-              let advertised = String(data: data, encoding: .utf8)?.lowercased(),
-              advertised.hasSuffix("ip" + deviceId) else { return }
+        guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
         self.peripheral = peripheral
         scanTimeoutWork?.cancel()
         central.stopScan()

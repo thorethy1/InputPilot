@@ -73,7 +73,7 @@ def ble_enabled(serial_harness):
     serial_harness.send_command("radio none")
     time.sleep(0.8)
     m = serial_harness.send_and_wait(
-        "radio ble", r"advertising as '" + DEVICE_NAME + r"'", timeout=8.0
+        "radio ble", r"advertising started as '" + DEVICE_NAME + r"'", timeout=8.0
     )
     assert DEVICE_NAME in m.line
     time.sleep(0.5)  # let advertising settle before scanning

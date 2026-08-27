@@ -34,6 +34,9 @@ public:
   // Short human-readable status, e.g. "none", "ble:adv", "wifi:1.2.3.4", "wifi:ap".
   const char *statusStr();
 
+  // Called by the NimBLE disconnect callback after re-advertising is checked.
+  void setBleAdvertisingStatus(bool active);
+
   // Push a line back to the connected control client (BLE notify / TCP write).
   void sendToControl(const char *line);
 

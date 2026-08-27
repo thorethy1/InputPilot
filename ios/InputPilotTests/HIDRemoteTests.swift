@@ -1,4 +1,5 @@
 import XCTest
+import CoreBluetooth
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
@@ -35,8 +36,17 @@ final class HIDRemoteTests: XCTestCase {
 
     func testBLEManufacturerIdentityFiltering() {
         XCTAssertEqual(BLEDeviceDiscoveryManager.deviceId(from: Data("IPaabbccddeeff".utf8)), "aabbccddeeff")
+        XCTAssertEqual(BLEDeviceDiscoveryManager.deviceId(from: Data("IPAABBCCDDEEFF".utf8)), "aabbccddeeff")
         XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data("random".utf8)))
         XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data("IPaabbccddeefg".utf8)))
+        XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data("xxIPaabbccddeeff".utf8)))
+    }
+
+    func testBLEDiscoveryAndReconnectShareExactIdentityMatching() {
+        let advertisement: [String: Any] = [CBAdvertisementDataManufacturerDataKey: Data("IPaabbccddeeff".utf8)]
+        XCTAssertEqual(BLEDeviceDiscoveryManager.advertisementDeviceId(advertisement), "aabbccddeeff")
+        XCTAssertTrue(BLEDeviceDiscoveryManager.advertisement(advertisement, matches: "AABBCCDDEEFF"))
+        XCTAssertFalse(BLEDeviceDiscoveryManager.advertisement(advertisement, matches: "00bbccddeeff"))
     }
 
     func testManualFirmwareVersionComesFromImageMetadata() throws {

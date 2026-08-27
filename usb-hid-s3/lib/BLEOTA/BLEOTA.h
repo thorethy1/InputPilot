@@ -10,7 +10,7 @@
 
 class BLEOTA {
  public:
-  void begin(NimBLEServer *server);
+  bool begin(NimBLEServer *server);
   void loop();
   void disconnected();
   bool active() const;

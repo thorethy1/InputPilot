@@ -19,6 +19,16 @@ Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS vers
 
 ## USB HID and transports
 
+### BLE visibility, onboarding, and reconnect
+
+- Boot once in `wifi+ble` and once in BLE-only mode. In each mode capture the serial log and verify GATT services started, advertising payload/scan-response sizes were logged, and `BLE advertising started` appears with no `ble:*fail` status.
+- Inspect the legacy advertisement with a BLE scanner: manufacturer data must be exactly ASCII `IP` plus the 12-lowercase-hex device ID. The scan response must contain `usb-hid-s3`; advertised 128-bit service UUIDs are intentionally not required.
+- In the iOS app choose Add Device → Bluetooth → Scan Nearby. Verify the board appears with the same device ID, OTA metadata is readable, and the device can be saved.
+- Close/reopen the saved device, verify the broad scan selects exactly the matching manufacturer identity, then verify BLE authentication and HID control.
+- Disconnect from the iPhone and verify the firmware logs a successful advertising restart. Reconnect the saved device without rebooting the ESP32.
+- With Wi-Fi connected and BLE active, repeat onboarding, HID control, OTA metadata/status read, disconnect, and reconnect. Confirm TCP/REST and Wi-Fi setup still work afterward.
+- From the Firmware screen verify BLE OTA capability and metadata, then begin an update far enough to receive `READY` before cancelling safely (or complete the release-candidate OTA test below).
+
 - Mouse: move in every direction; left/right/middle click; vertical scroll; long-press drag and release.
 - German host layout: verify `y z ä ö ü ß @ € ? ! / \` plus upper-case umlauts and the documented symbol set.
 - US host layout: verify lower/upper-case letters, digits, shifted and unshifted symbols.

@@ -39,17 +39,24 @@ bool BLEOTA::schemaAvailable() {
          next->size > 0;
 }
 
-void BLEOTA::begin(NimBLEServer *server) {
+bool BLEOTA::begin(NimBLEServer *server) {
+  if (!server) return false;
   NimBLEService *service = server->createService(BLE_OTA_SERVICE_UUID);
+  if (!service) return false;
   auto *controlCharacteristic = service->createCharacteristic(
       BLE_OTA_CONTROL_UUID, NIMBLE_PROPERTY::WRITE);
   auto *dataCharacteristic = service->createCharacteristic(
       BLE_OTA_DATA_UUID, NIMBLE_PROPERTY::WRITE_NR);
   status_ = service->createCharacteristic(
       BLE_OTA_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  if (!controlCharacteristic || !dataCharacteristic || !status_) {
+    status_ = nullptr;
+    return false;
+  }
   controlCharacteristic->setCallbacks(new ControlCallbacks(*this));
   dataCharacteristic->setCallbacks(new DataCallbacks(*this));
   notify("IDLE");
+  return true;
 }
 
 bool BLEOTA::active() const {

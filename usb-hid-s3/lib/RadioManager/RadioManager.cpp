@@ -30,6 +30,7 @@ volatile bool s_bleConnected = false;
 // Set while stopBle() is releasing the stack so the disconnect callback does
 // NOT restart advertising mid-teardown (which crashes deinit(true)).
 volatile bool s_bleTearingDown = false;
+bool s_bleReady = false;
 
 bool s_bleAuthed = false;
 bool s_tcpAuthed = false;
@@ -137,7 +138,14 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       return;
     }
     LOG_BLE("central disconnected reason=%d; re-advertising", reason);
-    NimBLEDevice::startAdvertising();
+    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+    if (!s_bleReady || !adv || !adv->start() || !adv->isAdvertising()) {
+      g_radio.setBleAdvertisingStatus(false);
+      LOG_BLE("advertising restart failed");
+      return;
+    }
+    g_radio.setBleAdvertisingStatus(true);
+    LOG_BLE("advertising restarted");
   }
 };
 
@@ -280,44 +288,125 @@ void RadioManager::startBle() {
   // We never NimBLEDevice::deinit() (see stopBle), so on a re-select the stack
   // is already initialized and we only need to re-advertise.
   if (!NimBLEDevice::isInitialized()) {
-    NimBLEDevice::init(BLE_DEVICE_NAME);
+    LOG_BLE("init start");
+    if (!NimBLEDevice::init(BLE_DEVICE_NAME)) {
+      snprintf(status_, sizeof(status_), "ble:init-failed");
+      LOG_BLE("init failed");
+      return;
+    }
+    LOG_BLE("initialized");
     s_bleServer = NimBLEDevice::createServer();
+    if (!s_bleServer) {
+      snprintf(status_, sizeof(status_), "ble:server-fail");
+      LOG_BLE("server creation failed");
+      return;
+    }
     s_bleServer->setCallbacks(&s_serverCallbacks);
+    LOG_BLE("server created");
 
     NimBLEService *svc = s_bleServer->createService(BLE_NUS_SERVICE_UUID);
+    if (!svc) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("NUS service creation failed");
+      return;
+    }
     NimBLECharacteristic *rx = svc->createCharacteristic(
         BLE_NUS_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    rx->setCallbacks(&s_rxCallbacks);
     s_bleTx = svc->createCharacteristic(BLE_NUS_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
+    if (!rx || !s_bleTx) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("NUS characteristic creation failed");
+      return;
+    }
+    rx->setCallbacks(&s_rxCallbacks);
+    LOG_BLE("NUS service created");
 
     NimBLEService *hidSvc = s_bleServer->createService(BLE_HID_SERVICE_UUID);
+    if (!hidSvc) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("HID service creation failed");
+      return;
+    }
     for (const char *uuid : {BLE_HID_CONTROL_UUID, BLE_HID_MOUSE_UUID,
                              BLE_HID_KEYBOARD_UUID}) {
       NimBLECharacteristic *characteristic = hidSvc->createCharacteristic(
           uuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+      if (!characteristic) {
+        snprintf(status_, sizeof(status_), "ble:service-fail");
+        LOG_BLE("HID characteristic creation failed uuid=%s", uuid);
+        return;
+      }
       characteristic->setCallbacks(&s_binaryCallbacks);
     }
     NimBLECharacteristic *status = hidSvc->createCharacteristic(
         BLE_HID_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    if (!status) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("HID status characteristic creation failed");
+      return;
+    }
     const uint8_t statusValue[] = {HIDProtocol::Version, 0x00};
     status->setValue(statusValue, sizeof(statusValue));
 
-    g_bleOta.begin(s_bleServer);
+    LOG_BLE("HID service created");
+    if (!g_bleOta.begin(s_bleServer)) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("OTA service creation failed");
+      return;
+    }
+    LOG_BLE("OTA service created");
+
+    // NimBLE-Arduino 2.x registers all services together when the server is
+    // started. NimBLEService::start() is a deprecated no-op in this version.
+    if (!s_bleServer->start()) {
+      snprintf(status_, sizeof(status_), "ble:service-fail");
+      LOG_BLE("GATT server/service start failed");
+      return;
+    }
+    LOG_BLE("GATT services started (NUS, HID, OTA)");
 
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-    adv->addServiceUUID(BLE_NUS_SERVICE_UUID);
-    adv->addServiceUUID(BLE_HID_SERVICE_UUID);
-    adv->addServiceUUID(BLE_OTA_SERVICE_UUID);
-    adv->setName(BLE_DEVICE_NAME);
-    // Stable identity used by InputPilot to select the intended StoredDevice.
-    // Prefix keeps the payload self-describing while preserving legacy names.
-    adv->setManufacturerData(std::string("IP") + DeviceIdentity::deviceId());
+    if (!adv) {
+      snprintf(status_, sizeof(status_), "ble:adv-fail");
+      LOG_BLE("advertising object unavailable");
+      return;
+    }
+    const std::string identity = std::string("IP") + DeviceIdentity::deviceId();
+    NimBLEAdvertisementData advData;
+    NimBLEAdvertisementData scanData;
+    const bool identityOk = advData.setFlags(BLE_HS_ADV_F_DISC_GEN |
+                                              BLE_HS_ADV_F_BREDR_UNSUP) &&
+                            advData.setManufacturerData(identity);
+    const bool nameOk = scanData.setName(BLE_DEVICE_NAME);
+    const bool payloadOk = identityOk && nameOk &&
+                           adv->setAdvertisementData(advData) &&
+                           adv->setScanResponseData(scanData);
+    adv->enableScanResponse(true);
+    LOG_BLE("advertising payload bytes=%u scan-response bytes=%u",
+            static_cast<unsigned>(advData.getPayload().size()),
+            static_cast<unsigned>(scanData.getPayload().size()));
+    if (!payloadOk || advData.getDataLocation(BLE_HS_ADV_TYPE_MFG_DATA) < 0) {
+      snprintf(status_, sizeof(status_), "ble:adv-fail");
+      LOG_BLE("advertising configuration failed; manufacturer data missing");
+      return;
+    }
+    LOG_BLE("manufacturer identity configured id=%s", DeviceIdentity::deviceId());
+    s_bleReady = true;
   }
   s_bleTearingDown = false;
-  NimBLEDevice::startAdvertising();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (!s_bleReady || !adv || !adv->start() || !adv->isAdvertising()) {
+    snprintf(status_, sizeof(status_), "ble:adv-fail");
+    LOG_BLE("advertising start failed");
+    return;
+  }
 
   snprintf(status_, sizeof(status_), "ble:adv");
-  LOG_BLE("advertising as '%s' (NUS control)", BLE_DEVICE_NAME);
+  LOG_BLE("advertising started as '%s'", BLE_DEVICE_NAME);
+}
+
+void RadioManager::setBleAdvertisingStatus(bool active) {
+  snprintf(status_, sizeof(status_), active ? "ble:adv" : "ble:adv-fail");
 }
 
 void RadioManager::stopBle() {
@@ -342,6 +431,7 @@ void RadioManager::stopBle() {
     }
   }
   s_bleConnected = false;
+  s_bleAuthed = false;
   s_bleLineBuf.clear();
   LOG_BLE("stopped (advertising off; stack idle)");
 }
