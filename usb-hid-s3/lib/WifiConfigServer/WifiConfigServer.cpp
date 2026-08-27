@@ -384,8 +384,21 @@ void WifiConfigServer::handleGetDiagnostics() {
                 ",\"decodeErrors\":" + String(hid.decodeErrors) + ",\"queued\":" + String(hid.queued) +
                 ",\"queueRejected\":" + String(hid.queueRejected) + ",\"executed\":" + String(hid.executed) +
                 ",\"failed\":" + String(hid.executeFailed) + ",\"mouseExecuted\":" + String(hid.mouseExecuted) +
-                ",\"keyboardExecuted\":" + String(hid.keyboardExecuted) + ",\"lastSource\":\"" + String(hid.lastSource) +
-                "\",\"lastType\":\"" + String(hid.lastType) + "\",\"lastSequence\":" + String(hid.lastSequence) + "}}";
+                ",\"keyboardExecuted\":" + String(hid.keyboardExecuted) +
+                ",\"usbReportsAttempted\":" + String(hid.usbReportsAttempted) +
+                ",\"usbReportsSucceeded\":" + String(hid.usbReportsSucceeded) +
+                ",\"usbReportsFailed\":" + String(hid.usbReportsFailed) +
+                ",\"lastSource\":\"" + String(hid.lastSource) +
+                "\",\"lastType\":\"" + String(hid.lastType) + "\",\"lastSequence\":" + String(hid.lastSequence) +
+                ",\"lastPhase\":\"" + String(hid.lastPhaseName) +
+                "\",\"previousBreadcrumbValid\":" + String(hid.previousBreadcrumbValid ? "true" : "false") +
+                ",\"previousSequence\":" + String(hid.previousSequence) +
+                ",\"previousSource\":\"" + String(hid.previousSource) +
+                "\",\"previousEventType\":" + String(hid.previousEventType) +
+                ",\"previousPhase\":" + String(hid.previousPhase) +
+                ",\"previousBleRxType\":" + String(hid.previousBleRxType) +
+                ",\"previousBleRxLength\":" + String(hid.previousBleRxLength) +
+                ",\"previousQueueDepth\":" + String(hid.previousQueueDepth) + "}}";
   s_server->send(200, "application/json", json);
 }
 

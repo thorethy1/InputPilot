@@ -49,10 +49,10 @@ The preferred single-image method is:
 
 ```bash
 esptool --chip esp32s3 erase-flash
-esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.1-initial-flash.bin
+esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.2-initial-flash.bin
 ```
 
-Alternatively, extract `InputPilot-v0.8.1-initial-flash.zip` and flash the individual images. These offsets are exported from the actual pinned PlatformIO/pioarduino build and recorded in `initial-flash-manifest.json` and `flash_args`:
+Alternatively, extract `InputPilot-v0.8.2-initial-flash.zip` and flash the individual images. These offsets are exported from the actual pinned PlatformIO/pioarduino build and recorded in `initial-flash-manifest.json` and `flash_args`:
 
 ```bash
 esptool --chip esp32s3 write-flash \
@@ -63,6 +63,19 @@ esptool --chip esp32s3 write-flash \
 ```
 
 Power-cycle after flashing. Future releases use only `firmware.bin` in the iOS Firmware tab; never use the merged image or the other three `.bin` files for BLE OTA.
+
+### Panic core dump
+
+The pinned Arduino-ESP32/IDF build already enables ELF core dumps to the
+`coredump` partition at `0x3d0000` (size `0x10000`). Build the exact source
+revision that crashed, install Espressif's decoder, and read it directly:
+
+```bash
+python3 -m pip install esp-coredump
+./scripts/read_coredump.sh /dev/ttyACM0 .pio/build/esp32s3/firmware.elf
+```
+
+Do not decode against a different build: addresses and stacks will not match.
 
 ## Status LED
 

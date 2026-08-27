@@ -6,6 +6,8 @@
 #include <ESPmDNS.h>
 
 #include <NimBLEDevice.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 #include "Config.h"
 #include "ControlAuth.h"
@@ -40,6 +42,14 @@ bool s_tcpAuthed = false;
 WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
 WiFiClient s_tcpClient;
 std::string s_tcpLineBuf;
+
+struct BLEControlFrame {
+  uint16_t length = 0;
+  uint8_t bytes[242]{};
+};
+QueueHandle_t s_bleControlQueue = nullptr;
+constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
+constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
 
 void sendControlReply(const char *source, const char *reply) {
   if (!reply) return;
@@ -100,7 +110,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 
 class BinaryCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
-    const std::string value = c->getValue();
+    const std::string &value = c->getValue();
     if (value.empty()) return;
     // Authentication is performed once through the backwards-compatible text
     // control characteristic before binary event characteristics are accepted.
@@ -108,15 +118,32 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
       LOG_INFO("binary control rejected: BLE session not authenticated");
       return;
     }
-    HIDMessage message;
-    std::string error;
-    if (!HIDProtocol::decode(reinterpret_cast<const uint8_t *>(value.data()),
-                             value.size(), message, error)) {
+    if (!s_bleControlQueue || value.size() > BLE_CONTROL_FRAME_MAX) {
       recordHIDDecodeError("ble-binary", value.size());
-      LOG_WARN("binary control rejected: %s", error.c_str());
       return;
     }
-    recordHIDBleFrame(static_cast<uint8_t>(message.type), value.size());
+    BLEControlFrame frame;
+    frame.length = static_cast<uint16_t>(value.size());
+    memcpy(frame.bytes, value.data(), value.size());
+    if (xQueueSend(s_bleControlQueue, &frame, 0) != pdTRUE)
+      recordHIDDecodeError("ble-binary", value.size());
+  }
+};
+
+void processBLEControlFrames(size_t budget = 8) {
+  if (!s_bleControlQueue) return;
+  BLEControlFrame frame;
+  for (size_t processed = 0;
+       processed < budget && xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
+       ++processed) {
+    HIDMessage message;
+    std::string error;
+    if (!HIDProtocol::decode(frame.bytes, frame.length, message, error)) {
+      recordHIDDecodeError("ble-binary", frame.length);
+      LOG_WARN("binary control rejected: %s", error.c_str());
+      continue;
+    }
+    recordHIDBleFrame(static_cast<uint8_t>(message.type), frame.length);
     HIDEvent event;
     bool isEvent = true;
     switch (message.type) {
@@ -149,7 +176,7 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
       s_bleTx->notify();
     }
   }
-};
+}
 
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override {
@@ -162,6 +189,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     s_bleAuthed = false;
     g_bleOta.disconnected();
     g_bleDiagnostics.disconnected();
+    if (s_bleControlQueue) xQueueReset(s_bleControlQueue);
     requestReleaseAll("ble-disconnect");
     if (s_bleTearingDown) {
       LOG_BLE("central disconnected reason=%d during teardown", reason);
@@ -329,6 +357,14 @@ void RadioManager::startBle() {
   // We never NimBLEDevice::deinit() (see stopBle), so on a re-select the stack
   // is already initialized and we only need to re-advertise.
   if (!NimBLEDevice::isInitialized()) {
+    if (!s_bleControlQueue)
+      s_bleControlQueue = xQueueCreate(BLE_CONTROL_QUEUE_DEPTH,
+                                      sizeof(BLEControlFrame));
+    if (!s_bleControlQueue) {
+      snprintf(status_, sizeof(status_), "ble:queue-fail");
+      LOG_BLE("control queue creation failed");
+      return;
+    }
     LOG_BLE("init start");
     if (!NimBLEDevice::init(BLE_DEVICE_NAME)) {
       snprintf(status_, sizeof(status_), "ble:init-failed");
@@ -485,6 +521,9 @@ void RadioManager::stopBle() {
 
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
+  // Decode binary writes outside NimBLE's host callback. This keeps STL,
+  // KeyMap, logging and HID queue work off the 4 KiB BLE host stack.
+  processBLEControlFrames();
   g_bleOta.loop();
   g_bleDiagnostics.loop(g_otaEngine.active());
   if (!wifiEnabled()) return;

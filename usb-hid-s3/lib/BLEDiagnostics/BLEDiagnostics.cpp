@@ -53,7 +53,7 @@ bool BLEDiagnostics::begin(NimBLEServer *server) {
 
 void BLEDiagnostics::refreshInfo() {
   if (!info_) return;
-  char json[640];
+  char json[1024];
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
   const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
@@ -65,7 +65,11 @@ void BLEDiagnostics::refreshInfo() {
            "\"hid\":{\"rxBle\":%lu,\"rxTcp\":%lu,\"rxRest\":%lu,\"rxSerial\":%lu,"
            "\"decoded\":%lu,\"decodeErrors\":%lu,\"queued\":%lu,\"queueRejected\":%lu,"
            "\"executed\":%lu,\"failed\":%lu,\"mouseExecuted\":%lu,\"keyboardExecuted\":%lu,"
-           "\"lastSource\":\"%s\",\"lastType\":\"%s\",\"lastSequence\":%lu}}",
+           "\"usbReportsAttempted\":%lu,\"usbReportsSucceeded\":%lu,\"usbReportsFailed\":%lu,"
+           "\"lastSource\":\"%s\",\"lastType\":\"%s\",\"lastSequence\":%lu,\"lastPhase\":\"%s\","
+           "\"previousBreadcrumbValid\":%s,\"previousSequence\":%lu,\"previousSource\":\"%s\","
+           "\"previousEventType\":%u,\"previousPhase\":%u,\"previousBleRxType\":%u,"
+           "\"previousBleRxLength\":%lu,\"previousQueueDepth\":%lu}}",
            FW_PRODUCT, FW_VERSION, FW_BOARD, DeviceIdentity::deviceId(),
            FW_GIT_COMMIT, deviceResetReason(),
            running ? running->label : "unknown", boot ? boot->label : "unknown",
@@ -73,7 +77,11 @@ void BLEDiagnostics::refreshInfo() {
            (unsigned long)hid.rxBle, (unsigned long)hid.rxTcp, (unsigned long)hid.rxRest, (unsigned long)hid.rxSerial,
            (unsigned long)hid.decoded, (unsigned long)hid.decodeErrors, (unsigned long)hid.queued, (unsigned long)hid.queueRejected,
            (unsigned long)hid.executed, (unsigned long)hid.executeFailed, (unsigned long)hid.mouseExecuted, (unsigned long)hid.keyboardExecuted,
-           hid.lastSource, hid.lastType, (unsigned long)hid.lastSequence);
+           (unsigned long)hid.usbReportsAttempted, (unsigned long)hid.usbReportsSucceeded, (unsigned long)hid.usbReportsFailed,
+           hid.lastSource, hid.lastType, (unsigned long)hid.lastSequence, hid.lastPhaseName,
+           hid.previousBreadcrumbValid ? "true" : "false", (unsigned long)hid.previousSequence,
+           hid.previousSource, hid.previousEventType, hid.previousPhase, hid.previousBleRxType,
+           (unsigned long)hid.previousBleRxLength, (unsigned long)hid.previousQueueDepth);
   info_->setValue(reinterpret_cast<const uint8_t *>(json), strlen(json));
 }
 

@@ -1,11 +1,11 @@
 # InputPilot hardware E2E test plan
 
-## v0.8.1 BLE OTA release gate (Waveshare ESP32-S3-Zero, 4 MB)
+## v0.8.2 HID/BLE test-candidate gate (Waveshare ESP32-S3-Zero, 4 MB)
 
 This gate cannot be replaced by simulator or host tests. Record board revision, iPhone/iOS version, source/target firmware versions, and observed USB HID result.
 
 1. Run `esptool --chip esp32s3 erase-flash`; do not rely on NVS, OTA metadata, or any data from an older flash.
-2. Perform an initial USB flash with `InputPilot-v0.8.1-initial-flash.bin`. Repeat the clean-install test with the individual release images (`bootloader.bin`, `partitions.bin`, `boot_app0.bin`, and `firmware.bin`) at the offsets in `initial-flash-manifest.json`.
+2. Perform an initial USB flash with `InputPilot-v0.8.2-initial-flash.bin`. Repeat the clean-install test with the individual release images (`bootloader.bin`, `partitions.bin`, `boot_app0.bin`, and `firmware.bin`) at the offsets in `initial-flash-manifest.json`.
 3. For each method, power-cycle and verify USB HID enumeration as **InputPilot S3**, BLE advertising/metadata, product/board/version identity, `otaSchema == 1`, the running `ota_0` partition, and the expected two-slot partition table. Confirm `boot_app0.bin` is present in the package.
 4. Connect the iPhone over BLE, complete token authentication when configured, and perform the first OTA after the erased-flash installation. Verify that the inactive slot is used and becomes bootable without pre-existing OTA data.
 5. Confirm 100% transfer, SHA-256 verification, reboot, automatic reconnect, expected new version, and working USB mouse/keyboard/release-all.
@@ -13,9 +13,9 @@ This gate cannot be replaced by simulator or host tests. Record board revision, 
 7. Start another update and disconnect Bluetooth near 50%. Power-cycle the ESP32, verify that the prior firmware and USB HID still work, then complete a fresh OTA successfully.
 8. Exercise BLE-only, Wi-Fi-only, and combined Automatic control plus small/large iPhone layouts, portrait/landscape where supported, Light/Dark Mode, Dynamic Type, VoiceOver, Reduce Motion, and Increased Contrast.
 
-Attach the completed observation record to the v0.8.1 release. If physical hardware or a signed iOS build is unavailable, mark this gate **not run**; do not infer success from compilation.
+If physical hardware or a signed iOS build is unavailable, mark this gate **NOT RUN**; do not infer success from compilation or release publication.
 
-Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use the v0.8.1 release-candidate firmware and an app built with Xcode 26 or newer. Release results belong in `HARDWARE_E2E_RESULTS_0.8.1.md`.
+Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS version, Xcode version, transport, and pass/fail evidence for every run. Use the v0.8.2 test-candidate firmware and an app built with Xcode 26 or newer. Results belong in `HARDWARE_E2E_RESULTS_0.8.2.md`.
 
 ## USB HID and transports
 

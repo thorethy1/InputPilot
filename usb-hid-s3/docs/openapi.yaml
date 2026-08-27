@@ -21,7 +21,7 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.8.1
+  version: 0.8.2
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -174,9 +174,21 @@ paths:
                       failed: { type: integer, format: int64 }
                       mouseExecuted: { type: integer, format: int64 }
                       keyboardExecuted: { type: integer, format: int64 }
+                      usbReportsAttempted: { type: integer, format: int64 }
+                      usbReportsSucceeded: { type: integer, format: int64 }
+                      usbReportsFailed: { type: integer, format: int64 }
                       lastSource: { type: string }
                       lastType: { type: string }
                       lastSequence: { type: integer, format: int64 }
+                      lastPhase: { type: string }
+                      previousBreadcrumbValid: { type: boolean }
+                      previousSequence: { type: integer, format: int64 }
+                      previousSource: { type: string }
+                      previousEventType: { type: integer }
+                      previousPhase: { type: integer }
+                      previousBleRxType: { type: integer }
+                      previousBleRxLength: { type: integer, format: int64 }
+                      previousQueueDepth: { type: integer, format: int64 }
 
   /api/ota/start:
     post:

@@ -30,6 +30,7 @@
 #include "OTAEngine.h"
 #include "FirmwareMetadata.h"
 #include "HIDEventQueue.h"
+#include <esp_attr.h>
 #include <esp_system.h>
 #include <atomic>
 
@@ -50,7 +51,17 @@ extern "C" const char inputPilotFirmwareMetadata[] __attribute__((used)) =
 USBCDC UsbSerial(0);
 static USBHIDMouse Mouse;
 static USBHIDKeyboard Keyboard;
-static USBHID g_hid;  // standalone handle used only for ready() (global HID state)
+// Arduino-ESP32 registers the Mouse/Keyboard descriptors in their constructors,
+// but all USBHID objects share one TinyUSB interface and one TX mutex. Use one
+// explicit handle for every report so readiness, result and report IDs cannot
+// diverge between mouse, keyboard and release-all paths.
+static USBHID g_hid;
+static_assert(HID_RID_KEYBOARD == HID_REPORT_ID_KEYBOARD,
+              "InputPilot keyboard report ID must match Arduino-ESP32");
+static_assert(HID_RID_MOUSE == HID_REPORT_ID_MOUSE,
+              "InputPilot mouse report ID must match Arduino-ESP32");
+static_assert(sizeof(hid_keyboard_report_t) == 8, "Unexpected keyboard report layout");
+static_assert(sizeof(hid_mouse_report_t) == 5, "Unexpected mouse report layout");
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -63,6 +74,7 @@ static std::atomic<uint32_t> g_hidProcessedSequence{0};
 static uint32_t g_lastMoveQueueLogMs = 0;
 static HIDDiagnosticsSnapshot g_hidStats;
 static portMUX_TYPE g_hidStatsMux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE g_breadcrumbMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t g_mouseButtons = 0;
 static char g_activeText[256]{};
 static size_t g_activeTextOffset = 0;
@@ -70,6 +82,32 @@ static HIDEvent g_activeTextEvent;
 static bool g_activeTextOK = true;
 static std::atomic<bool> g_cancelActiveText{false};
 static uint32_t g_hidPauseUntil = 0;
+static std::atomic<bool> g_hidExecuting{false};
+
+struct HIDExecutionContext {
+  uint32_t sequence = 0;
+  uint32_t queueDepth = 0;
+  uint8_t eventType = 0;
+  char source[16]{};
+};
+static HIDExecutionContext g_executionContext;
+
+struct HIDCrashBreadcrumb {
+  uint32_t magic;
+  uint32_t sequence;
+  uint32_t queueDepth;
+  uint32_t bleLength;
+  uint8_t eventType;
+  uint8_t phase;
+  uint8_t bleType;
+  uint8_t reserved;
+  char source[16];
+  uint32_t checksum;
+};
+static constexpr uint32_t HID_BREADCRUMB_MAGIC = 0x49504844;  // "IPHD"
+RTC_NOINIT_ATTR static HIDCrashBreadcrumb g_rtcHidBreadcrumb;
+static HIDCrashBreadcrumb g_previousHidBreadcrumb{};
+static bool g_previousHidBreadcrumbValid = false;
 
 static char g_cmdBuf[SERIAL_CMD_MAXLEN];
 static size_t g_cmdLen = 0;
@@ -82,6 +120,68 @@ static const uint32_t HEARTBEAT_MS = 10000;
 // ---------------------------------------------------------------------------
 static bool hidReady() {
   return g_hid.ready();
+}
+
+static const char *hidPhaseName(HIDExecutionPhase phase) {
+  switch (phase) {
+    case HIDExecutionPhase::BleRx: return "BLE_RX";
+    case HIDExecutionPhase::Decode: return "DECODE";
+    case HIDExecutionPhase::Queue: return "QUEUE";
+    case HIDExecutionPhase::HidDequeue: return "HID_DEQUEUE";
+    case HIDExecutionPhase::UsbMouseReport: return "USB_MOUSE_REPORT";
+    case HIDExecutionPhase::UsbKeyboardReport: return "USB_KEYBOARD_REPORT";
+    case HIDExecutionPhase::Done: return "DONE";
+    case HIDExecutionPhase::None: default: return "NONE";
+  }
+}
+
+static uint32_t breadcrumbChecksum(const HIDCrashBreadcrumb &value) {
+  const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&value);
+  uint32_t checksum = 2166136261u;
+  for (size_t i = 0; i < offsetof(HIDCrashBreadcrumb, checksum); ++i)
+    checksum = (checksum ^ bytes[i]) * 16777619u;
+  return checksum;
+}
+
+static void writeBreadcrumb(uint32_t sequence, const char *source,
+                            uint8_t eventType, HIDExecutionPhase phase,
+                            uint32_t queueDepth = 0) {
+  HIDCrashBreadcrumb next{};
+  portENTER_CRITICAL(&g_breadcrumbMux);
+  next.magic = HID_BREADCRUMB_MAGIC;
+  next.sequence = sequence;
+  next.queueDepth = queueDepth;
+  next.bleLength = g_rtcHidBreadcrumb.magic == HID_BREADCRUMB_MAGIC
+                       ? g_rtcHidBreadcrumb.bleLength : 0;
+  next.bleType = g_rtcHidBreadcrumb.magic == HID_BREADCRUMB_MAGIC
+                     ? g_rtcHidBreadcrumb.bleType : 0;
+  next.eventType = eventType;
+  next.phase = static_cast<uint8_t>(phase);
+  snprintf(next.source, sizeof(next.source), "%s", source ? source : "unknown");
+  next.checksum = breadcrumbChecksum(next);
+  g_rtcHidBreadcrumb = next;
+  portEXIT_CRITICAL(&g_breadcrumbMux);
+  portENTER_CRITICAL(&g_hidStatsMux);
+  g_hidStats.lastPhase = next.phase;
+  snprintf(g_hidStats.lastPhaseName, sizeof(g_hidStats.lastPhaseName), "%s",
+           hidPhaseName(phase));
+  portEXIT_CRITICAL(&g_hidStatsMux);
+}
+
+static bool sendUSBReport(uint8_t reportId, const void *report, size_t size,
+                          HIDExecutionPhase phase) {
+  writeBreadcrumb(g_executionContext.sequence, g_executionContext.source,
+                  g_executionContext.eventType, phase,
+                  g_executionContext.queueDepth);
+  portENTER_CRITICAL(&g_hidStatsMux);
+  ++g_hidStats.usbReportsAttempted;
+  portEXIT_CRITICAL(&g_hidStatsMux);
+  const bool ok = hidReady() && g_hid.SendReport(reportId, report, size);
+  portENTER_CRITICAL(&g_hidStatsMux);
+  if (ok) ++g_hidStats.usbReportsSucceeded;
+  else ++g_hidStats.usbReportsFailed;
+  portEXIT_CRITICAL(&g_hidStatsMux);
+  return ok;
 }
 
 static int8_t clamp8(int v) {
@@ -103,7 +203,8 @@ static bool hidMouseMove(int dx, int dy, int wheel) {
     int8_t sy = clamp8(ry);
     int8_t sw = clamp8(rw);
     hid_mouse_report_t report = {.buttons = g_mouseButtons, .x = sx, .y = sy, .wheel = sw, .pan = 0};
-    ok = Mouse.sendReport(report) && ok;
+    ok = sendUSBReport(HID_RID_MOUSE, &report, sizeof(report),
+                       HIDExecutionPhase::UsbMouseReport) && ok;
     rx -= sx;
     ry -= sy;
     rw -= sw;
@@ -128,24 +229,32 @@ static bool hidClick(MouseBtn b) {
   const uint8_t mask = buttonMask(b);
   g_mouseButtons |= mask;
   hid_mouse_report_t down = {.buttons = g_mouseButtons, .x = 0, .y = 0, .wheel = 0, .pan = 0};
-  const bool downOk = Mouse.sendReport(down);
+  const bool downOk = sendUSBReport(HID_RID_MOUSE, &down, sizeof(down),
+                                    HIDExecutionPhase::UsbMouseReport);
   g_mouseButtons &= ~mask;
   hid_mouse_report_t up = {.buttons = g_mouseButtons, .x = 0, .y = 0, .wheel = 0, .pan = 0};
-  return Mouse.sendReport(up) && downOk;
+  return sendUSBReport(HID_RID_MOUSE, &up, sizeof(up),
+                       HIDExecutionPhase::UsbMouseReport) && downOk;
 }
 
 static bool hidMouseButton(MouseBtn b, bool down) {
   if (!hidReady()) return false;
   if (down) g_mouseButtons |= buttonMask(b); else g_mouseButtons &= ~buttonMask(b);
   hid_mouse_report_t report = {.buttons = g_mouseButtons, .x = 0, .y = 0, .wheel = 0, .pan = 0};
-  return Mouse.sendReport(report);
+  return sendUSBReport(HID_RID_MOUSE, &report, sizeof(report),
+                       HIDExecutionPhase::UsbMouseReport);
 }
 
 static bool executeReleaseAll() {
   g_activeText[0] = '\0'; g_activeTextOffset = 0; g_mouseButtons = 0;
   hid_mouse_report_t mouse = {.buttons = 0, .x = 0, .y = 0, .wheel = 0, .pan = 0};
   hid_keyboard_report_t keyboard = {};
-  const bool ok = Mouse.sendReport(mouse) && g_hid.SendReport(HID_REPORT_ID_KEYBOARD, &keyboard, sizeof(keyboard));
+  const bool mouseOk = sendUSBReport(HID_RID_MOUSE, &mouse, sizeof(mouse),
+                                     HIDExecutionPhase::UsbMouseReport);
+  const bool keyboardOk = sendUSBReport(HID_RID_KEYBOARD, &keyboard,
+                                        sizeof(keyboard),
+                                        HIDExecutionPhase::UsbKeyboardReport);
+  const bool ok = mouseOk && keyboardOk;
   LOG_HID("release all");
   return ok;
 }
@@ -155,7 +264,21 @@ static bool hidTypeCharacter(uint8_t character) {
     LOG_HID("type skipped: not-ready");
     return false;
   }
-  return Keyboard.write(character) > 0;
+  if (character >= 128) return false;
+  uint8_t usage = pgm_read_byte(KeyboardLayout_en_US + character);
+  if (!usage) return false;
+  uint8_t modifier = 0;
+  if (usage & 0x80) { modifier |= 0x02; usage &= ~0x80; }
+  else if (usage & 0x40) { modifier |= 0x40; usage &= ~0x40; }
+  if (usage == 0x32) usage = 0x64;
+  hid_keyboard_report_t down = {};
+  down.modifier = modifier;
+  down.keycode[0] = usage;
+  hid_keyboard_report_t up = {};
+  const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &down, sizeof(down),
+                                    HIDExecutionPhase::UsbKeyboardReport);
+  return sendUSBReport(HID_RID_KEYBOARD, &up, sizeof(up),
+                       HIDExecutionPhase::UsbKeyboardReport) && downOk;
 }
 
 static bool hidKey(const KeyCode &kc) {
@@ -167,8 +290,10 @@ static bool hidKey(const KeyCode &kc) {
   report.modifier = kc.modifier;
   report.keycode[0] = kc.keycode;
   hid_keyboard_report_t empty = {};
-  return g_hid.SendReport(HID_REPORT_ID_KEYBOARD, &report, sizeof(report)) &&
-         g_hid.SendReport(HID_REPORT_ID_KEYBOARD, &empty, sizeof(empty));
+  const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &report, sizeof(report),
+                                    HIDExecutionPhase::UsbKeyboardReport);
+  return sendUSBReport(HID_RID_KEYBOARD, &empty, sizeof(empty),
+                       HIDExecutionPhase::UsbKeyboardReport) && downOk;
 }
 
 static bool hidReport(uint8_t modifier, uint8_t keycode) {
@@ -211,6 +336,9 @@ static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *sourc
     if (event.type == HIDEventType::ButtonUp) requestReleaseAll("button-up-recovery");
     return false;
   }
+  if (!g_hidExecuting.load())
+    writeBreadcrumb(event.sequence, event.source, static_cast<uint8_t>(event.type),
+                    HIDExecutionPhase::Queue, depth);
   portENTER_CRITICAL(&g_hidStatsMux);
   ++g_hidStats.queued;
   g_hidStats.lastSequence = event.sequence;
@@ -249,9 +377,10 @@ bool requestReleaseAllAndWait(const char *source, uint32_t timeoutMs) {
   return true;
 }
 
-static bool popHIDEvent(HIDEvent &event) {
+static bool popHIDEvent(HIDEvent &event, size_t *remainingDepth = nullptr) {
   if (xSemaphoreTake(g_hidQueueMutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
   const bool available = g_hidQueue.pop(event);
+  if (remainingDepth) *remainingDepth = g_hidQueue.size();
   xSemaphoreGive(g_hidQueueMutex);
   return available;
 }
@@ -267,6 +396,8 @@ static const char *hidEventName(HIDEventType type) {
 }
 
 static void recordExecution(const HIDEvent &event, bool ok) {
+  writeBreadcrumb(event.sequence, event.source, static_cast<uint8_t>(event.type),
+                  HIDExecutionPhase::Done, g_rtcHidBreadcrumb.queueDepth);
   portENTER_CRITICAL(&g_hidStatsMux);
   if (ok) ++g_hidStats.executed; else ++g_hidStats.executeFailed;
   if (event.type == HIDEventType::MouseMove || event.type == HIDEventType::Click ||
@@ -280,6 +411,7 @@ static void recordExecution(const HIDEvent &event, bool ok) {
   if (!ok) LOG_ERROR("HID execute failed sequence=%lu type=%s src=%s usbReady=%s",
                      static_cast<unsigned long>(event.sequence), hidEventName(event.type), event.source,
                      hidReady() ? "true" : "false");
+  g_hidExecuting.store(false);
 }
 
 static void processHIDQueue(size_t budget = 6) {
@@ -294,7 +426,16 @@ static void processHIDQueue(size_t budget = 6) {
   static uint32_t lastMoveExecutionLogMs = 0;
   for (size_t processed = 0; processed < budget; ++processed) {
     HIDEvent event;
-    if (!popHIDEvent(event)) break;
+    size_t remainingDepth = 0;
+    if (!popHIDEvent(event, &remainingDepth)) break;
+    g_hidExecuting.store(true);
+    g_executionContext.sequence = event.sequence;
+    g_executionContext.queueDepth = remainingDepth;
+    g_executionContext.eventType = static_cast<uint8_t>(event.type);
+    snprintf(g_executionContext.source, sizeof(g_executionContext.source), "%s",
+             event.source);
+    writeBreadcrumb(event.sequence, event.source, static_cast<uint8_t>(event.type),
+                    HIDExecutionPhase::HidDequeue, remainingDepth);
     bool ok = true;
     switch (event.type) {
       case HIDEventType::MouseMove: ok = hidMouseMove(event.dx, event.dy, event.wheel); break;
@@ -358,6 +499,8 @@ HIDDiagnosticsSnapshot deviceHidDiagnostics() {
 }
 
 void recordHIDInput(const char *source, uint8_t type, size_t length) {
+  if (!g_hidExecuting.load())
+    writeBreadcrumb(0, source, type, HIDExecutionPhase::Decode, 0);
   portENTER_CRITICAL(&g_hidStatsMux);
   if (source && strncmp(source, "ble", 3) == 0) { ++g_hidStats.rxBle; g_hidStats.lastBleRxLength = length; g_hidStats.lastBleRxType = type; }
   else if (source && strcmp(source, "wifi") == 0) ++g_hidStats.rxTcp;
@@ -373,6 +516,20 @@ void recordHIDDecodeError(const char *source, size_t length) {
   portEXIT_CRITICAL(&g_hidStatsMux);
 }
 void recordHIDBleFrame(uint8_t type, size_t length) {
+  if (!g_hidExecuting.load()) {
+    portENTER_CRITICAL(&g_breadcrumbMux);
+    HIDCrashBreadcrumb next = g_rtcHidBreadcrumb;
+    if (next.magic != HID_BREADCRUMB_MAGIC) next = {};
+    next.magic = HID_BREADCRUMB_MAGIC;
+    next.bleType = type;
+    next.bleLength = length;
+    next.eventType = type;
+    next.phase = static_cast<uint8_t>(HIDExecutionPhase::BleRx);
+    snprintf(next.source, sizeof(next.source), "ble-binary");
+    next.checksum = breadcrumbChecksum(next);
+    g_rtcHidBreadcrumb = next;
+    portEXIT_CRITICAL(&g_breadcrumbMux);
+  }
   portENTER_CRITICAL(&g_hidStatsMux); g_hidStats.lastBleRxType = type; g_hidStats.lastBleRxLength = length; portEXIT_CRITICAL(&g_hidStatsMux);
 }
 
@@ -561,6 +718,13 @@ void setup() {
   g_hidQueueMutex = xSemaphoreCreateMutex();
   DeviceIdentity::begin();
 
+  const esp_reset_reason_t bootReason = esp_reset_reason();
+  g_previousHidBreadcrumbValid =
+      g_rtcHidBreadcrumb.magic == HID_BREADCRUMB_MAGIC &&
+      g_rtcHidBreadcrumb.checksum == breadcrumbChecksum(g_rtcHidBreadcrumb);
+  if (g_previousHidBreadcrumbValid) g_previousHidBreadcrumb = g_rtcHidBreadcrumb;
+  g_rtcHidBreadcrumb = {};
+
   // Full USB bring-up, in order, BEFORE the single USB.begin():
   //   1) identity (VID/PID/strings)  2) HID devices  3) CDC  4) USB.begin()
   // ESPUSB::begin() runs tinyusb_init only once, so anything registered after
@@ -571,8 +735,9 @@ void setup() {
   USB.manufacturerName(HID_USB_MANUFACTURER);
   USB.firmwareVersion(FW_VERSION_BCD);
 
-  Mouse.begin();
-  Keyboard.begin();
+  // Mouse and Keyboard constructors already registered report descriptors 2
+  // and 1 respectively. One shared USBHID begin owns the common TX primitives.
+  g_hid.begin();
   UsbSerial.begin(SERIAL_BAUD);
   USB.begin();
 
@@ -582,6 +747,28 @@ void setup() {
 
   LOG_INFO("reset_reason=%s code=%d", resetReasonName(esp_reset_reason()),
            static_cast<int>(esp_reset_reason()));
+  if (g_previousHidBreadcrumbValid && bootReason != ESP_RST_POWERON) {
+    LOG_INFO("previous_hid sequence=%lu source=%s event=%u phase=%s bleType=%u bleLength=%lu queueDepth=%lu",
+             static_cast<unsigned long>(g_previousHidBreadcrumb.sequence),
+             g_previousHidBreadcrumb.source, g_previousHidBreadcrumb.eventType,
+             hidPhaseName(static_cast<HIDExecutionPhase>(g_previousHidBreadcrumb.phase)),
+             g_previousHidBreadcrumb.bleType,
+             static_cast<unsigned long>(g_previousHidBreadcrumb.bleLength),
+             static_cast<unsigned long>(g_previousHidBreadcrumb.queueDepth));
+  }
+  portENTER_CRITICAL(&g_hidStatsMux);
+  g_hidStats.previousBreadcrumbValid = g_previousHidBreadcrumbValid;
+  if (g_previousHidBreadcrumbValid) {
+    g_hidStats.previousSequence = g_previousHidBreadcrumb.sequence;
+    g_hidStats.previousEventType = g_previousHidBreadcrumb.eventType;
+    g_hidStats.previousPhase = g_previousHidBreadcrumb.phase;
+    g_hidStats.previousBleRxType = g_previousHidBreadcrumb.bleType;
+    g_hidStats.previousBleRxLength = g_previousHidBreadcrumb.bleLength;
+    g_hidStats.previousQueueDepth = g_previousHidBreadcrumb.queueDepth;
+    snprintf(g_hidStats.previousSource, sizeof(g_hidStats.previousSource), "%s",
+             g_previousHidBreadcrumb.source);
+  }
+  portEXIT_CRITICAL(&g_hidStatsMux);
   printBanner();
 
   g_statusLed.begin();

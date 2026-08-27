@@ -1,9 +1,10 @@
+import CoreBluetooth
 import XCTest
 import CoreBluetooth
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
-    private func firmwareImage(product: String = "InputPilot", board: String = "esp32-s3-zero-4mb", version: String = "0.8.1", protocolVersion: Int = 1) -> Data {
+    private func firmwareImage(product: String = "InputPilot", board: String = "esp32-s3-zero-4mb", version: String = "0.8.2", protocolVersion: Int = 1) -> Data {
         var data = Data(repeating: 0xff, count: FirmwareImageMetadata.minimumSize)
         data[0] = 0xe9
         data.replaceSubrange(32..<36, with: FirmwareImageMetadata.appDescriptorMagic)
@@ -50,9 +51,9 @@ final class HIDRemoteTests: XCTestCase {
     }
 
     func testBundleVersionHelper() {
-        let version = AppVersionInfo.read(from: ["CFBundleShortVersionString": "0.8.1", "CFBundleVersion": "123", "InputPilotGitCommit": "abc1234"])
-        XCTAssertEqual(version, AppVersionInfo(version: "0.8.1", build: "123", commit: "abc1234"))
-        XCTAssertEqual(version.display, "0.8.1 (123)")
+        let version = AppVersionInfo.read(from: ["CFBundleShortVersionString": "0.8.2", "CFBundleVersion": "123", "InputPilotGitCommit": "abc1234"])
+        XCTAssertEqual(version, AppVersionInfo(version: "0.8.2", build: "123", commit: "abc1234"))
+        XCTAssertEqual(version.display, "0.8.2 (123)")
         XCTAssertEqual(AppVersionInfo.read(from: [:]).version, "Unknown")
     }
 
@@ -111,7 +112,7 @@ final class HIDRemoteTests: XCTestCase {
     }
 
     func testManualFirmwareVersionComesFromImageMetadata() throws {
-        XCTAssertEqual(try FirmwareImageMetadata.parseAndValidate(firmwareImage()).version, "0.8.1")
+        XCTAssertEqual(try FirmwareImageMetadata.parseAndValidate(firmwareImage()).version, "0.8.2")
     }
 
     func testForeignAndWrongBoardFirmwareAreRejected() {
@@ -183,6 +184,15 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(HIDEvent.releaseAll.line, "release all")
     }
 
+    func testBLEWritePolicyUsesFlowControlledFastPathAndAcknowledgesCriticalState() {
+        let both: CBCharacteristicProperties = [.write, .writeWithoutResponse]
+        XCTAssertEqual(BLEHIDControlTransport.writeType(for: .mouseMove(1, 2), properties: both), .withoutResponse)
+        XCTAssertEqual(BLEHIDControlTransport.writeType(for: .scroll(1), properties: both), .withoutResponse)
+        XCTAssertEqual(BLEHIDControlTransport.writeType(for: .mouseDown(.left), properties: both), .withResponse)
+        XCTAssertEqual(BLEHIDControlTransport.writeType(for: .keyboardReport(modifiers: 0, usage: 4), properties: both), .withResponse)
+        XCTAssertEqual(BLEHIDControlTransport.writeType(for: .releaseAll, properties: both), .withResponse)
+    }
+
     func testTCPAndRESTMappings() {
         XCTAssertEqual(HIDEvent.scroll(-3).line, "move 0 0 -3")
         XCTAssertEqual(HIDEvent.mouseDown(.middle).line, "button middle down")
@@ -236,6 +246,14 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertTrue(didSend)
         XCTAssertEqual(rest.events, [.click(.left)])
         XCTAssertEqual(manager.activeTransport, .rest)
+    }
+
+    @MainActor func testBackToBackReleaseAllIsCoalesced() async {
+        let transport = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(ble: transport, tcp: transport, rest: transport)
+        await manager.releaseAll()
+        await manager.releaseAll()
+        XCTAssertEqual(transport.events, [.releaseAll])
     }
 
     @MainActor func testCapabilitiesRejectUnsupportedEvent() async {

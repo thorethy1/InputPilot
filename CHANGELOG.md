@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.2] - 2026-08-27
+
+### Fixed
+
+- Serialized acknowledged CoreBluetooth HID writes, used flow-controlled unacknowledged writes for coalesced movement/scroll, and reduced trackpad transport rate to 50 Hz.
+- Moved BLE binary decode/KeyMap/logging work from the NimBLE host callback into the Arduino loop and reused the per-device BLE session for diagnostics.
+- Unified mouse and keyboard reports on one checked Arduino-ESP32 USBHID sender with pinned report-ID/size assertions and real USB success/failure counters.
+
+### Added
+
+- RTC-resident HID crash breadcrumbs, expanded transport-neutral diagnostics, and a flash core-dump decoding helper.
+- A bottom-up v0.8.2 hardware test gate; all physical results are initially NOT RUN.
+
 ## [0.8.1] - 2026-08-27
 
 ### Fixed

@@ -9,6 +9,11 @@ enum class HIDEventType : uint8_t {
   MouseMove, Click, ButtonDown, ButtonUp, TypeText, KeyboardReport, ReleaseAll, Pause
 };
 
+enum class HIDExecutionPhase : uint8_t {
+  None, BleRx, Decode, Queue, HidDequeue, UsbMouseReport,
+  UsbKeyboardReport, Done
+};
+
 struct HIDEvent {
   HIDEventType type = HIDEventType::MouseMove;
   int32_t dx = 0;
@@ -37,9 +42,15 @@ struct HIDDiagnosticsSnapshot {
   uint32_t rxBle = 0, rxTcp = 0, rxRest = 0, rxSerial = 0;
   uint32_t decoded = 0, decodeErrors = 0, queued = 0, queueRejected = 0;
   uint32_t executed = 0, executeFailed = 0, mouseExecuted = 0, keyboardExecuted = 0;
+  uint32_t usbReportsAttempted = 0, usbReportsSucceeded = 0, usbReportsFailed = 0;
   uint32_t lastSequence = 0, lastBleRxLength = 0;
   uint8_t lastBleRxType = 0;
-  char lastSource[16]{}, lastType[24]{}, lastQueuedEvent[24]{}, lastExecutedEvent[24]{};
+  uint8_t lastPhase = 0;
+  uint32_t previousSequence = 0, previousBleRxLength = 0, previousQueueDepth = 0;
+  uint8_t previousEventType = 0, previousPhase = 0, previousBleRxType = 0;
+  bool previousBreadcrumbValid = false;
+  char lastSource[16]{}, lastType[24]{}, lastPhaseName[24]{};
+  char lastQueuedEvent[24]{}, lastExecutedEvent[24]{}, previousSource[16]{};
 };
 
 class HIDEventQueue {

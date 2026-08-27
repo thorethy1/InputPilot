@@ -8,7 +8,7 @@ actor MouseEventCoalescer {
     private let interval: Duration
     private let sender: Sender
 
-    init(interval: Duration = .milliseconds(12), sender: @escaping Sender) {
+    init(interval: Duration = .milliseconds(20), sender: @escaping Sender) {
         self.interval = interval
         self.sender = sender
     }

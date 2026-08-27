@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.1"
+#define FW_VERSION      "0.8.2"
 #define FW_NAME         "usb-hid-s3"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0801
+#define FW_VERSION_BCD  0x0802
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
