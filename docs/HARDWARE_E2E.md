@@ -52,6 +52,10 @@ Record the firmware/app commit, board device ID, host OS/layout, iPhone/iOS vers
 ### HID executor and BLE reboot regression
 
 - Test transports in isolation and in this order: `hidtest mouse` / `hidtest keyboard` over USB serial, REST mouse/keyboard, TCP mouse/keyboard, then BLE mouse/keyboard. For every event compare the app event ID with firmware receive, decode, queue, execute counters and physical USB-host reaction; a connected socket alone is not a pass.
+- On a headless Ubuntu USB host, automate the REST and TCP stages with
+  `sudo usb-hid-s3/scripts/hardware_test_ubuntu.py --host <device-ip>` as
+  documented in [`UBUNTU_HARDWARE_TEST.md`](UBUNTU_HARDWARE_TEST.md). Preserve
+  its JSON output as the hardware evidence artifact.
 - Boot in `wifi+ble`, record the new `reset_reason=...` line, connect BLE without sending input, and verify stability for at least 30 seconds.
 - Send one BLE mouse move, then continuous trackpad movement for 30 seconds. Verify movement remains responsive, queue-overflow warnings do not repeat, and the ESP does not reboot.
 - Test left/right/middle click, keyboard typing, key combinations, and drag with a final button-up. Verify no stuck key or mouse button.

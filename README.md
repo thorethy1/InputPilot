@@ -191,6 +191,7 @@ Current checked-in screenshots document the retained device list/detail flow. Ne
 - [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md) — BOM & flash dance
 - [`usb-hid-s3/docs/KNOWN_LIMITATIONS.md`](usb-hid-s3/docs/KNOWN_LIMITATIONS.md)
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — BLE, TCP and REST HID control protocol
+- [`docs/UBUNTU_HARDWARE_TEST.md`](docs/UBUNTU_HARDWARE_TEST.md) — automated headless Ubuntu REST/TCP-to-USB proof
 - [`docs/IOS_CICD.md`](docs/IOS_CICD.md) — signing and IPA builds without a local Mac
 ## Secrets
 

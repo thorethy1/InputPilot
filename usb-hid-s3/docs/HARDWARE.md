@@ -66,6 +66,10 @@ Power-cycle after flashing. Future releases use only `firmware.bin` in the iOS F
 
 ### Panic core dump
 
+For an automated REST/TCP-to-USB test on a headless Ubuntu host, see
+[`../../docs/UBUNTU_HARDWARE_TEST.md`](../../docs/UBUNTU_HARDWARE_TEST.md).
+It verifies raw Linux input events rather than transport delivery alone.
+
 The pinned Arduino-ESP32/IDF build already enables ELF core dumps to the
 `coredump` partition at `0x3d0000` (size `0x10000`). Build the exact source
 revision that crashed, install Espressif's decoder, and read it directly:
