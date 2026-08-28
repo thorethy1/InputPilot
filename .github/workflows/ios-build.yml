@@ -138,13 +138,14 @@ jobs:
         run: |
           set -euo pipefail
           tag="private-ios-signed"
+          release_name="Private Signed InputPilot IPA"
           release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
-            --jq ".[] | select(.draft == true and .tag_name == \"$tag\") | .id" | head -1)"
+            --jq ".[] | select(.draft == true and .name == \"$release_name\") | .id" | head -1)"
           if [[ -z "$release_id" ]]; then
             release_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
               -f tag_name="$tag" \
               -f target_commitish="$GITHUB_SHA" \
-              -f name="Private Signed InputPilot IPA" \
+              -f name="$release_name" \
               -f body="Private development/ad-hoc build. Do not publish this draft release." \
               -F draft=true \
               -F prerelease=false \
@@ -152,7 +153,7 @@ jobs:
           else
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               -f target_commitish="$GITHUB_SHA" \
-              -f name="Private Signed InputPilot IPA" \
+              -f name="$release_name" \
               -f body="Private development/ad-hoc build. Do not publish this draft release." >/dev/null
           fi
           existing_asset_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
