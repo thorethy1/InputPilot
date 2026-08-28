@@ -70,15 +70,35 @@ App Design System
     * toolbar actions
     * destructive actions
     * empty states
+* Introduce semantic colors instead of reusing the accent color for every state:
+    * accent / tint
+    * success
+    * warning
+    * error
+    * destructive
+    * connected / available / offline
+* Custom themes may change branding/accent colors, but must not redefine destructive or status meaning
+* Do not use the brand accent as a destructive color
+* Important states must never be communicated by color alone
+* Define consistent interaction states for major controls:
+    * normal
+    * pressed
+    * loading
+    * disabled
+    * success
+    * failure
 * Prefer native SwiftUI components wherever possible
 * Proper iOS Liquid Glass behavior where supported
 * Remove UI that looks like custom web/mobile controls when a native iOS equivalent exists
 * Add appropriate haptic feedback
+* Add clear visual feedback when remote actions are sent or fail
+* Prevent accidental duplicate execution while an asynchronous command is still running where appropriate
 * Improve accessibility
     * Dynamic Type
     * VoiceOver labels
     * sufficient contrast
     * larger interaction targets
+    * Reduce Motion support
 
 Design inspiration
 
@@ -94,6 +114,45 @@ Focus on:
 * minimal permanent controls
 
 Do not copy Termius visually; use it as interaction inspiration.
+
+⸻
+
+🔗 Connection & Transport UX
+
+Goal: A normal user should immediately understand whether InputPilot is usable without needing to understand the transport architecture.
+
+* Clearly distinguish transport states:
+    * available
+    * connected
+    * active
+    * reconnecting
+    * unavailable
+    * failed
+* Always make it possible to identify the currently active control transport
+* Automatic transport fallback must be understandable and should not look like a total connection failure
+* Do not show a generic “Reconnecting” state when another transport is already working normally
+* Use a high-level device state such as Connected / Connecting / Offline / Attention Required in normal UI
+* Keep detailed BLE / Wi-Fi TCP / REST diagnostics available in Advanced/Diagnostics UI
+* Connection state must remain consistent across Devices, Device Details, Control and Settings
+* Connection errors must be actionable:
+    * retry
+    * open relevant permission settings where appropriate
+    * switch transport where appropriate
+    * show a short reason instead of only an error code
+* Unexpected disconnects must safely release held keyboard keys and mouse buttons
+
+⸻
+
+📱 Device & Multi-Device UX
+
+* Clearly indicate the currently active device
+* Replace ambiguous device switches with a native selection/connection pattern
+* Remember the last active device where appropriate
+* Make switching between saved devices fast and obvious
+* Use native swipe/context actions for common device management actions
+* Clearly distinguish saved, nearby, connected and offline devices
+* Show transport availability without making the normal device list overly technical
+* Destructive device actions must be visually and behaviorally distinct from normal actions
 
 ⸻
 
@@ -119,6 +178,9 @@ Goal: Make the trackpad behave as closely as possible to a real laptop trackpad.
 * Pinch-to-zoom
 * Configurable sensitivity
 * Natural scrolling option
+* Add subtle haptic feedback for click interactions where appropriate
+* Add lightweight first-use gesture hints without permanently cluttering the trackpad
+* Keep explicit left/middle/right click controls available as a reliable fallback if they remain useful
 
 Gesture architecture
 
@@ -138,7 +200,11 @@ Unexpected disconnects must always safely release held mouse buttons.
 * Avoid excessively stretched full-width buttons
 * Use compact native button/grid layouts
 * Improve modifier-key presentation
+* Support clear sticky/latched modifier behavior where useful
+* Add an explicit “Release All Keys” safety action
+* Ensure modifiers and held keys are always released after disconnect/error paths
 * Better visual feedback when a key/shortcut is sent
+* Allow favorite/common shortcuts to be reordered where useful
 * Better keyboard dismissal behavior
 * Improve text input field
 * Add a Paste Clipboard button
@@ -164,11 +230,30 @@ typed text → send animation → fades/slides toward device → field clears
 * Fix broken Run button
 * Make preset actions visually consistent
 * Better preset cards/rows
+* Rename presets
+* Duplicate presets
 * Swipe actions for edit/delete
 * Drag-and-drop ordering
 * Better favorite handling
-* Clear execution feedback
+* Clear Run / Running / Completed / Failed execution feedback
+* Prevent duplicate execution while a preset is already being sent where appropriate
 * Optional haptic feedback when executed
+
+⸻
+
+⏺️ Macro Improvements
+
+* Improve recorded macro list/card presentation
+* Rename macros
+* Duplicate macros
+* Delete macros with an appropriate confirmation flow
+* Edit/delete individual macro events where technically safe
+* Reorder macro events
+* Show playback progress
+* Show repeat count and approximate duration where available
+* Allow a running macro to be cancelled immediately
+* Cancelling or failing a macro must safely release held keys and mouse buttons
+* Show clear Running / Completed / Cancelled / Failed states
 
 ⸻
 
@@ -231,9 +316,80 @@ instead of automatically attempting to downgrade it.
 * Continue capability-based compatibility checks
 * Never assume that newer firmware automatically means incompatible firmware
 
+Firmware update presentation
+
+* Automatically check for the latest compatible firmware release where appropriate
+* Clearly show installed version → available version
+* Show release notes/changelog before updating
+* Provide clear progress states for:
+    * downloading
+    * validating
+    * transferring
+    * installing
+    * rebooting
+    * reconnecting
+    * completed
+* Validate firmware integrity/checksum before installation
+* Show a dedicated success/failure result instead of silently returning to the previous screen
+* Make compatibility errors understandable without exposing raw protocol details unless requested
+* Avoid vague labels such as “Available” when a more precise state can be shown
+
 Optional developer-only feature:
 
 * Explicit manual downgrade override for development builds
+
+⸻
+
+⚙️ Settings, Advanced & Developer Information
+
+Goal: Keep normal settings understandable while preserving the strong diagnostics needed during development.
+
+* Separate user-facing settings from technical diagnostics
+* Suggested top-level structure:
+    * Connection
+    * Appearance
+    * Trackpad
+    * Keyboard
+    * Advanced
+    * About
+* Move protocol version, OTA schema, commit information, raw transport diagnostics and logs into Advanced/Diagnostics
+* Keep firmware management discoverable without exposing unrelated implementation details
+* Consider a Developer Mode for additional low-level information and debugging controls
+* Normal users should not need to understand protocol versions, endpoint details or internal device IDs to operate InputPilot
+* Use native SwiftUI Form/Section patterns consistently
+
+⸻
+
+🧩 Empty, Loading & Error States
+
+* Add polished states for:
+    * no devices
+    * searching for devices
+    * device offline
+    * Bluetooth disabled
+    * Bluetooth permission missing
+    * Local Network permission missing
+    * no presets
+    * no macros
+    * firmware unavailable
+    * connection lost
+    * update failed
+* Prefer native ContentUnavailableView and ProgressView patterns where appropriate
+* Every recoverable error should provide an obvious recovery action
+* Avoid permanent spinners without explanation
+* Loading, disabled and error behavior should be consistent across the app
+
+⸻
+
+📐 Adaptive Layout & Safe Areas
+
+* No interactive content may overlap the Tab Bar or system safe areas
+* Test the smallest supported iPhone layout
+* Test the largest current iPhone layout
+* Support Dynamic Type without breaking control layouts
+* Support landscape where it materially improves controls such as the trackpad
+* Prepare layouts to adapt cleanly to iPad even if full iPad optimization is deferred
+* Avoid fixed sizes that cause shortcut labels or controls to wrap into unusable shapes
 
 ⸻
 
@@ -274,6 +430,9 @@ iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer
 * BLE OTA hardware test passes
 * firmware rollback/failure recovery is tested
 * Trackpad tested on real hardware
+* Connection fallback and active-transport presentation are tested
+* Device offline/reconnect UI is tested
+* Macro cancellation/failure safely releases all held inputs
 * Paste Clipboard button tested with:
     * non-empty text
     * empty clipboard
@@ -285,6 +444,10 @@ iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer
 * no known stuck-key/stuck-mouse-button bugs
 * Light Mode reviewed
 * Dark Mode reviewed
+* smallest supported iPhone layout reviewed
+* largest current iPhone layout reviewed
+* no major control overlaps the Tab Bar or safe areas
+* empty/loading/error states reviewed for all major screens
 * all major controls have loading/error/disabled states
 
 ⸻
@@ -327,6 +490,11 @@ Setup flow
 * Setup complete
 
 The user should not need to understand BLE characteristics, TCP ports, REST endpoints or ESP32 terminology.
+
+* Permission requests should explain why access is needed before triggering the system dialog
+* Discovery and connection failures should offer simple retry/recovery guidance
+* Denied Bluetooth/Local Network permissions should provide a clear path to the relevant system settings
+* The setup flow should remain usable when optional Wi-Fi setup is skipped
 
 ⸻
 
