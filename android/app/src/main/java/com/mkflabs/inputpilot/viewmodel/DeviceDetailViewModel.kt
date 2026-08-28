@@ -27,8 +27,8 @@ class DeviceDetailViewModel(
     private val _apiToken = MutableStateFlow("")
     val apiToken: StateFlow<String> = _apiToken.asStateFlow()
 
-    private val _offline = MutableStateFlow(true)
-    val offline: StateFlow<Boolean> = _offline.asStateFlow()
+    private val _reachable = MutableStateFlow<Boolean?>(null)
+    val reachable: StateFlow<Boolean?> = _reachable.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -37,17 +37,16 @@ class DeviceDetailViewModel(
     val deleted: StateFlow<Boolean> = _deleted.asStateFlow()
 
     val presence: StateFlow<DevicePresenceStatus> =
-        combine(_device, _offline) { device, offline ->
+        combine(_device, _reachable) { device, reachable ->
             if (device == null) {
-                DevicePresenceStatus.OFFLINE
+                DevicePresenceStatus.CHECKING
             } else {
                 DevicePresenceStatus.resolve(
-                    isReachable = !offline,
-                    jiggleEnabled = device.jiggleEnabled,
-                    staIp = device.staIp,
+                    isReachable = reachable,
+                    hasNetworkEndpoint = device.mdnsHost.isNotBlank() || !device.staIp.isNullOrBlank(),
                 )
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DevicePresenceStatus.OFFLINE)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DevicePresenceStatus.CHECKING)
 
     init {
         viewModelScope.launch {
@@ -78,7 +77,7 @@ class DeviceDetailViewModel(
         viewModelScope.launch {
             try {
                 repository.setJiggle(current, enabled)
-                _offline.value = false
+                _reachable.value = true
                 reload()
             } catch (e: Exception) {
                 _error.value = e.message
@@ -109,7 +108,7 @@ class DeviceDetailViewModel(
     private suspend fun refreshReachability() {
         val current = _device.value ?: return
         val failed = repository.refreshAll(listOf(current))
-        _offline.value = failed.contains(deviceId)
+        _reachable.value = !failed.contains(deviceId)
         reload()
     }
 

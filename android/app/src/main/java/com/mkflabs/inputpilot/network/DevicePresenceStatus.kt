@@ -1,18 +1,17 @@
 package com.mkflabs.inputpilot.network
 
 enum class DevicePresenceStatus(val title: String, val ledArgb: Long) {
+    CHECKING("Checking availability…", 0xFF1976D2),
     OFFLINE("Offline", 0xFFF2261F),
-    SETUP("Setup", 0xFFF226D9),
-    READY_TO_MOVE("Ready to move", 0xFF1EB847),
-    MOVING("Moving", 0xFF1AC7D1),
+    SETUP("Setup required", 0xFFF226D9),
+    ONLINE("Online via Wi-Fi", 0xFF1EB847),
     ;
 
     companion object {
-        fun resolve(isReachable: Boolean, jiggleEnabled: Boolean, staIp: String?): DevicePresenceStatus {
+        fun resolve(isReachable: Boolean?, hasNetworkEndpoint: Boolean): DevicePresenceStatus {
+            if (isReachable == null) return CHECKING
             if (!isReachable) return OFFLINE
-            val hasSta = !staIp.isNullOrBlank()
-            if (!hasSta) return SETUP
-            return if (jiggleEnabled) MOVING else READY_TO_MOVE
+            return if (hasNetworkEndpoint) ONLINE else SETUP
         }
     }
 }

@@ -27,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -65,6 +64,7 @@ fun HomeScreen(
 ) {
     val devices by viewModel.devices.collectAsState()
     val offline by viewModel.offlineIds.collectAsState()
+    val checked by viewModel.checkedIds.collectAsState()
     val refreshing by viewModel.refreshing.collectAsState()
     val error by viewModel.error.collectAsState()
     var menuOpen by remember { mutableStateOf(false) }
@@ -137,15 +137,13 @@ fun HomeScreen(
                     items(devices, key = { it.deviceId }) { device ->
                         val presence =
                             DevicePresenceStatus.resolve(
-                                isReachable = !offline.contains(device.deviceId),
-                                jiggleEnabled = device.jiggleEnabled,
-                                staIp = device.staIp,
+                                isReachable = if (checked.contains(device.deviceId)) !offline.contains(device.deviceId) else null,
+                                hasNetworkEndpoint = device.mdnsHost.isNotBlank() || !device.staIp.isNullOrBlank(),
                             )
                         DeviceRow(
                             device = device,
                             presence = presence,
                             onClick = { onOpenDevice(device) },
-                            onJiggle = { viewModel.setJiggle(device, it) },
                         )
                     }
                 }
@@ -183,7 +181,6 @@ private fun DeviceRow(
     device: StoredDeviceEntity,
     presence: DevicePresenceStatus,
     onClick: () -> Unit,
-    onJiggle: (Boolean) -> Unit,
 ) {
     Row(
         modifier =
@@ -209,6 +206,5 @@ private fun DeviceRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = device.jiggleEnabled, onCheckedChange = onJiggle)
     }
 }

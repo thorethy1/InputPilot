@@ -2,52 +2,66 @@ import XCTest
 @testable import InputPilot
 
 final class DevicePresenceStatusTests: XCTestCase {
-    func testOfflineWhenUnreachable() {
+    func testOfflineWhenNeitherTransportIsAvailable() {
         let status = DevicePresenceStatus.resolve(
-            isReachable: false,
-            jiggleEnabled: true,
-            staIP: "192.168.2.161"
+            wifi: .offline,
+            bluetooth: .offline,
+            hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .offline)
         XCTAssertEqual(status.title, "Offline")
     }
 
-    func testReadyToMoveWhenOnlineAndJiggleOff() {
+    func testWiFiReachabilityMeansOnlineNotBluetoothAvailable() {
         let status = DevicePresenceStatus.resolve(
-            isReachable: true,
-            jiggleEnabled: false,
-            staIP: "192.168.2.161"
+            wifi: .reachable,
+            bluetooth: .offline,
+            hasConfiguredWiFi: true
         )
-        XCTAssertEqual(status, .readyToMove)
-        XCTAssertEqual(status.title, "Ready to move")
+        XCTAssertEqual(status, .readyWiFi)
+        XCTAssertEqual(status.title, "Online via Wi-Fi")
     }
 
-    func testMovingWhenOnlineAndJiggleOn() {
+    func testBluetoothReadyWinsOverWiFiFailure() {
         let status = DevicePresenceStatus.resolve(
-            isReachable: true,
-            jiggleEnabled: true,
-            staIP: "192.168.2.161"
+            wifi: .offline,
+            bluetooth: .ready,
+            hasConfiguredWiFi: true
         )
-        XCTAssertEqual(status, .moving)
-        XCTAssertEqual(status.title, "Moving")
+        XCTAssertEqual(status, .readyBluetooth)
+        XCTAssertEqual(status.title, "Ready via Bluetooth")
     }
 
-    func testSetupWhenReachableWithoutStaIP() {
+    func testWorkingWiFiWinsOverBluetoothReconnect() {
         let status = DevicePresenceStatus.resolve(
-            isReachable: true,
-            jiggleEnabled: false,
-            staIP: nil
+            wifi: .reachable,
+            bluetooth: .reconnecting,
+            hasConfiguredWiFi: true
         )
-        XCTAssertEqual(status, .setup)
-        XCTAssertEqual(status.title, "Setup")
+        XCTAssertEqual(status, .readyWiFi)
     }
 
-    func testSetupWhenStaIPEmpty() {
+    func testDiscoveredIsNotReportedAsReady() {
         let status = DevicePresenceStatus.resolve(
-            isReachable: true,
-            jiggleEnabled: false,
-            staIP: "  "
+            wifi: .offline,
+            bluetooth: .discovered,
+            hasConfiguredWiFi: false
         )
-        XCTAssertEqual(status, .setup)
+        XCTAssertEqual(status, .bluetoothDiscovered)
+        XCTAssertFalse(status.isUsable)
+    }
+
+    func testInitialStateIsCheckingInsteadOfOnline() {
+        XCTAssertEqual(
+            DevicePresenceStatus.resolve(wifi: .checking, bluetooth: .offline, hasConfiguredWiFi: true),
+            .checking
+        )
+    }
+
+    func testReachableWithoutConfiguredWiFiIsSetup() {
+        XCTAssertEqual(
+            DevicePresenceStatus.resolve(wifi: .reachable, bluetooth: .offline, hasConfiguredWiFi: false),
+            .setup
+        )
     }
 }

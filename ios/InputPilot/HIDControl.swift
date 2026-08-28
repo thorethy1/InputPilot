@@ -95,7 +95,35 @@ enum ConnectionMode: String, CaseIterable, Codable, Identifiable {
 }
 enum TransportKind: String { case bluetooth = "Bluetooth", tcp = "Wi-Fi TCP", rest = "REST" }
 enum TransportConnectionState: String, Equatable {
-    case offline, connecting, reconnecting, authenticating, ready, authenticationFailed
+    case unavailable, offline, discovering, discovered, connecting, connected, reconnecting, authenticating, ready, authenticationFailed
+
+    var title: String {
+        switch self {
+        case .unavailable: "Unavailable"
+        case .offline: "Offline"
+        case .discovering: "Searching"
+        case .discovered: "Discovered"
+        case .connecting: "Connecting"
+        case .connected: "Connected"
+        case .reconnecting: "Reconnecting"
+        case .authenticating: "Authenticating"
+        case .ready: "Ready"
+        case .authenticationFailed: "Authentication failed"
+        }
+    }
+}
+enum BluetoothRadioState: String, Equatable {
+    case unknown, resetting, unsupported, unauthorized, poweredOff, poweredOn
+
+    var title: String {
+        switch self {
+        case .unknown, .resetting: "Bluetooth status unknown"
+        case .unsupported: "Bluetooth not supported"
+        case .unauthorized: "Bluetooth permission denied"
+        case .poweredOff: "Bluetooth is off"
+        case .poweredOn: "Bluetooth is on"
+        }
+    }
 }
 
 protocol HIDControlTransport: AnyObject {
@@ -258,8 +286,90 @@ struct FirmwareManifest: Codable, Equatable {
     let otaSchema: Int
     let size: Int
     let sha256: String
+    let minimumAppVersion: String?
 
-    enum CodingKeys: String, CodingKey { case product, version, board, otaSchema, size, sha256; case protocolVersion = "protocol" }
+    enum CodingKeys: String, CodingKey { case product, version, board, otaSchema, size, sha256; case protocolVersion = "protocol"; case minimumAppVersion = "minimum_app_version" }
+
+    init(product: String, version: String, board: String, protocolVersion: Int, otaSchema: Int, size: Int, sha256: String, minimumAppVersion: String? = nil) {
+        self.product = product; self.version = version; self.board = board; self.protocolVersion = protocolVersion
+        self.otaSchema = otaSchema; self.size = size; self.sha256 = sha256; self.minimumAppVersion = minimumAppVersion
+    }
+}
+
+enum FirmwareReleaseStatus: Equatable {
+    case notChecked
+    case checking
+    case updateAvailable(String)
+    case upToDate(String)
+    case installedNewer(latest: String)
+    case firmwareIncompatible(String)
+    case appUpdateRequired(String)
+    case unavailable(String)
+
+    var title: String {
+        switch self {
+        case .notChecked: "Not checked"
+        case .checking: "Checking for updates…"
+        case .updateAvailable: "Update available"
+        case .upToDate: "Device is up to date"
+        case .installedNewer: "Installed firmware is newer"
+        case .firmwareIncompatible: "Firmware not compatible"
+        case .appUpdateRequired: "App update required"
+        case .unavailable: "Update information unavailable"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case let .updateAvailable(version): "Firmware \(version) can be installed."
+        case let .upToDate(version): "Firmware \(version) is installed."
+        case let .installedNewer(latest): "The latest published firmware is \(latest). No downgrade is needed."
+        case let .firmwareIncompatible(message), let .appUpdateRequired(message), let .unavailable(message): message
+        case .notChecked, .checking: nil
+        }
+    }
+
+    var canDownload: Bool {
+        if case .updateAvailable = self { return true }
+        return false
+    }
+}
+
+enum FirmwareReleaseEvaluator {
+    static let supportedProtocol = 1
+    static let supportedOTASchema = 1
+
+    static func evaluate(installed: String?, manifest: FirmwareManifest, deviceOTASchema: Int, appVersion: String) -> FirmwareReleaseStatus {
+        guard manifest.product == "InputPilot", manifest.board == "esp32-s3-zero-4mb" else {
+            return .firmwareIncompatible("The published firmware targets different hardware.")
+        }
+        guard manifest.protocolVersion <= supportedProtocol, manifest.otaSchema <= supportedOTASchema else {
+            return .appUpdateRequired("This firmware requires a newer version of InputPilot.")
+        }
+        guard manifest.protocolVersion == supportedProtocol, manifest.otaSchema == supportedOTASchema else {
+            return .firmwareIncompatible("The published firmware uses unsupported update metadata.")
+        }
+        if let minimum = manifest.minimumAppVersion {
+            guard let required = SemanticVersion(minimum) else {
+                return .firmwareIncompatible("The published app compatibility metadata is invalid.")
+            }
+            guard let current = SemanticVersion(appVersion), current >= required else {
+                return .appUpdateRequired("InputPilot \(minimum) or newer is required for this firmware.")
+            }
+        }
+        guard deviceOTASchema >= manifest.otaSchema else {
+            return .firmwareIncompatible("This device needs a one-time USB migration before this firmware can be installed.")
+        }
+        guard let latest = SemanticVersion(manifest.version) else {
+            return .firmwareIncompatible("The published firmware version is invalid.")
+        }
+        guard let installed, let current = SemanticVersion(installed) else {
+            return .updateAvailable(manifest.version)
+        }
+        if current < latest { return .updateAvailable(manifest.version) }
+        if current == latest { return .upToDate(manifest.version) }
+        return .installedNewer(latest: manifest.version)
+    }
 }
 
 enum FirmwareValidationError: LocalizedError, Equatable {
@@ -872,6 +982,10 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         DispatchQueue.main.async { self.bytesSent = min(self.totalBytes, Int(Double(totalBytesSent) / Double(totalBytesExpectedToSend) * Double(self.totalBytes))) }
     }
     func disconnected(expected: Bool) {
+        switch state {
+        case .idle, .checking, .completed, .cancelled, .failed: return
+        default: break
+        }
         guard expected else { state = .failed("Bluetooth connection lost. The existing firmware is still installed."); return }
         state = .reconnecting
         rebootTimeoutWork?.cancel()
@@ -924,12 +1038,13 @@ final class UnavailableHIDControlTransport: HIDControlTransport {
     func disconnect() async {}
 }
 
-final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
+final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
     let kind = TransportKind.bluetooth
-    private(set) var isAvailable = false
-    private(set) var state: TransportConnectionState = .offline
+    @Published private(set) var isAvailable = false
+    @Published private(set) var state: TransportConnectionState = .offline
+    @Published private(set) var radioState: BluetoothRadioState = .unknown
     private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var characteristics: [CBUUID: CBCharacteristic] = [:]
-    private let token: String?
+    private var token: String?
     private let deviceId: String
     private let service = CBUUID(string: "7D9F0001-4F4D-4F56-4552-484944000001")
     private let legacyService = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -978,28 +1093,57 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         return nil
     }
     init(deviceId: String, token: String?, authTimeout: TimeInterval = 10) { self.deviceId = deviceId.lowercased(); self.token = token; self.authTimeout = authTimeout; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
+    func updateToken(_ value: String?) {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newToken = normalized?.isEmpty == true ? nil : normalized
+        guard token != newToken else { return }
+        token = newToken
+        if state == .authenticationFailed {
+            state = .offline; shouldReconnect = true; scan()
+        }
+    }
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
-        state = state == .offline ? .connecting : .reconnecting
+        state = state == .reconnecting ? .reconnecting : .discovering
         // InputPilot identity lives in manufacturer data. Service-filtered scans
         // miss valid legacy advertisements when 128-bit UUIDs do not fit.
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         appLog(.bluetooth, "control scan started deviceId=\(deviceId)")
         scanTimeoutWork?.cancel()
-        let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
+        let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); self.state = .offline; let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
     }
     func connect() async { shouldReconnect = true; scan() }
-    func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state == .poweredOn { scan() } else { isAvailable = false; state = .offline } }
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        switch central.state {
+        case .poweredOn: radioState = .poweredOn; if state == .unavailable { state = .offline }; scan()
+        case .poweredOff: radioState = .poweredOff; isAvailable = false; state = .unavailable
+        case .unsupported: radioState = .unsupported; isAvailable = false; state = .unavailable
+        case .unauthorized: radioState = .unauthorized; isAvailable = false; state = .unavailable
+        case .resetting: radioState = .resetting; isAvailable = false; state = .unavailable
+        case .unknown: radioState = .unknown; isAvailable = false; state = .unavailable
+        @unknown default: radioState = .unknown; isAvailable = false; state = .unavailable
+        }
+    }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
         appLog(.bluetooth, "discovered deviceId=\(deviceId) rssi=\(RSSI) connect requested")
         self.peripheral = peripheral
         scanTimeoutWork?.cancel()
         central.stopScan()
-        state = .connecting; central.connect(peripheral)
+        state = .discovered
+        central.connect(peripheral)
+        state = .connecting
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); peripheral.delegate = self; peripheral.discoverServices([service, legacyService, otaService, diagnosticsService]) }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, legacyService, otaService, diagnosticsService]) }
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        appLog(.errors, "BLE connection failed error=\(error?.localizedDescription ?? "unknown")")
+        self.peripheral = nil; isAvailable = false; state = shouldReconnect ? .reconnecting : .offline
+        guard shouldReconnect else { return }
+        reconnectWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.scan() }
+        reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         appLog(error == nil ? .bluetooth : .errors, "BLE disconnected error=\(error?.localizedDescription ?? "none") reconnect=\(shouldReconnect)")
         let authFailed = state == .authenticationFailed
@@ -1021,7 +1165,7 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         pendingServices -= 1
         guard pendingServices == 0 else { return }
         let hasBinary = characteristics[mouse] != nil && characteristics[keyboard] != nil && characteristics[control] != nil
-        guard hasBinary else { appLog(.errors, "BLE control characteristics missing"); isAvailable = false; state = .offline; return }
+        guard hasBinary else { appLog(.errors, "BLE control characteristics missing"); isAvailable = false; state = .offline; central.cancelPeripheralConnection(peripheral); return }
         guard let token, !token.isEmpty else { isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral); return }
         guard !token.contains("\n"), !token.contains("\r"), let tx = characteristics[legacyTX], characteristics[legacyRX] != nil else { failAuthentication(peripheral); return }
         state = .authenticating
@@ -1133,11 +1277,15 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
 @MainActor enum InputPilotBluetoothManager {
     private static var sessions: [String: BLEHIDControlTransport] = [:]
     static func session(deviceId: String, token: String?) -> BLEHIDControlTransport {
-        let key = deviceId.lowercased() + "|" + (token ?? "")
-        if let existing = sessions[key] { return existing }
+        let key = deviceId.lowercased()
+        if let existing = sessions[key] { existing.updateToken(token); return existing }
         let session = BLEHIDControlTransport(deviceId: deviceId, token: token)
         sessions[key] = session
         return session
+    }
+    static func removeSession(deviceId: String) async {
+        guard let session = sessions.removeValue(forKey: deviceId.lowercased()) else { return }
+        await session.disconnect()
     }
 }
 
@@ -1268,16 +1416,22 @@ final class BLEHIDControlTransport: NSObject, HIDControlTransport, CBCentralMana
         return messages
     }
     var transportReadiness: [(TransportKind, Bool)] { [(.bluetooth, ble.isAvailable), (.tcp, tcp.isAvailable), (.rest, rest.isAvailable)] }
+    var transportStates: [(TransportKind, TransportConnectionState)] { [(.bluetooth, ble.state), (.tcp, tcp.state), (.rest, rest.state)] }
     var connectionSummary: String {
         if protocolVersion > 1 { return "Firmware unsupported" }
+        if let activeTransport, transport(for: activeTransport).state == .ready { return "Active · \(activeTransport.rawValue)" }
+        if let ready = candidateTransports(lowLatency: false).first(where: { $0.state == .ready }) { return "Ready · \(ready.kind.rawValue)" }
         if let lastError { return lastError }
-        if let activeTransport { return "Connected · \(activeTransport.rawValue)" }
         if allTransports.contains(where: { $0.state == .authenticationFailed }) { return "Authentication failed" }
         if allTransports.contains(where: { $0.state == .reconnecting }) { return "Reconnecting…" }
-        if isConnecting || allTransports.contains(where: { [.connecting, .authenticating].contains($0.state) }) { return "Connecting…" }
+        if allTransports.contains(where: { $0.state == .authenticating }) { return "Authenticating…" }
+        if isConnecting || allTransports.contains(where: { [.discovering, .discovered, .connecting, .connected].contains($0.state) }) { return "Connecting…" }
         return "Offline"
     }
     private var allTransports: [HIDControlTransport] { [ble, tcp, rest] }
+    private func transport(for kind: TransportKind) -> HIDControlTransport {
+        switch kind { case .bluetooth: ble; case .tcp: tcp; case .rest: rest }
+    }
     private func requiredCapability(for event: HIDEvent) -> String? {
         switch event {
         case .mouseMove: "mouse_move"
@@ -1363,7 +1517,7 @@ struct HIDControlView: View {
     init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 4) { HStack { Circle().fill(manager.activeTransport == nil ? .orange : .green).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }; TimelineView(.periodic(from: .now, by: 1)) { _ in HStack(spacing: 12) { ForEach(manager.transportReadiness, id: \.0) { item in Label(item.0.rawValue, systemImage: item.1 ? "circle.fill" : "circle").foregroundStyle(item.1 ? .green : .secondary) } }.font(.caption2) } }
+            VStack(spacing: 4) { HStack { Circle().fill(manager.connectionSummary.hasPrefix("Active") || manager.connectionSummary.hasPrefix("Ready") ? .green : .orange).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }; TimelineView(.periodic(from: .now, by: 1)) { _ in HStack(spacing: 12) { ForEach(manager.transportStates, id: \.0) { item in Text("\(item.0.rawValue): \(item.1.title)").foregroundStyle(item.1 == .ready ? .green : .secondary) } }.font(.caption2) } }
                 .padding(.horizontal)
             Picker("Control", selection: $section) { ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
             Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager); case .macros: MacrosView(manager: manager, controller: macros) } }

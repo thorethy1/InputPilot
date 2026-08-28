@@ -2,7 +2,7 @@
 
 Kotlin + Jetpack Compose companion for **usb-hid-s3** / **hid-helper** firmware **0.4.0+**.
 
-Feature parity with the [iOS InputPilot](../ios/) app: device list, LED-matched presence, jiggle, add-by-address confirm, LAN NSD scan, Soft-AP provisioning.
+Companion support for the core InputPilot device workflow: device list with live Wi-Fi presence, Keep Awake management, add-by-address confirmation, LAN NSD scan, and Soft-AP provisioning.
 
 ## Requirements
 
@@ -43,7 +43,7 @@ LAN/Soft-AP control is unauthenticated unless firmware `CONTROL_API_TOKEN` is se
 - [ ] Unit tests via Gradle
 - [ ] Emulator empty state + install
 - [ ] Add by address to live device (host LAN reachable from emulator)
-- [ ] Jiggle / rename / delete / pull-to-refresh / presence poll (~15s)
+- [ ] Keep Awake / rename / delete / pull-to-refresh / checking-online-offline presence poll (~15s)
 - [ ] Device: NSD scan finds `hid-helper-xxxx`
 - [ ] Device: Soft-AP Path B provisions home Wi‑Fi
 - [ ] Emulator Soft-AP: Continue after manual Wi‑Fi

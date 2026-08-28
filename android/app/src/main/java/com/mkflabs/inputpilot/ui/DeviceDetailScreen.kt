@@ -150,13 +150,22 @@ fun DeviceDetailScreen(
                     singleLine = true,
                 )
 
+                Text("Keep Awake", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 16.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 ) {
-                    Text("Enable jiggle", modifier = Modifier.weight(1f))
-                    Switch(checked = d.jiggleEnabled, onCheckedChange = viewModel::setJiggle)
+                    Text("Move pointer periodically", modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = d.jiggleEnabled,
+                        onCheckedChange = viewModel::setJiggle,
+                        enabled = presence == com.mkflabs.inputpilot.network.DevicePresenceStatus.ONLINE,
+                    )
                 }
+                Text(
+                    "Prevents the attached computer from becoming idle. This setting requires a live Wi-Fi connection.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Button(
                     onClick = { confirmDelete = true },

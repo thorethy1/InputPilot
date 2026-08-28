@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.8.3] - 2026-08-28
+
+### Fixed
+
+- Replaced capability-derived Bluetooth availability with live radio, discovery, connection, authentication, and ready states shared across Devices, Control, Firmware, and Settings.
+- Saved devices on iOS and Android now start in a checking state, clearly become offline when unavailable, and no longer retain misleading ready/active presentation after transport loss.
+- Fixed unhandled Bluetooth connection failures, duplicate per-token sessions, stale reconnect presentation, session cleanup on device deletion, and false OTA failures caused by ordinary Bluetooth disconnects while no update was active.
+- Firmware management now distinguishes installed and latest versions, update availability, up-to-date/newer installs, incompatible firmware, app-version requirements, and release-check failures.
+
+### Changed
+
+- Removed the pointer-jiggle switch from iOS and Android device rows and reworked it as the explanatory “Keep Awake” setting in device management, available only over live Wi-Fi.
+- Replaced “Ready to Move,” “Moving,” and generic OTA “Available” labels with transport and firmware states that describe what the user can actually do.
+
+### Added
+
+- Focused regressions for initial/offline/reconnected presence, transport precedence, firmware compatibility, up-to-date firmware, and newer-app requirements.
+
 ## [0.8.2] - 2026-08-27
 
 ### Fixed

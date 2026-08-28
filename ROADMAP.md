@@ -18,33 +18,21 @@ Completed
 * BLE as first-class InputPilot transport
 * Release artifacts and firmware manifests
 
-Remaining 0.8.x Bugs / Reliability Fixes
+Completed in 0.8.3
 
-These should preferably be fixed before beginning major 0.9 UI work.
-
-* Fix incorrect “Bluetooth Available” status
-    * Clearly distinguish:
-        * Bluetooth supported
-        * Bluetooth enabled
-        * Device discovered
-        * Device connected
-        * Device authenticated
-        * Device ready
-* Device UI must clearly show when a saved device is currently unavailable/offline
-* Fix or remove non-functional switch in Devices
-* Rework/remove Move feature
-    * Current location/function is unclear
-    * Move it into an appropriate device-management menu if still necessary
-* Replace ambiguous statuses such as:
-    * Ready to Move
-    * Available in OTA
-* OTA UI should clearly distinguish:
-    * Installed firmware
-    * Latest available firmware
-    * Update available
-    * Device is up to date
-    * Firmware not compatible
-    * App update required
+* Replaced the incorrect capability-derived “Bluetooth Available” status with live Bluetooth radio, discovery, connection, authentication, and readiness state.
+* Saved devices now begin in a checking state and clearly become ready, online via Wi-Fi, reconnecting, authentication failed, setup required, or offline from live transport information.
+- [x] Improve Connection UX & Transport State
+  - Clearly distinguish Available / Connected / Active / Reconnecting
+  - Always show which transport is currently used
+  - Make Automatic transport fallback understandable
+  - Do not show "Reconnecting" when another transport is actively working
+  - Add clear connection error states and recovery actions
+  - Transport state must stay consistent across Device, Control and Settings
+* Removed the pointer-jiggle switch from device rows; reworked it as the explanatory “Keep Awake” device-management setting and disabled it without the Wi-Fi connection its API requires.
+* Removed ambiguous “Ready to Move” and “Moving” terminology from iOS and Android, plus generic OTA “Available” terminology from the iOS firmware UI.
+* Firmware management now distinguishes installed/latest firmware, update available, up to date, installed newer, incompatible firmware, app update required, and unavailable release information.
+* Fixed stale Bluetooth connection attempts and prevented ordinary disconnects from creating false OTA failures.
 
 ⸻
 

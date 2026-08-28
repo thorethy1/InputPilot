@@ -24,12 +24,6 @@ struct ContentView: View {
             }
             .navigationTitle("InputPilot")
             .toolbar { toolbarContent }
-            .task(id: storedDevices.map(\.deviceId)) {
-                while !Task.isCancelled {
-                    await viewModel.refreshQuietly(devices: storedDevices, context: modelContext)
-                    try? await Task.sleep(nanoseconds: HomeViewModel.presencePollNanoseconds)
-                }
-            }
             .refreshable {
                 await viewModel.refreshAll(devices: storedDevices, context: modelContext)
             }
@@ -55,6 +49,12 @@ struct ContentView: View {
         }
         .tint(AppColors.primary)
         .environmentObject(viewModel)
+        .task(id: storedDevices.map(\.deviceId)) {
+            while !Task.isCancelled {
+                await viewModel.refreshQuietly(devices: storedDevices, context: modelContext)
+                try? await Task.sleep(nanoseconds: HomeViewModel.presencePollNanoseconds)
+            }
+        }
     }
 
     private var deviceList: some View {
@@ -64,12 +64,7 @@ struct ContentView: View {
             } label: {
                 DeviceRowView(
                     device: device,
-                    presence: DevicePresenceStatus.resolve(
-                        isReachable: !viewModel.offlineDeviceIds.contains(device.deviceId),
-                        jiggleEnabled: device.jiggleEnabled,
-                        staIP: device.staIP
-                    ),
-                    jiggleBinding: jiggleBinding(for: device)
+                    wifiState: viewModel.wifiState(for: device.deviceId)
                 )
             }
         }
@@ -113,17 +108,6 @@ struct ContentView: View {
         }
     }
 
-    private func jiggleBinding(for device: StoredDevice) -> Binding<Bool> {
-        Binding(
-            get: { device.jiggleEnabled },
-            set: { newValue in
-                Task {
-                    await viewModel.setJiggle(device: device, enabled: newValue, context: modelContext)
-                }
-            }
-        )
-    }
-
     private var errorAlertBinding: Binding<Bool> {
         Binding(
             get: { viewModel.errorMessage != nil },
@@ -134,46 +118,76 @@ struct ContentView: View {
 
 private struct DeviceRowView: View {
     let device: StoredDevice
-    let presence: DevicePresenceStatus
-    @Binding var jiggleBinding: Bool
+    let wifiState: WiFiReachabilityState
+    @ObservedObject private var bluetooth: BLEHIDControlTransport
+
+    init(device: StoredDevice, wifiState: WiFiReachabilityState) {
+        self.device = device
+        self.wifiState = wifiState
+        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken))
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(statusColor)
+                .fill(presence.color)
                 .frame(width: 10, height: 10)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(device.displayName)
                     .font(.headline)
-                Text(statusTitle)
+                Text(presence.title)
                     .font(.subheadline)
-                    .foregroundStyle(statusColor)
-                Text(subtitle)
+                    .foregroundStyle(presence.color)
+                Text(presence.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(device.displayName), \(statusTitle)")
-
-            Spacer()
-
-            Toggle("Jiggle", isOn: $jiggleBinding)
-                .labelsHidden()
+            .accessibilityLabel("\(device.displayName), \(presence.title), \(presence.detail)")
         }
         .padding(.vertical, 2)
+        .task { await bluetooth.connect() }
     }
 
-    private var subtitle: String {
-        let bluetooth = device.capabilities.isEmpty || device.capabilities.contains("ble_control") ? "Bluetooth available" : nil
-        let wifi = device.staIP.map { "Wi-Fi \($0)" }
-        return [bluetooth, wifi].compactMap { $0 }.joined(separator: " · ")
+    private var presence: DevicePresenceStatus {
+        DevicePresenceStatus.resolve(
+            wifi: wifiState,
+            bluetooth: bluetooth.state,
+            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).isEmpty
+        )
     }
-    private var hasBluetooth: Bool { device.capabilities.isEmpty || device.capabilities.contains("ble_control") }
-    private var statusTitle: String { presence == .offline && hasBluetooth ? "Bluetooth available" : presence.title }
-    private var statusColor: Color { presence == .offline && hasBluetooth ? AppColors.info : presence.ledColor }
+}
+
+private struct LiveDeviceStatusView: View {
+    let device: StoredDevice
+    @EnvironmentObject private var viewModel: HomeViewModel
+    @ObservedObject private var bluetooth: BLEHIDControlTransport
+
+    init(device: StoredDevice) {
+        self.device = device
+        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken))
+    }
+
+    private var presence: DevicePresenceStatus {
+        DevicePresenceStatus.resolve(
+            wifi: viewModel.wifiState(for: device.deviceId),
+            bluetooth: bluetooth.state,
+            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).isEmpty
+        )
+    }
+
+    var body: some View {
+        HStack {
+            Label(presence.title, systemImage: presence.isUsable ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(presence.color)
+            Spacer()
+            Text(presence.detail).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+        }
+        .task { await bluetooth.connect() }
+    }
 }
 
 private struct ControlRootView: View {
@@ -185,6 +199,7 @@ private struct ControlRootView: View {
             if let selected {
                 List {
                     Section("Active device") { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
+                    Section("Connection") { LiveDeviceStatusView(device: selected) }
                     Section { NavigationLink { HIDControlView(device: selected) } label: { Label("Open Trackpad, Keyboard, Presets & Macros", systemImage: "computermouse") } }
                 }
             } else { ContentUnavailableView("Select an InputPilot device", systemImage: "computermouse", description: Text("Add a device in the Devices tab first.")) }
@@ -216,6 +231,7 @@ private struct FirmwareDeviceView: View {
     @State private var selectedName = ""
     @State private var targetVersion = ""
     @State private var manualValidationError: String?
+    private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
@@ -228,14 +244,24 @@ private struct FirmwareDeviceView: View {
     }
     var body: some View {
         Form {
-            Section("Device") { Picker("Active device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } }; LabeledContent("Installed", value: device.firmwareVersion ?? "Unknown"); if let manifest = releaseSource.manifest { LabeledContent("Available", value: manifest.version) } }
+            Section("Firmware") {
+                Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } }
+                LiveDeviceStatusView(device: device)
+                LabeledContent("Installed firmware", value: device.firmwareVersion ?? "Unknown")
+                LabeledContent("Latest firmware", value: releaseSource.manifest?.version ?? "Not checked")
+                LabeledContent("Update status", value: releaseSource.status.title)
+                if let detail = releaseSource.status.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
             Section("Firmware Update") {
-                if !device.capabilities.isEmpty && !device.capabilities.contains("ble_ota") && !device.capabilities.contains("wifi_ota") || device.otaSchema < 1 {
-                    Label("This device needs a one-time USB migration before firmware updates are available.", systemImage: "cable.connector").foregroundStyle(.secondary)
+                if device.protocolVersion > FirmwareReleaseEvaluator.supportedProtocol {
+                    Label("This device firmware requires a newer version of InputPilot.", systemImage: "app.badge").foregroundStyle(AppColors.warning)
+                } else if device.otaSchema < 1 {
+                    Label("This device needs a one-time USB migration before firmware updates can be installed.", systemImage: "cable.connector").foregroundStyle(.secondary)
+                } else if !device.capabilities.isEmpty && !device.capabilities.contains("ble_ota") && !device.capabilities.contains("wifi_ota") {
+                    Label("The installed firmware does not provide a supported update transport.", systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning)
                 } else {
-                    Label("Available", systemImage: "checkmark.circle").foregroundStyle(AppColors.success)
-                    Button("Check GitHub Releases") { Task { await releaseSource.check(installed: device.firmwareVersion) } }
-                    if releaseSource.updateAvailable { Button("Download Latest Firmware") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
+                    Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion) } }
+                    if releaseSource.status.canDownload { Button("Download Firmware \(releaseSource.manifest?.version ?? "")") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
                     if let error = releaseSource.errorMessage { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     if let selectedData { LabeledContent("File", value: selectedName); LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file)) }
                     if let manualValidationError { Label(manualValidationError, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
@@ -255,6 +281,11 @@ private struct FirmwareDeviceView: View {
             }
         }
         .task { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); await transport.connect() }
+        .onChange(of: updater.state) { _, state in
+            guard state == .completed, let installed = updater.installedVersion ?? (targetVersion.isEmpty ? nil : targetVersion) else { return }
+            device.firmwareVersion = installed
+            releaseSource.reconcile(installed: installed, deviceOTASchema: device.otaSchema, appVersion: appVersion)
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data]) { result in
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
@@ -271,11 +302,15 @@ private struct FirmwareDeviceView: View {
     static let manifestAssetName = "firmware-manifest.json"
     static let firmwareAssetName = "firmware.bin"
     @Published var manifest: FirmwareManifest?
-    @Published var updateAvailable = false
+    @Published var status = FirmwareReleaseStatus.notChecked
     @Published var errorMessage: String?
     private var firmwareURL: URL?
-    func check(installed: String?) async {
-        errorMessage = nil
+    func reconcile(installed: String?, deviceOTASchema: Int, appVersion: String) {
+        guard let manifest else { return }
+        status = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: manifest, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
+    }
+    func check(installed: String?, deviceOTASchema: Int, appVersion: String) async {
+        errorMessage = nil; manifest = nil; firmwareURL = nil; status = .checking
         do {
             let url = URL(string: "https://api.github.com/repos/thorethy1/InputPilot/releases/latest")!
             var request = URLRequest(url: url); request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -286,17 +321,25 @@ private struct FirmwareDeviceView: View {
                   let manifestString = assets.first(where: { $0["name"] as? String == Self.manifestAssetName })?["browser_download_url"] as? String,
                   let firmwareString = assets.first(where: { $0["name"] as? String == Self.firmwareAssetName })?["browser_download_url"] as? String,
                   let manifestURL = URL(string: manifestString), let imageURL = URL(string: firmwareString) else { throw URLError(.badServerResponse) }
-            let (manifestData, _) = try await URLSession.shared.data(from: manifestURL)
+            let (manifestData, manifestResponse) = try await URLSession.shared.data(from: manifestURL)
+            guard (manifestResponse as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
             let decoded = try JSONDecoder().decode(FirmwareManifest.self, from: manifestData)
-            try FirmwareManifestValidator.validate(decoded)
-            manifest = decoded; firmwareURL = imageURL
-            updateAvailable = installed.flatMap(SemanticVersion.init).map { current in SemanticVersion(decoded.version).map { current < $0 } ?? false } ?? true
-        } catch { errorMessage = "Could not check GitHub Releases." }
+            let evaluated = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: decoded, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
+            manifest = decoded; status = evaluated
+            if evaluated.canDownload {
+                try FirmwareManifestValidator.validate(decoded)
+                firmwareURL = imageURL
+            }
+        } catch {
+            let message = "Could not check the latest firmware release."
+            errorMessage = message; status = .unavailable(message)
+        }
     }
     func downloadFirmware() async -> Data? {
-        guard let firmwareURL, let manifest else { return nil }
+        guard status.canDownload, let firmwareURL, let manifest else { return nil }
         do {
-            let (data, _) = try await URLSession.shared.data(from: firmwareURL)
+            let (data, response) = try await URLSession.shared.data(from: firmwareURL)
+            guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
             try FirmwareManifestValidator.validate(manifest, firmware: data)
             return data
         } catch { errorMessage = "Could not download the firmware image."; return nil }
@@ -311,7 +354,11 @@ private struct ConnectionSettingsView: View {
     private let appVersion = AppVersionInfo.read()
     var body: some View {
         Form {
-            Section("Connection") { Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }; Text(explanation).font(.caption).foregroundStyle(.secondary) }
+            Section("Connection") {
+                if let selected { LiveDeviceStatusView(device: selected) }
+                Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }
+                Text(explanation).font(.caption).foregroundStyle(.secondary)
+            }
             Section("Diagnostics") {
                 if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
                 else { LabeledContent("Firmware Logs", value: "Add a device first") }
@@ -333,7 +380,7 @@ private struct ConnectionSettingsView: View {
             Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") }
         }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
     }
-    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "InputPilot automatically chooses the best available connection for each operation."; case .preferBluetooth: "Uses nearby Bluetooth first, then Wi-Fi when needed."; case .preferWiFi: "Uses Wi-Fi first, with Bluetooth as fallback."; case .bluetoothOnly: "Controls InputPilot nearby without Wi-Fi or internet."; case .wifiOnly: "Uses TCP or REST over your local Wi-Fi network." } }
+    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses Bluetooth first for interactive controls and Wi-Fi first for bulk work, then falls back to another ready transport."; case .preferBluetooth: "Uses ready Bluetooth first, then falls back to Wi-Fi."; case .preferWiFi: "Uses ready Wi-Fi first, then falls back to Bluetooth."; case .bluetoothOnly: "Uses only an authenticated, ready Bluetooth connection."; case .wifiOnly: "Uses only a ready TCP or REST connection on the local Wi-Fi network." } }
 }
 
 private struct AppLogsView: View {

@@ -1,4 +1,3 @@
-import CoreBluetooth
 import XCTest
 import CoreBluetooth
 @testable import InputPilot
@@ -25,6 +24,23 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(manifest.protocolVersion, 1)
         XCTAssertEqual(manifest.otaSchema, 1)
         XCTAssertEqual(manifest.size, 1_271_270)
+        XCTAssertNil(manifest.minimumAppVersion)
+    }
+
+    func testFirmwareReleaseStatesDistinguishUpdateCompatibilityAndAppRequirement() {
+        let hash = String(repeating: "a", count: 64)
+        let current = FirmwareManifest(product: "InputPilot", version: "0.8.3", board: "esp32-s3-zero-4mb", protocolVersion: 1, otaSchema: 1, size: 1, sha256: hash)
+        XCTAssertEqual(FirmwareReleaseEvaluator.evaluate(installed: "0.8.2", manifest: current, deviceOTASchema: 1, appVersion: "0.8.3"), .updateAvailable("0.8.3"))
+        XCTAssertEqual(FirmwareReleaseEvaluator.evaluate(installed: "0.8.3", manifest: current, deviceOTASchema: 1, appVersion: "0.8.3"), .upToDate("0.8.3"))
+        XCTAssertEqual(FirmwareReleaseEvaluator.evaluate(installed: "0.9.0", manifest: current, deviceOTASchema: 1, appVersion: "0.8.3"), .installedNewer(latest: "0.8.3"))
+
+        let futureProtocol = FirmwareManifest(product: "InputPilot", version: "0.9.0", board: "esp32-s3-zero-4mb", protocolVersion: 2, otaSchema: 1, size: 1, sha256: hash)
+        XCTAssertEqual(FirmwareReleaseEvaluator.evaluate(installed: "0.8.3", manifest: futureProtocol, deviceOTASchema: 1, appVersion: "0.8.3").title, "App update required")
+
+        let newerApp = FirmwareManifest(product: "InputPilot", version: "0.8.4", board: "esp32-s3-zero-4mb", protocolVersion: 1, otaSchema: 1, size: 1, sha256: hash, minimumAppVersion: "0.8.4")
+        XCTAssertEqual(FirmwareReleaseEvaluator.evaluate(installed: "0.8.3", manifest: newerApp, deviceOTASchema: 1, appVersion: "0.8.3").title, "App update required")
+
+        XCTAssertEqual(FirmwareReleaseEvaluator.evaluate(installed: "0.8.3", manifest: current, deviceOTASchema: 0, appVersion: "0.8.3").title, "Firmware not compatible")
     }
 
     func testBLEDeviceMetadataDecoding() throws {
@@ -149,6 +165,8 @@ final class HIDRemoteTests: XCTestCase {
     func testActiveOTAStatesBlockConflictingCommands() {
         let updater = FirmwareUpdateManager()
         XCTAssertFalse(updater.blocksControl)
+        updater.disconnected(expected: false)
+        XCTAssertEqual(updater.state, .idle)
         XCTAssertTrue(FirmwareUpdateManager.disconnectIsExpected(during: .installing))
     }
 
@@ -321,6 +339,14 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(manager.connectionSummary, "Firmware unsupported")
     }
 
+    @MainActor func testReadyTransportWinsOverAnotherTransportReconnecting() {
+        let ble = MockTransport(kind: .bluetooth, available: false, state: .reconnecting)
+        let tcp = MockTransport(kind: .tcp, available: true)
+        let rest = MockTransport(kind: .rest, available: false)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, rest: rest)
+        XCTAssertEqual(manager.connectionSummary, "Ready · Wi-Fi TCP")
+    }
+
     @MainActor func testMacroCompressionPreservesNonMovementEvents() {
         let controller = MacroController()
         controller.startRecording()
@@ -346,9 +372,10 @@ final class HIDRemoteTests: XCTestCase {
 private final class MockTransport: HIDControlTransport {
     let kind: TransportKind
     var isAvailable: Bool
-    var state: TransportConnectionState { isAvailable ? .ready : .offline }
+    private let explicitState: TransportConnectionState?
+    var state: TransportConnectionState { explicitState ?? (isAvailable ? .ready : .offline) }
     var events: [HIDEvent] = []
-    init(kind: TransportKind, available: Bool) { self.kind = kind; isAvailable = available }
+    init(kind: TransportKind, available: Bool, state: TransportConnectionState? = nil) { self.kind = kind; isAvailable = available; explicitState = state }
     func connect() async {}
     func send(_ event: HIDEvent) async throws { events.append(event) }
     func disconnect() async { isAvailable = false }

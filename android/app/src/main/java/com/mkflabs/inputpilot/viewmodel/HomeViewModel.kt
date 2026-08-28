@@ -27,6 +27,8 @@ class HomeViewModel(
 
     private val _offlineIds = MutableStateFlow<Set<String>>(emptySet())
     val offlineIds: StateFlow<Set<String>> = _offlineIds.asStateFlow()
+    private val _checkedIds = MutableStateFlow<Set<String>>(emptySet())
+    val checkedIds: StateFlow<Set<String>> = _checkedIds.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -38,9 +40,8 @@ class HomeViewModel(
 
     fun presenceFor(device: StoredDeviceEntity): DevicePresenceStatus =
         DevicePresenceStatus.resolve(
-            isReachable = !_offlineIds.value.contains(device.deviceId),
-            jiggleEnabled = device.jiggleEnabled,
-            staIp = device.staIp,
+            isReachable = if (_checkedIds.value.contains(device.deviceId)) !_offlineIds.value.contains(device.deviceId) else null,
+            hasNetworkEndpoint = device.mdnsHost.isNotBlank() || !device.staIp.isNullOrBlank(),
         )
 
     /** Pull-to-refresh: shows the list indicator. */
@@ -58,6 +59,7 @@ class HomeViewModel(
                 try {
                     val current = repository.getAll()
                     _offlineIds.value = repository.refreshAll(current)
+                    _checkedIds.value = current.mapTo(mutableSetOf()) { it.deviceId }
                 } catch (e: Exception) {
                     _error.value = e.message
                 } finally {
@@ -71,8 +73,10 @@ class HomeViewModel(
             try {
                 repository.setJiggle(device, enabled)
                 _offlineIds.value = _offlineIds.value - device.deviceId
+                _checkedIds.value = _checkedIds.value + device.deviceId
             } catch (e: Exception) {
                 _offlineIds.value = _offlineIds.value + device.deviceId
+                _checkedIds.value = _checkedIds.value + device.deviceId
                 _error.value = e.message
             }
         }

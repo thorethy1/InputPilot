@@ -21,7 +21,7 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.8.2
+  version: 0.8.3
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot

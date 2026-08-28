@@ -1,46 +1,87 @@
 import SwiftUI
 
-/// Runtime presence derived from reachability + device state.
-/// Colors match the ESP32 WS2812 status LED (see firmware `StatusLed`).
-enum DevicePresenceStatus: String, Equatable, Sendable, CaseIterable {
+enum WiFiReachabilityState: Equatable, Sendable {
+    case checking
+    case reachable
+    case offline
+}
+
+/// A user-facing summary derived exclusively from live transport state.
+/// Persisted capabilities describe what a device supports, never whether it is online.
+enum DevicePresenceStatus: Equatable, Sendable {
+    case checking
     case offline
     case setup
-    case readyToMove
-    case moving
+    case bluetoothDiscovered
+    case connecting
+    case reconnecting
+    case authenticating
+    case authenticationFailed
+    case readyBluetooth
+    case readyWiFi
 
     var title: String {
         switch self {
+        case .checking: "Checking availability…"
         case .offline: "Offline"
-        case .setup: "Setup"
-        case .readyToMove: "Ready to move"
-        case .moving: "Moving"
+        case .setup: "Setup required"
+        case .bluetoothDiscovered: "Nearby via Bluetooth"
+        case .connecting: "Connecting…"
+        case .reconnecting: "Reconnecting…"
+        case .authenticating: "Authenticating…"
+        case .authenticationFailed: "Authentication failed"
+        case .readyBluetooth: "Ready via Bluetooth"
+        case .readyWiFi: "Online via Wi-Fi"
         }
     }
 
-    /// Approximate LED color shown on the board.
-    var ledColor: Color {
+    var detail: String {
         switch self {
-        case .offline:
-            // Solid red — WiFi down / unreachable
-            Color(red: 0.95, green: 0.15, blue: 0.12)
-        case .setup:
-            // Magenta — Soft-AP setup
-            Color(red: 0.95, green: 0.15, blue: 0.85)
-        case .readyToMove:
-            // Dim green — STA up, jiggle off
-            Color(red: 0.12, green: 0.72, blue: 0.28)
-        case .moving:
-            // Cyan — STA up, jiggle on
-            Color(red: 0.10, green: 0.78, blue: 0.82)
+        case .checking: "Checking Bluetooth and Wi-Fi"
+        case .offline: "Saved device is currently unavailable"
+        case .setup: "Connect the device to Wi-Fi to finish setup"
+        case .bluetoothDiscovered: "Discovered, but not connected"
+        case .connecting: "Establishing a device connection"
+        case .reconnecting: "The previous connection was lost"
+        case .authenticating: "Verifying device access"
+        case .authenticationFailed: "Check the device API token"
+        case .readyBluetooth: "Bluetooth is connected and authenticated"
+        case .readyWiFi: "Device responded on the local network"
         }
     }
 
-    static func resolve(isReachable: Bool, jiggleEnabled: Bool, staIP: String?) -> DevicePresenceStatus {
-        guard isReachable else { return .offline }
-        let hasStaIP = !(staIP?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        if !hasStaIP {
-            return .setup
+    var isUsable: Bool { self == .readyBluetooth || self == .readyWiFi }
+
+    var color: Color {
+        switch self {
+        case .readyBluetooth, .readyWiFi: AppColors.success
+        case .bluetoothDiscovered, .connecting, .reconnecting, .authenticating, .checking: AppColors.info
+        case .setup: AppColors.warning
+        case .authenticationFailed, .offline: AppColors.error
         }
-        return jiggleEnabled ? .moving : .readyToMove
+    }
+
+    static func resolve(
+        wifi: WiFiReachabilityState,
+        bluetooth: TransportConnectionState,
+        hasConfiguredWiFi: Bool
+    ) -> DevicePresenceStatus {
+        // A working transport takes precedence over a failure or reconnect on another.
+        if bluetooth == .ready { return .readyBluetooth }
+        if wifi == .reachable { return hasConfiguredWiFi ? .readyWiFi : .setup }
+
+        switch bluetooth {
+        case .authenticationFailed: return .authenticationFailed
+        case .authenticating: return .authenticating
+        case .connected, .connecting: return .connecting
+        case .reconnecting: return .reconnecting
+        case .discovered: return .bluetoothDiscovered
+        case .discovering:
+            return wifi == .checking ? .checking : .offline
+        case .unavailable, .offline:
+            return wifi == .checking ? .checking : .offline
+        case .ready:
+            return .readyBluetooth
+        }
     }
 }

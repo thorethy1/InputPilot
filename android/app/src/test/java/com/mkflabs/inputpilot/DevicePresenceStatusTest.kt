@@ -9,31 +9,31 @@ class DevicePresenceStatusTest {
     fun offlineWhenUnreachable() {
         assertEquals(
             DevicePresenceStatus.OFFLINE,
-            DevicePresenceStatus.resolve(false, true, "192.168.2.161"),
+            DevicePresenceStatus.resolve(false, true),
         )
     }
 
     @Test
-    fun readyWhenOnlineJiggleOff() {
+    fun checkingBeforeFirstProbe() {
         assertEquals(
-            DevicePresenceStatus.READY_TO_MOVE,
-            DevicePresenceStatus.resolve(true, false, "192.168.2.161"),
+            DevicePresenceStatus.CHECKING,
+            DevicePresenceStatus.resolve(null, true),
         )
     }
 
     @Test
-    fun movingWhenOnlineJiggleOn() {
+    fun onlineWhenReachable() {
         assertEquals(
-            DevicePresenceStatus.MOVING,
-            DevicePresenceStatus.resolve(true, true, "192.168.2.161"),
+            DevicePresenceStatus.ONLINE,
+            DevicePresenceStatus.resolve(true, true),
         )
     }
 
     @Test
-    fun setupWhenNoStaIp() {
+    fun setupWhenNoNetworkEndpoint() {
         assertEquals(
             DevicePresenceStatus.SETUP,
-            DevicePresenceStatus.resolve(true, false, null),
+            DevicePresenceStatus.resolve(true, false),
         )
     }
 }

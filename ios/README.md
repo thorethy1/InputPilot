@@ -1,7 +1,5 @@
 # InputPilot (iOS)
 
-OUTDATED PLEASE UPDATE ME!
-
 SwiftUI/SwiftData companion app for discovering and controlling **InputPilot** ESP32-S3 devices over BLE, persistent TCP, and local REST.
 
 <p align="center">
@@ -95,7 +93,9 @@ Run on Simulator unless noted. Physical device required for Soft-AP join and the
 - [ ] **Add by address** — save a lab device by IP/hostname; list shows offline until refresh
 - [ ] **Wizard Path A** — scan finds Bonjour candidate (or empty scan on Simulator); probe + save
 - [ ] **Wizard Path B** (device) — join Soft-AP, provision home Wi‑Fi, rediscover or manual fallback
-- [ ] **Jiggle toggle** — enable/disable on live device; host mouse moves when enabled
+- [ ] **Keep Awake** — enable/disable pointer movement from device details while the device is online via Wi-Fi
+- [ ] **Presence** — saved devices move through checking, offline, connecting/authenticating, and ready states without capability-derived false positives
+- [ ] **Firmware state** — installed/latest versions, up-to-date, update available, incompatibility, and app-update requirements are distinct
 - [ ] **Rename** — detail screen display name persists after relaunch
 - [ ] **Delete** — remove device from list and SwiftData
 - [ ] **Pull to refresh / presence poll** — online/offline badges track reachability

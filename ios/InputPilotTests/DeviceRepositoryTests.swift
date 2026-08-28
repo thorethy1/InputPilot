@@ -107,6 +107,25 @@ final class DeviceRepositoryTests: XCTestCase {
         XCTAssertEqual(stored.capabilities, ["keyboard_layout", "release_all"])
         XCTAssertNotNil(stored.lastCapabilitiesUpdate)
     }
+
+    func testHomePresenceStartsCheckingThenTracksOfflineAndReconnect() async throws {
+        let device = StoredDevice(deviceId: "presence", displayName: "Desk", mdnsHost: "desk.local")
+        context.insert(device); try context.save()
+        let viewModel = HomeViewModel(apiClient: mockAPI)
+        XCTAssertEqual(viewModel.wifiState(for: device.deviceId), .checking)
+
+        await viewModel.refreshDevice(device, context: context)
+        XCTAssertEqual(viewModel.wifiState(for: device.deviceId), .offline)
+
+        let url = URL(string: "http://desk.local/")!
+        mockAPI.statusResults[url] = .success(DeviceStatus(
+            ok: true, name: "InputPilot", version: "0.8.3", deviceId: "presence",
+            jiggle: false, jiggleIntervalMs: 10_000, mdns: "desk.local",
+            protocolVersion: 1, capabilities: ["wifi_control"], otaSchema: 1
+        ))
+        await viewModel.refreshDevice(device, context: context)
+        XCTAssertEqual(viewModel.wifiState(for: device.deviceId), .reachable)
+    }
 }
 
 final class DeviceEndpointResolverTests: XCTestCase {
