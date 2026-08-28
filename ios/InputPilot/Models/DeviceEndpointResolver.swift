@@ -8,16 +8,29 @@ enum DeviceEndpointResolver {
         return String(trimmed[..<percent])
     }
 
-    /// Candidate base URLs in preference order: mDNS host first, then STA IP.
+    /// Candidate base URLs in preference order: direct/routable address first,
+    /// then the Bonjour hostname as a discovery fallback.
     static func endpointURLs(mdnsHost: String, staIP: String?) -> [URL] {
         var urls: [URL] = []
-        if let mdnsURL = baseURL(from: mdnsHost) {
-            urls.append(mdnsURL)
-        }
         if let staIP, let ipURL = baseURL(from: staIP), !urls.contains(ipURL) {
             urls.append(ipURL)
         }
+        if let mdnsURL = baseURL(from: mdnsHost), !urls.contains(mdnsURL) {
+            urls.append(mdnsURL)
+        }
         return urls
+    }
+
+    /// Keeps the address that actually answered a manual/direct probe. The
+    /// device-reported STA address may be unreachable across a VPN.
+    static func directAddress(reportedSTAIP: String?, fallbackHost: String) -> String? {
+        let fallback = sanitizeHost(fallbackHost)
+        if !fallback.isEmpty, !fallback.lowercased().hasSuffix(".local") {
+            return fallback
+        }
+        guard let reportedSTAIP else { return nil }
+        let reported = sanitizeHost(reportedSTAIP)
+        return reported.isEmpty ? nil : reported
     }
 
     static func baseURL(from host: String) -> URL? {

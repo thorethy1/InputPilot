@@ -108,6 +108,30 @@ final class DeviceRepositoryTests: XCTestCase {
         XCTAssertNotNil(stored.lastCapabilitiesUpdate)
     }
 
+    func testAddByVPNAddressPersistsReachableAddress() async throws {
+        let status = DeviceStatus(
+            ok: true,
+            name: "InputPilot",
+            version: "0.8.4",
+            deviceId: "vpn-device",
+            jiggle: false,
+            jiggleIntervalMs: 10_000,
+            staIp: "192.168.2.161",
+            mdns: "hid-helper-vpn.local"
+        )
+
+        let stored = try await repository.addFromDiscovery(
+            status: status,
+            fallbackHost: "100.64.0.12",
+            displayName: "Remote InputPilot",
+            token: nil,
+            api: mockAPI
+        )
+
+        XCTAssertEqual(stored.staIP, "100.64.0.12")
+        XCTAssertEqual(stored.mdnsHost, "hid-helper-vpn.local")
+    }
+
     func testHomePresenceStartsCheckingThenTracksOfflineAndReconnect() async throws {
         let device = StoredDevice(deviceId: "presence", displayName: "Desk", mdnsHost: "desk.local")
         context.insert(device); try context.save()
@@ -129,15 +153,15 @@ final class DeviceRepositoryTests: XCTestCase {
 }
 
 final class DeviceEndpointResolverTests: XCTestCase {
-    func testEndpointURLsPrefersMdnsThenStaIP() {
+    func testEndpointURLsPrefersDirectAddressThenMdns() {
         let urls = DeviceEndpointResolver.endpointURLs(
             mdnsHost: "hid-helper-a1b2.local",
             staIP: "192.168.2.161"
         )
 
         XCTAssertEqual(urls.count, 2)
-        XCTAssertEqual(urls[0].absoluteString, "http://hid-helper-a1b2.local/")
-        XCTAssertEqual(urls[1].absoluteString, "http://192.168.2.161/")
+        XCTAssertEqual(urls[0].absoluteString, "http://192.168.2.161/")
+        XCTAssertEqual(urls[1].absoluteString, "http://hid-helper-a1b2.local/")
     }
 
     func testBaseURLAddsSchemeAndTrailingSlash() {
@@ -180,6 +204,26 @@ final class DeviceEndpointResolverTests: XCTestCase {
         XCTAssertEqual(
             DeviceEndpointResolver.baseURL(host: "192.168.2.161%en0", port: 80)?.absoluteString,
             "http://192.168.2.161/"
+        )
+    }
+
+    func testDirectProbeAddressWinsOverReportedLANAddress() {
+        XCTAssertEqual(
+            DeviceEndpointResolver.directAddress(
+                reportedSTAIP: "192.168.2.161",
+                fallbackHost: "100.64.0.12"
+            ),
+            "100.64.0.12"
+        )
+    }
+
+    func testBonjourProbeUsesReportedDirectAddress() {
+        XCTAssertEqual(
+            DeviceEndpointResolver.directAddress(
+                reportedSTAIP: "192.168.2.161",
+                fallbackHost: "hid-helper-a1b2.local"
+            ),
+            "192.168.2.161"
         )
     }
 }

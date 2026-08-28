@@ -156,7 +156,7 @@ class DeviceRepository(
             }
         return stored.copy(
             mdnsHost = mdns,
-            staIp = status.staIp?.takeIf { it.isNotBlank() } ?: stored.staIp,
+            staIp = DeviceEndpointResolver.directAddress(status.staIp, fallbackHost) ?: stored.staIp,
             jiggleEnabled = status.jiggle,
             lastSeenEpochMs = System.currentTimeMillis(),
             firmwareVersion = status.version,

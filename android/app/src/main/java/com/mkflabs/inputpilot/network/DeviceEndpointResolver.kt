@@ -11,11 +11,19 @@ object DeviceEndpointResolver {
 
     fun endpointUrls(mdnsHost: String, staIp: String?): List<String> {
         val urls = LinkedHashSet<String>()
-        baseUrl(mdnsHost)?.let { urls.add(it) }
         if (!staIp.isNullOrBlank()) {
             baseUrl(staIp)?.let { urls.add(it) }
         }
+        baseUrl(mdnsHost)?.let { urls.add(it) }
         return urls.toList()
+    }
+
+    /** Preserve the address that answered a direct probe; a device-reported
+     * LAN address may not be routable from the other side of a VPN. */
+    fun directAddress(reportedStaIp: String?, fallbackHost: String): String? {
+        val fallback = sanitizeHost(fallbackHost)
+        if (fallback.isNotEmpty() && !fallback.lowercase().endsWith(".local")) return fallback
+        return reportedStaIp?.let(::sanitizeHost)?.takeIf { it.isNotEmpty() }
     }
 
     fun baseUrl(host: String): String? {

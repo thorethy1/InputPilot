@@ -6,15 +6,15 @@ import org.junit.Test
 
 class DeviceEndpointResolverTest {
     @Test
-    fun prefersMdnsThenStaIp() {
+    fun prefersDirectAddressThenMdns() {
         val urls =
             DeviceEndpointResolver.endpointUrls(
                 mdnsHost = "hid-helper-a1b2.local",
                 staIp = "192.168.2.161",
             )
         assertEquals(2, urls.size)
-        assertEquals("http://hid-helper-a1b2.local/", urls[0])
-        assertEquals("http://192.168.2.161/", urls[1])
+        assertEquals("http://192.168.2.161/", urls[0])
+        assertEquals("http://hid-helper-a1b2.local/", urls[1])
     }
 
     @Test
@@ -37,5 +37,21 @@ class DeviceEndpointResolverTest {
                 staIp = "192.168.2.161",
             )
         assertEquals(1, urls.size)
+    }
+
+    @Test
+    fun directProbeAddressWinsOverReportedLanAddress() {
+        assertEquals(
+            "100.64.0.12",
+            DeviceEndpointResolver.directAddress("192.168.2.161", "100.64.0.12"),
+        )
+    }
+
+    @Test
+    fun bonjourProbeUsesReportedDirectAddress() {
+        assertEquals(
+            "192.168.2.161",
+            DeviceEndpointResolver.directAddress("192.168.2.161", "hid-helper-a1b2.local"),
+        )
     }
 }

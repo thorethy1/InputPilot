@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.4] - 2026-08-28
+
+### Fixed
+
+- Wi-Fi control, status, diagnostics, and firmware updates now prefer a saved direct address and use Bonjour only as a discovery/fallback mechanism.
+- Manual IP or VPN-host connections retain the address that actually answered instead of replacing it with the device-reported LAN address.
+- Wi-Fi firmware updates preflight the available direct endpoints and verify the restarted device across the same candidate set.
+
+### Added
+
+- iOS and Android regressions for direct-address precedence and VPN-address persistence.
+
 ## [0.8.3] - 2026-08-28
 
 ### Fixed

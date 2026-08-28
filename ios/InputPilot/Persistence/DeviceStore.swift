@@ -120,7 +120,9 @@ enum DeviceMerge {
         } else if stored.mdnsHost.isEmpty {
             stored.mdnsHost = fallbackHost
         }
-        if let ip = status.staIp?.trimmingCharacters(in: .whitespacesAndNewlines), !ip.isEmpty { stored.staIP = ip }
+        if let address = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost) {
+            stored.staIP = address
+        }
         if let token, !token.isEmpty { stored.apiToken = token }
         stored.jiggleEnabled = status.jiggle
         stored.lastSeen = Date()

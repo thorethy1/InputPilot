@@ -58,7 +58,7 @@ data class Device(
                 id = id,
                 displayName = status.name,
                 mdnsHost = status.mdns ?: fallbackHost,
-                staIp = status.staIp?.takeIf { it.isNotBlank() },
+                staIp = DeviceEndpointResolver.directAddress(status.staIp, fallbackHost),
                 jiggleEnabled = status.jiggle,
                 lastSeenEpochMs = System.currentTimeMillis(),
                 firmwareVersion = status.version,

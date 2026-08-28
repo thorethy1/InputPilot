@@ -43,7 +43,7 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         id = status.deviceId ?? fallbackHost
         displayName = status.name
         mdnsHost = status.mdns ?? fallbackHost
-        staIP = status.staIp
+        staIP = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost)
         apiToken = nil
         jiggleEnabled = status.jiggle
         lastSeen = Date()

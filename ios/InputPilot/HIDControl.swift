@@ -814,6 +814,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
     private var requiredSchema = 1
     private var rebootTimeoutWork: DispatchWorkItem?
     private var wifiEndpoints: [URL] = []
+    private var activeWiFiEndpoint: URL?
     private var wifiToken: String?
     private var connectionMode: ConnectionMode = .automatic
     private var capabilities: Set<String> = []
@@ -832,6 +833,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
 
     func configure(device: StoredDevice, mode: ConnectionMode) {
         wifiEndpoints = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
+        activeWiFiEndpoint = nil
         wifiToken = device.apiToken; connectionMode = mode; capabilities = Set(device.capabilities)
         preUpdateDeviceId = device.deviceId
     }
@@ -934,8 +936,26 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
 
     func cancel() {
         cancelled = true
-        if activeTransport == .wifi { Task { [wifiEndpoints, wifiToken] in for base in wifiEndpoints { var request = URLRequest(url: base.appendingPathComponent("api/ota/abort")); request.httpMethod = "POST"; if let wifiToken, !wifiToken.isEmpty { request.setValue(wifiToken, forHTTPHeaderField: "X-API-Token") }; if (try? await URLSession.shared.data(for: request)) != nil { break } } } }
-        else if let peripheral, let control { peripheral.writeValue(Data("ABORT".utf8), for: control, type: .withResponse) }
+        if activeTransport == .wifi {
+            let endpoints: [URL]
+            if let activeWiFiEndpoint {
+                endpoints = [activeWiFiEndpoint] + wifiEndpoints.filter { $0 != activeWiFiEndpoint }
+            } else {
+                endpoints = wifiEndpoints
+            }
+            Task { [endpoints, wifiToken] in
+                for base in endpoints {
+                    var request = URLRequest(url: base.appendingPathComponent("api/ota/abort"))
+                    request.httpMethod = "POST"
+                    if let wifiToken, !wifiToken.isEmpty {
+                        request.setValue(wifiToken, forHTTPHeaderField: "X-API-Token")
+                    }
+                    if (try? await URLSession.shared.data(for: request)) != nil { break }
+                }
+            }
+        } else if let peripheral, let control {
+            peripheral.writeValue(Data("ABORT".utf8), for: control, type: .withResponse)
+        }
         state = .cancelled
     }
 
@@ -944,9 +964,10 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         guard metadata.version == version else { throw TransportError.failed("The target version does not match the firmware image metadata.") }
         let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
         if let expectedSHA256, expectedSHA256.lowercased() != digest { throw TransportError.failed("Firmware verification failed before transfer.") }
-        guard let base = wifiEndpoints.first else { throw TransportError.unavailable }
         activeTransport = .wifi; cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema
         totalBytes = firmware.count; bytesSent = 0; state = .preparing
+        let base = try await reachableWiFiEndpoint()
+        activeWiFiEndpoint = base
         var start = authorized(URLRequest(url: base.appendingPathComponent("api/ota/start")))
         start.httpMethod = "POST"; start.timeoutInterval = 5; start.setValue("application/json", forHTTPHeaderField: "Content-Type")
         start.httpBody = try JSONSerialization.data(withJSONObject: ["protocol": 1, "version": version, "size": firmware.count, "sha256": digest])
@@ -964,14 +985,28 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
             throw TransportError.failed(message ?? "Wi-Fi firmware upload failed.")
         }
         bytesSent = firmware.count; bytesPerSecond = Double(firmware.count) / max(0.1, Date().timeIntervalSince(started)); state = .rebooting
-        try await verifyWiFiReboot(base: base, version: version)
+        try await verifyWiFiReboot(preferredBase: base, version: version)
     }
 
     private func authorized(_ request: URLRequest) -> URLRequest { var request = request; if let wifiToken, !wifiToken.isEmpty { request.setValue(wifiToken, forHTTPHeaderField: "X-API-Token") }; return request }
-    private func verifyWiFiReboot(base: URL, version: String) async throws {
+    private func reachableWiFiEndpoint() async throws -> URL {
+        for base in wifiEndpoints {
+            guard let status = try? await DeviceAPIClient().status(baseURL: base, token: wifiToken) else { continue }
+            if let expected = preUpdateDeviceId {
+                guard let actual = status.deviceId,
+                      expected.caseInsensitiveCompare(actual) == .orderedSame else { continue }
+            }
+            return base
+        }
+        throw TransportError.failed("InputPilot is not reachable over Wi-Fi.")
+    }
+    private func verifyWiFiReboot(preferredBase: URL, version: String) async throws {
         state = .reconnecting; try? await Task.sleep(for: .seconds(2)); let deadline = Date().addingTimeInterval(60)
+        let endpoints = [preferredBase] + wifiEndpoints.filter { $0 != preferredBase }
         while Date() < deadline && !cancelled {
-            do { let status = try await DeviceAPIClient().status(baseURL: base, token: wifiToken); if status.deviceId?.lowercased() == preUpdateDeviceId?.lowercased(), status.version == version, status.otaSchema >= requiredSchema { installedVersion = status.version; if let id = status.deviceId { metadataHandler?(BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: id, deviceName: status.name, firmware: status.version, protocolVersion: status.protocolVersion, otaSchema: status.otaSchema, capabilities: status.capabilities, authRequired: status.authRequired)) }; state = .completed; return } } catch {}
+            for base in endpoints {
+                do { let status = try await DeviceAPIClient().status(baseURL: base, token: wifiToken); if status.deviceId?.lowercased() == preUpdateDeviceId?.lowercased(), status.version == version, status.otaSchema >= requiredSchema { installedVersion = status.version; if let id = status.deviceId { metadataHandler?(BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: id, deviceName: status.name, firmware: status.version, protocolVersion: status.protocolVersion, otaSchema: status.otaSchema, capabilities: status.capabilities, authRequired: status.authRequired)) }; state = .completed; return } } catch {}
+            }
             try? await Task.sleep(for: .seconds(1))
         }
         throw TransportError.failed("Update could not be verified after Wi-Fi restart.")
