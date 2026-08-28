@@ -9,7 +9,6 @@
 
 **InputPilot 0.8.8** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. New-device setup pairs by USB before configuration, then uses encrypted BLE and Wi-Fi/TCP. Legacy devices remain discoverable through a clearly marked migration path.
 
-
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 
 | Name | Where you see it |
@@ -51,12 +50,11 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 ### 3. Companions (optional)
 
 - **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
-- **[Archived Android client](android/)** — retained for possible later development; current work and releases target iOS.
 
 <p align="center">
-  <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two online hid-helpers" width="240">
+  <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two ready devices" width="240">
   &nbsp;
-  <img src="docs/images/ios-device-detail.jpg" alt="InputPilot iOS device detail with firmware version and jiggle toggle" width="240">
+  <img src="docs/images/ios-device-detail.jpg" alt="InputPilot iOS firmware screen with device and update status" width="240">
 </p>
 
 ### 4. Platform support
@@ -66,7 +64,6 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 | Native unit tests (`pio test -e native`) | Linux / macOS / CI |
 | Firmware compile (`pio run -e esp32s3`) | Linux / macOS / CI |
 | iOS companion (`xcodebuild test`) | **macOS with Xcode 26+** / CI (`macos-26`) |
-| Archived Android companion (`./gradlew test`) | Linux / macOS (not in current CI) |
 | On-device pytest (serial / HID E2E / WiFi / BLE / mDNS) | **macOS + board** only |
 
 ## Layout
@@ -75,7 +72,6 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 |--------|---------|
 | [`usb-hid-s3/`](usb-hid-s3/) | ESP32-S3 firmware (USB HID + WiFi REST + Soft-AP + mDNS) |
 | [`ios/`](ios/) | **InputPilot** iOS companion (SwiftUI) |
-| [`android/`](android/) | Archived Android companion source |
 
 ## CI
 
@@ -176,9 +172,6 @@ To repair a release whose assets were not attached (or to retry after a CI fix),
 cd usb-hid-s3
 pio test -e native
 pio run -e esp32s3
-
-cd ../android
-./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon
 ```
 
 iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. OpenAPI validation and all three platform jobs run on pull requests and pushes to `main`.

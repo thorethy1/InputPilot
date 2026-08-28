@@ -32,7 +32,7 @@
 *.bin
 !**/partitions/*.bin
 
-# Xcode / Android (future app folders)
+# Xcode
 **/DerivedData/
 **/.build/
 **/Pods/
@@ -46,6 +46,3 @@
 *.ipa
 *.dSYM.zip
 *.dSYM
-**/.gradle/
-**/local.properties
-**/captures/

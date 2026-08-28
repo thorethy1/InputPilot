@@ -3,9 +3,9 @@
 SwiftUI/SwiftData companion app for discovering and controlling **InputPilot** ESP32-S3 devices over BLE, persistent TCP, and local REST.
 
 <p align="center">
-  <img src="../docs/images/ios-device-list.jpg" alt="Device list with two online hid-helpers" width="240">
+  <img src="../docs/images/ios-device-list.jpg" alt="Device list with two ready InputPilot devices" width="240">
   &nbsp;
-  <img src="../docs/images/ios-device-detail.jpg" alt="Device detail: friendly name, status, firmware, jiggle" width="240">
+  <img src="../docs/images/ios-device-detail.jpg" alt="Firmware screen with active device and update status" width="240">
 </p>
 
 ## Security
@@ -65,7 +65,7 @@ Tap **+** on the home screen to open the wizard. Two paths:
 
 | Path | When to use | Flow |
 |------|-------------|------|
-| **A — Scan local network** | Device already on your home Wi‑Fi | Bonjour browse `_http._tcp`, filter HID helpers, probe `/api/status`, confirm & save |
+| **A — Scan local network** | Device already on your home Wi‑Fi | Bonjour browse `_http._tcp`, identify compatible devices, probe `/api/status`, confirm & save |
 | **B — Set up new device (Soft‑AP)** | Fresh or unprovisioned device | Join firmware Soft-AP → read `/api/wifi` → POST home SSID/password → reconnect to home Wi‑Fi → rediscover on LAN (or enter address manually) |
 
 Both paths share the same confirm/save step. Path B filters Bonjour results by `device_id` when firmware reports it.

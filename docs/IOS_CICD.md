@@ -32,7 +32,7 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 
 ## Release assets (public)
 
-The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned firmware and iOS assets to published GitHub Releases. Android is archived and is no longer built or attached:
+The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned firmware and iOS assets to published GitHub Releases:
 
 - Published releases with a `vMAJOR.MINOR.PATCH` tag trigger it automatically.
 - It validates source version consistency (iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, README).

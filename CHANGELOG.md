@@ -14,6 +14,11 @@
 - Preserve BLE and Wi-Fi for paired devices while retaining BLE, TCP, REST, API-token, and Soft-AP discovery paths for unpaired older firmware.
 - Advertise `secure_wifi_setup_v1` so the app only offers encrypted credential provisioning to firmware that implements it.
 
+### Repository
+
+- Move the Android companion into a private archived repository and remove it from the active source tree and release documentation.
+- Refresh the iOS screenshots and remove obsolete predecessor-product references from current documentation.
+
 ## [0.8.7] - 2026-08-28
 
 ### Security
@@ -139,7 +144,7 @@
 ## [0.6.2] - 2026-08-26
 
 - New app icon: dark Liquid-Glass tile with red ESP32 PCB antenna, wireless arcs, paper plane, and mouse+keyboard input symbols. Designed for iOS 26+ Liquid Glass appearance.
-- Rebranded all user-visible "HID helper" and "InputPilot" terminology to "InputPilot" throughout the iOS companion, Android companion, and USB product identity.
+- Rebranded all legacy product terminology to "InputPilot" throughout the iOS companion, Android companion, and USB product identity.
 - USB product name changed from "S3 Mouse+Keyboard" to "InputPilot S3".
 - Updated Android adaptive icon with matching paper-plane symbol.
 - Firmware version bumped to v0.6.2.

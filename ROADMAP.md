@@ -540,7 +540,6 @@ Evaluate ESP32 Secure Boot separately before enabling irreversible eFuse-based p
 * Rewrite README around the actual InputPilot product
 * Remove obsolete terminology
 * Remove obsolete hid-helper references where compatibility does not require them
-* Remove obsolete InputPilot references from product-facing documentation
 * Clean comments and dead code
 * Remove unused assets
 * Remove obsolete documentation
