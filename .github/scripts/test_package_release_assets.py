@@ -54,6 +54,19 @@ class InitialFlashPackagingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             package.validate_initial_flash_assets(self.root)
 
+    def test_ota_copy_publishes_only_image_and_manifest(self):
+        firmware = b"firmware"
+        digest = hashlib.sha256(firmware).hexdigest()
+        (self.root / "firmware.bin").write_bytes(firmware)
+        (self.root / "firmware-manifest.json").write_text(json.dumps({
+            "version": "0.8.5", "size": len(firmware), "sha256": digest,
+        }))
+        output = self.root / "public"
+        output.mkdir()
+        copied = package.copy_ota_assets(self.root, output)
+        self.assertEqual({path.name for path in copied}, {"firmware.bin", "firmware-manifest.json"})
+        self.assertEqual({path.name for path in output.iterdir()}, {"firmware.bin", "firmware-manifest.json"})
+
 
 if __name__ == "__main__":
     unittest.main()

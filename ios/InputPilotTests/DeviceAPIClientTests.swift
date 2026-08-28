@@ -77,4 +77,14 @@ final class DeviceAPIClientTests: XCTestCase {
         XCTAssertEqual(wifi.apIp, "192.168.4.1")
         XCTAssertEqual(wifi.deviceId, "a1b2c3d4")
     }
+
+    func testDecodeUSBIdentity() throws {
+        let data = Data(#"{"product_name":"InputPilot","vid":51966,"pid":16385,"vid_hex":"0xCAFE","pid_hex":"0x4001","serial_number":"aabbccddeeff","requires_restart":true}"#.utf8)
+        let identity = try JSONDecoder().decode(USBIdentity.self, from: data)
+        XCTAssertEqual(identity.productName, "InputPilot")
+        XCTAssertEqual(identity.vid, 0xCAFE)
+        XCTAssertEqual(identity.pid, 0x4001)
+        XCTAssertEqual(identity.serialNumber, "aabbccddeeff")
+        XCTAssertTrue(identity.requiresRestart)
+    }
 }

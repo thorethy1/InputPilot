@@ -50,6 +50,8 @@ private:
   void handleGetWifi();
   void handlePostWifi();
   void handleClearWifi();
+  void handleGetUsb();
+  void handlePostUsb();
   void handleGetStatus();
   void handleGetLogs();
   void handleGetDiagnostics();
@@ -77,6 +79,7 @@ private:
   bool otaUploadAuthorized_ = false;
   bool otaUploadComplete_ = false;
   uint32_t otaRebootAtMs_ = 0;
+  uint32_t configRebootAtMs_ = 0;
   uint32_t otaLastActivityMs_ = 0;
 };
 

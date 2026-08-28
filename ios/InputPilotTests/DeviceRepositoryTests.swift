@@ -35,7 +35,7 @@ final class DeviceRepositoryTests: XCTestCase {
         context.insert(device)
         try context.save()
 
-        let baseURL = URL(string: "http://hid-helper-abc123.local/")!
+        let baseURL = URL(string: "http://192.168.2.50/")!
         mockAPI.setJiggleResults[baseURL] = .success(())
 
         try await repository.setJiggle(device, enabled: true, api: mockAPI)
@@ -58,14 +58,14 @@ final class DeviceRepositoryTests: XCTestCase {
 
         let mdnsURL = URL(string: "http://missing.local/")!
         let ipURL = URL(string: "http://192.168.2.99/")!
-        mockAPI.setJiggleResults[mdnsURL] = .failure(DeviceAPIError.invalidResponse)
-        mockAPI.setJiggleResults[ipURL] = .success(())
+        mockAPI.setJiggleResults[mdnsURL] = .success(())
+        mockAPI.setJiggleResults[ipURL] = .failure(DeviceAPIError.invalidResponse)
 
         try await repository.setJiggle(device, enabled: true, api: mockAPI)
 
         XCTAssertTrue(device.jiggleEnabled)
         XCTAssertEqual(mockAPI.setJiggleCalls.count, 2)
-        XCTAssertEqual(mockAPI.setJiggleCalls.last?.0, ipURL)
+        XCTAssertEqual(mockAPI.setJiggleCalls.last?.0, mdnsURL)
     }
 
     func testRenamePersistsDisplayName() throws {

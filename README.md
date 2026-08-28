@@ -8,7 +8,7 @@
 
 
 
-**InputPilot 0.8.4** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides trustworthy live device/transport and firmware-update states, a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
+**InputPilot 0.8.5** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app provides trustworthy live device/transport and firmware-update states, editable USB identity, a scrolling trackpad, event-based live keyboard with real German QWERTZ and US QWERTY HID mapping, shortcuts, editable local presets, and recordable/playable macros.
 
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
@@ -17,7 +17,7 @@ No cloud relay, telemetry, computer-input capture, or Internet remote control is
 |------|------------------|
 | **InputPilot** | Product and GitHub repository |
 | **usb-hid-s3** | Firmware folder / USB product family name |
-| **hid-helper** | mDNS hostname prefix (`hid-helper-xxxx.local`; suffix from device MAC) |
+| **inputpilot** | mDNS hostname prefix (`inputpilot-xxxx.local`; suffix from device MAC) |
 
 ## Getting started
 
@@ -42,7 +42,7 @@ cp config.env.example config.env                             # set ESP_PORT
 # Enter download mode: hold BOOT, tap RESET, release BOOT
 pio run -e esp32s3 -t upload
 # Power-cycle the USB cable so the app enumerates as VID 0xCAFE
-curl http://hid-helper-XXXX.local/api/status   # XXXX = device suffix from /api/status
+curl http://inputpilot-XXXX.local/api/status   # XXXX = device suffix from /api/status
 ```
 
 Full commands, LED legend, and REST examples:
@@ -114,7 +114,7 @@ InputPilot ships one application firmware with two installation paths. `firmware
 
 ### First installation / migration
 
-Use `InputPilot-vX.Y.Z-initial-flash.bin` over USB, or flash the individual files from `InputPilot-vX.Y.Z-initial-flash.zip` according to its manifest. This replaces the bootloader, partition table, OTA bootstrap data, and application. It also works after `esptool erase-flash`; no data from an older installation is assumed. See [the hardware guide](usb-hid-s3/docs/HARDWARE.md) for commands.
+Use `InitialFirmware.bin` over USB, or flash the individual files from `InputPilot-Firmware-vX.Y.Z.zip` according to its manifest. This replaces the bootloader, partition table, OTA bootstrap data, and application. It also works after `esptool erase-flash`; no data from an older installation is assumed. See [the hardware guide](usb-hid-s3/docs/HARDWARE.md) for commands.
 
 ### Future firmware updates
 
@@ -138,7 +138,7 @@ BLE OTA
 
 ## Bluetooth firmware updates
 
-Firmware v0.8.4 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
+Firmware v0.8.5 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
 The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
@@ -150,7 +150,7 @@ Contributors should use `AppColors` and the `AccentColor` asset for the red bran
 
 No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes three downloadable artifacts on each `main` build: ESP32-S3 firmware, the Android debug APK, and an unsigned iOS device IPA. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
 
-Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow** and download `InputPilot.ipa` from that run's artifacts. Personal development/ad-hoc IPAs are never uploaded to a public GitHub Release by the workflow.
+Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow**. The workflow replaces `InputPilot.ipa` in the unpublished **Private Signed InputPilot IPA** draft release and writes its direct download link to the run summary. Only authorized repository collaborators can access that draft; the signed IPA is never added to a public release.
 
 Signing inputs are never committed or uploaded as artifacts and are reconstructed only under `$RUNNER_TEMP`. Detailed preparation, diagnostics, download and cleanup behavior are documented in [iOS CI/CD](docs/IOS_CICD.md).
 
@@ -162,13 +162,12 @@ Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) wi
 |-------|---------|
 | `InputPilot-vX.Y.Z-android.apk` | Android debug APK |
 | `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
-| `InputPilot-vX.Y.Z-initial-flash.bin` | Single merged image for initial USB installation or migration; never OTA |
-| `InputPilot-vX.Y.Z-initial-flash.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |
+| `InitialFirmware.bin` | Single merged image for initial USB installation or migration; never OTA |
+| `InputPilot-Firmware-vX.Y.Z.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |
 | `firmware.bin` | App-only image for normal BLE OTA |
-| `firmware.sha256` / `firmware-manifest.json` | Automatically generated OTA integrity and compatibility metadata |
-| `bootloader.bin` / `partitions.bin` / `boot_app0.bin` | Individual initial USB flash assets; never OTA images |
-| `initial-flash-manifest.json` | Build-derived offsets, sizes, and SHA-256 hashes for the full flash set |
-| `SHA256SUMS.txt` | Checksum file for every published asset |
+| `firmware-manifest.json` | Permanent automatic-update contract containing version, compatibility, size, and SHA-256 |
+
+The individual bootloader, partition, OTA bootstrap, checksum, and initial-flash manifest files remain inside the complete ZIP instead of being duplicated as public release assets. `firmware.bin` and `firmware-manifest.json` are always published together so older InputPilot apps can discover and verify future updates.
 
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 

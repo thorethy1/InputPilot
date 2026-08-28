@@ -19,6 +19,11 @@ class DiscoveryFilterTest {
     }
 
     @Test
+    fun acceptsCurrentInputPilotName() {
+        assertTrue(DiscoveryFilter.isCandidate("inputpilot-a1b2", "inputpilot-a1b2.local", emptyMap()))
+    }
+
+    @Test
     fun rejectsUnrelated() {
         assertFalse(DiscoveryFilter.isCandidate("homeassistant", "hass.local", mapOf("path" to "/")))
     }

@@ -25,6 +25,7 @@
 #include "RadioMode.h"
 #include "RadioManager.h"
 #include "StatusLed.h"
+#include "USBIdentityConfig.h"
 #include "WifiCredentials.h"
 #include "BLEOTA.h"
 #include "OTAEngine.h"
@@ -693,7 +694,10 @@ static void printBanner() {
            ESP.getChipRevision(), ESP.getChipCores(), (int)ESP.getCpuFreqMHz());
   LOG_INFO("flash=%u bytes heap=%u min_heap=%u", (unsigned)ESP.getFlashChipSize(),
            (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
-  LOG_USB("vid=0x%04X pid=0x%04X product=\"%s\"", HID_USB_VID, HID_USB_PID, HID_USB_PRODUCT);
+  const USBIdentityValues &usbIdentity = USBIdentityConfig::get();
+  LOG_USB("vid=0x%04X pid=0x%04X product=\"%s\" serial=\"%s\"",
+          usbIdentity.vid, usbIdentity.pid, usbIdentity.productName,
+          usbIdentity.serialNumber);
   LOG_INFO("boot-ok");
 }
 
@@ -717,6 +721,7 @@ const char *deviceResetReason() { return resetReasonName(esp_reset_reason()); }
 void setup() {
   g_hidQueueMutex = xSemaphoreCreateMutex();
   DeviceIdentity::begin();
+  USBIdentityConfig::begin(DeviceIdentity::deviceId());
 
   const esp_reset_reason_t bootReason = esp_reset_reason();
   g_previousHidBreadcrumbValid =
@@ -729,9 +734,11 @@ void setup() {
   //   1) identity (VID/PID/strings)  2) HID devices  3) CDC  4) USB.begin()
   // ESPUSB::begin() runs tinyusb_init only once, so anything registered after
   // it is ignored. ARDUINO_USB_CDC_ON_BOOT=0 guarantees no boot-time begin().
-  USB.VID(HID_USB_VID);
-  USB.PID(HID_USB_PID);
-  USB.productName(HID_USB_PRODUCT);
+  const USBIdentityValues &usbIdentity = USBIdentityConfig::get();
+  USB.VID(usbIdentity.vid);
+  USB.PID(usbIdentity.pid);
+  USB.productName(usbIdentity.productName);
+  USB.serialNumber(usbIdentity.serialNumber);
   USB.manufacturerName(HID_USB_MANUFACTURER);
   USB.firmwareVersion(FW_VERSION_BCD);
 

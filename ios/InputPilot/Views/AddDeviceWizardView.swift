@@ -183,7 +183,7 @@ struct AddDeviceWizardView: View {
             Section {
                             Label("Power on the InputPilot device.", systemImage: "power")
                 Label("Wait for the magenta setup LED.", systemImage: "light.max")
-                Label("The device broadcasts a setup Wi‑Fi network named like `usb-hid-s3-XXXX`.", systemImage: "wifi")
+                Label("The device broadcasts a setup Wi‑Fi network named like `InputPilot-XXXX`.", systemImage: "wifi")
             } header: {
                 Text("Before You Start")
             }
@@ -343,7 +343,7 @@ struct AddDeviceWizardView: View {
 
             Form {
                 Section {
-                    TextField("Host or IP", text: $viewModel.softAPManualHost, prompt: Text("hid-helper.local"))
+                    TextField("Host or IP", text: $viewModel.softAPManualHost, prompt: Text("inputpilot-xxxx.local"))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)

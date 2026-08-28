@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   signed-ipa:
     runs-on: macos-26
     timeout-minutes: 30
     env:
+      GH_TOKEN: ${{ github.token }}
       IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
       IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
       IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
@@ -132,12 +133,38 @@ jobs:
           [[ -n "$ipa" ]] || { echo "::error::Archive exported without an IPA."; exit 1; }
           mv "$ipa" "$RUNNER_TEMP/InputPilot.ipa"
 
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: InputPilot-development-${{ github.run_number }}
-          path: ${{ runner.temp }}/InputPilot.ipa
-          if-no-files-found: error
+      - name: Upload IPA to private draft release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="private-ios-signed"
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.draft == true and .tag_name == \"$tag\") | .id" | head -1)"
+          if [[ -z "$release_id" ]]; then
+            release_id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$tag" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="Private Signed InputPilot IPA" \
+              -f body="Private development/ad-hoc build. Do not publish this draft release." \
+              -F draft=true \
+              -F prerelease=false \
+              --jq '.id')"
+          else
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="Private Signed InputPilot IPA" \
+              -f body="Private development/ad-hoc build. Do not publish this draft release." >/dev/null
+          fi
+          gh release upload "$tag" "$RUNNER_TEMP/InputPilot.ipa#InputPilot.ipa" --clobber
+          asset_url="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq '.[] | select(.name == "InputPilot.ipa") | .browser_download_url' | head -1)"
+          {
+            echo "## Private signed IPA"
+            echo
+            echo "[Download InputPilot.ipa]($asset_url)"
+            echo
+            echo "The IPA is stored in an unpublished draft release and is visible only to authorized repository collaborators."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove signing material
         if: always()

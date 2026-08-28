@@ -11,6 +11,7 @@
 #include "Logging.h"
 #include "FirmwareLog.h"
 #include "OTAEngine.h"
+#include "USBIdentityConfig.h"
 #include <esp_ota_ops.h>
 #include "WifiCredentials.h"
 
@@ -182,14 +183,14 @@ void WifiConfigServer::handleRoot() {
   if (ap && !(WiFi.getMode() & WIFI_STA && WiFi.status() == WL_CONNECTED)) {
     static const char kPage[] PROGMEM = R"HTML(
 <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>usb-hid-s3 WiFi setup</title>
+<title>InputPilot WiFi setup</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:28rem;margin:2rem auto;padding:0 1rem}
 label{display:block;margin-top:1rem}input{width:100%;padding:.5rem;box-sizing:border-box}
 button{margin-top:1.25rem;padding:.6rem 1rem;width:100%}
 #msg{margin-top:1rem;white-space:pre-wrap}
 </style></head><body>
-<h1>usb-hid-s3</h1><p>Configure WiFi (2.4 GHz).</p>
+<h1>InputPilot</h1><p>Configure WiFi (2.4 GHz).</p>
 <label>SSID <input id="ssid" autocomplete="off"></label>
 <label>Password <input id="pass" type="password"></label>
 <button id="save">Save &amp; connect</button>
@@ -218,7 +219,7 @@ document.getElementById('save').onclick=save;
   json += "\"endpoints\":[";
   json += "\"GET /api/status\",\"GET /api/diagnostics\",\"GET /api/logs\",\"GET /api/jiggle\",\"POST /api/jiggle\",";
   json += "\"POST /api/move\",\"POST /api/type\",\"POST /api/key\",\"POST /api/click\",";
-  json += "\"GET /api/wifi\",\"POST /api/wifi\",\"POST /api/ota/start\",\"POST /api/ota/firmware\",\"GET /api/ota/status\",\"POST /api/ota/abort\"";
+  json += "\"GET /api/wifi\",\"POST /api/wifi\",\"GET /api/usb\",\"POST /api/usb\",\"POST /api/ota/start\",\"POST /api/ota/firmware\",\"GET /api/ota/status\",\"POST /api/ota/abort\"";
   json += "]}";
   s_server->send(200, "application/json", json);
 }
@@ -258,7 +259,7 @@ void WifiConfigServer::handleGetWifi() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
@@ -332,9 +333,54 @@ void WifiConfigServer::handleGetStatus() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handleGetUsb() {
+  if (!requireApiAuth()) return;
+  handleCors();
+  const USBIdentityValues &identity = USBIdentityConfig::get();
+  char vid[7], pid[7];
+  snprintf(vid, sizeof(vid), "0x%04X", identity.vid);
+  snprintf(pid, sizeof(pid), "0x%04X", identity.pid);
+  String json = "{\"product_name\":\"" + jsonEscape(identity.productName) +
+                "\",\"vid\":" + String(identity.vid) +
+                ",\"pid\":" + String(identity.pid) +
+                ",\"vid_hex\":\"" + String(vid) +
+                "\",\"pid_hex\":\"" + String(pid) +
+                "\",\"serial_number\":\"" + jsonEscape(identity.serialNumber) +
+                "\",\"requires_restart\":true}";
+  s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handlePostUsb() {
+  if (deviceOtaActive()) { sendErr(409, "firmware update in progress"); return; }
+  if (!requireApiAuth()) return;
+  const String body = bodyOrEmpty();
+  bool reset = false;
+  if (jsonGetBool(body, "reset", reset) && reset) {
+    if (!USBIdentityConfig::reset()) { sendErr(500, "nvs save failed"); return; }
+    sendOk("\"rebooting\":true,\"defaults_restored\":true");
+    configRebootAtMs_ = millis() + 1200;
+    return;
+  }
+  String product, serial;
+  int vid = 0, pid = 0;
+  if (!jsonGetString(body, "product_name", product) ||
+      !jsonGetString(body, "serial_number", serial) ||
+      !jsonGetInt(body, "vid", vid) || !jsonGetInt(body, "pid", pid)) {
+    sendErr(400, "product_name, vid, pid and serial_number required");
+    return;
+  }
+  if (!USBIdentityConfig::save(product.c_str(), static_cast<uint32_t>(vid),
+                               static_cast<uint32_t>(pid), serial.c_str())) {
+    sendErr(400, "invalid usb identity");
+    return;
+  }
+  sendOk("\"rebooting\":true");
+  configRebootAtMs_ = millis() + 1200;
 }
 
 void WifiConfigServer::handleGetLogs() {
@@ -604,6 +650,10 @@ void WifiConfigServer::begin() {
   s_server->on("/api/wifi/clear", HTTP_POST, [this]() { handleClearWifi(); });
   s_server->on("/api/wifi/clear", HTTP_OPTIONS, [this]() { handleOptions(); });
 
+  s_server->on("/api/usb", HTTP_GET, [this]() { handleGetUsb(); });
+  s_server->on("/api/usb", HTTP_POST, [this]() { handlePostUsb(); });
+  s_server->on("/api/usb", HTTP_OPTIONS, [this]() { handleOptions(); });
+
   s_server->on("/api/status", HTTP_GET, [this]() { handleGetStatus(); });
   s_server->on("/api/status", HTTP_OPTIONS, [this]() { handleOptions(); });
   s_server->on("/api/logs", HTTP_GET, [this]() { handleGetLogs(); });
@@ -658,6 +708,7 @@ void WifiConfigServer::loop() {
   if (g_otaEngine.owner() == OTATransportOwner::WiFi && g_otaEngine.active() &&
       millis() - otaLastActivityMs_ > 30000) g_otaEngine.abort("timeout");
   if (otaRebootAtMs_ && static_cast<int32_t>(millis() - otaRebootAtMs_) >= 0) ESP.restart();
+  if (configRebootAtMs_ && static_cast<int32_t>(millis() - configRebootAtMs_) >= 0) ESP.restart();
 }
 
 bool WifiConfigServer::takeReconnectRequest() {

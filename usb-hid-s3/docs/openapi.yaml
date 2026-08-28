@@ -1,14 +1,14 @@
 openapi: 3.0.3
 info:
-  title: InputPilot / usb-hid-s3 HTTP API
+  title: InputPilot Firmware HTTP API
   description: |
     REST control and WiFi provisioning for the ESP32-S3 USB HID helper.
 
     **Discovery**
-    - STA (home WiFi): `http://hid-helper-xxxx.local` (mDNS; `xxxx` = last 4 hex of
+    - STA (home WiFi): `http://inputpilot-xxxx.local` (mDNS; `xxxx` = last 4 hex of
       MAC, lowercase) or `http://<sta-ip>`. `GET /api/status` returns `mdns` and
       `device_id` (12 lowercase hex, no colons).
-    - Soft-AP setup: join WiFi `usb-hid-s3-XXXX` (`XXXX` = last 4 hex of MAC,
+    - Soft-AP setup: join WiFi `InputPilot-XXXX` (`XXXX` = last 4 hex of MAC,
       uppercase; open by default), then `http://192.168.4.1`
     - mDNS HTTP service TXT records: `path=/api/status`, `id=<device_id>`, `fw=<version>`
 
@@ -21,13 +21,13 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.8.4
+  version: 0.8.5
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
 
 servers:
-  - url: http://hid-helper-xxxx.local
+  - url: http://inputpilot-xxxx.local
     description: STA via mDNS (preferred; xxxx = device suffix from /api/status)
   - url: http://192.168.4.1
     description: Soft-AP setup portal
@@ -45,6 +45,8 @@ tags:
     description: USB HID mouse / keyboard / jiggle actions
   - name: wifi
     description: NVS WiFi credentials and Soft-AP provisioning
+  - name: usb
+    description: Persistent USB descriptor identity
   - name: firmware
     description: Authenticated transport-neutral OTA operations
 
@@ -81,8 +83,8 @@ paths:
                 $ref: "#/components/schemas/DeviceStatus"
               example:
                 ok: true
-                name: usb-hid-s3
-                version: "0.4.0"
+                name: InputPilot-Firmware
+                version: "0.8.5"
                 device_id: aabbccddeeff
                 uptime_s: 120
                 heap: 192000
@@ -90,7 +92,7 @@ paths:
                 jiggle: false
                 jiggle_interval_ms: 10000
                 sta_ip: 192.168.2.161
-                mdns: hid-helper-eeff.local
+                mdns: inputpilot-eeff.local
                 protocol_version: 1
                 ota_schema: 1
                 capabilities: [ble_control, tcp_control, rest_control, ble_ota]
@@ -501,7 +503,7 @@ paths:
                     mode: sta
                     configured: true
                     ssid: MyNetwork
-                    ap_ssid: usb-hid-s3-EEFF
+                    ap_ssid: InputPilot-EEFF
                     ap_ip: 192.168.4.1
                     sta_ip: 192.168.2.161
                     device_id: aabbccddeeff
@@ -512,7 +514,7 @@ paths:
                     mode: ap
                     configured: false
                     ssid: ""
-                    ap_ssid: usb-hid-s3-EEFF
+                    ap_ssid: InputPilot-EEFF
                     ap_ip: 192.168.4.1
                     sta_ip: ""
                     device_id: aabbccddeeff
@@ -558,7 +560,7 @@ paths:
       summary: Forget WiFi credentials
       description: |
         Clears NVS STA credentials. Device reconnects into Soft-AP setup mode
-        (`usb-hid-s3-XXXX`) so credentials can be provisioned again.
+        (`InputPilot-XXXX`) so credentials can be provisioned again.
       operationId: clearWifi
       responses:
         "200":
@@ -573,6 +575,45 @@ paths:
                 reconnecting: true
     options:
       tags: [wifi]
+      summary: CORS preflight
+      responses:
+        "204":
+          description: No content
+
+  /api/usb:
+    get:
+      tags: [usb]
+      summary: Read the active USB descriptor identity
+      operationId: getUsbIdentity
+      responses:
+        "200":
+          description: USB values currently used at boot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsbIdentity"
+    post:
+      tags: [usb]
+      summary: Save USB descriptor identity or restore defaults
+      description: Persists validated values to NVS and restarts the firmware so USB re-enumerates.
+      operationId: setUsbIdentity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/UsbIdentityUpdate"
+                - $ref: "#/components/schemas/UsbIdentityReset"
+      responses:
+        "200":
+          description: Saved; firmware restart scheduled
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [usb]
       summary: CORS preflight
       responses:
         "204":
@@ -621,7 +662,7 @@ components:
       properties:
         name:
           type: string
-          example: usb-hid-s3
+          example: InputPilot-Firmware
         version:
           type: string
           example: "0.4.0"
@@ -837,8 +878,8 @@ components:
           description: Configured STA SSID (may be empty)
         ap_ssid:
           type: string
-          description: Per-device Soft-AP SSID (usb-hid-s3-XXXX)
-          example: usb-hid-s3-EEFF
+          description: Per-device Soft-AP SSID (InputPilot-XXXX)
+          example: InputPilot-EEFF
         device_id:
           type: string
           description: 12 lowercase hex MAC-derived ID (no colons)
@@ -894,5 +935,70 @@ components:
           type: boolean
           enum: [true]
         reconnecting:
+          type: boolean
+          enum: [true]
+
+    UsbIdentity:
+      type: object
+      required: [product_name, vid, pid, serial_number, requires_restart]
+      properties:
+        product_name:
+          type: string
+          minLength: 1
+          maxLength: 31
+          example: InputPilot
+        vid:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 51966
+        pid:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 16385
+        vid_hex:
+          type: string
+          example: "0xCAFE"
+        pid_hex:
+          type: string
+          example: "0x4001"
+        serial_number:
+          type: string
+          minLength: 1
+          maxLength: 31
+          pattern: "^[A-Za-z0-9._-]+$"
+          example: aabbccddeeff
+        requires_restart:
+          type: boolean
+          enum: [true]
+
+    UsbIdentityUpdate:
+      type: object
+      required: [product_name, vid, pid, serial_number]
+      properties:
+        product_name:
+          type: string
+          minLength: 1
+          maxLength: 31
+        vid:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        pid:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        serial_number:
+          type: string
+          minLength: 1
+          maxLength: 31
+          pattern: "^[A-Za-z0-9._-]+$"
+
+    UsbIdentityReset:
+      type: object
+      required: [reset]
+      properties:
+        reset:
           type: boolean
           enum: [true]

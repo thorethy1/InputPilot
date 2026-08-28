@@ -22,9 +22,9 @@ On Linux/Windows, use a Base64 encoder that does not add line wrapping. Never ad
 
 ## Running and downloading
 
-Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and publishes `InputPilot.ipa` only in the private run's Artifacts section. The iPhone must be covered by the supplied development/ad-hoc profile.
+Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and replaces `InputPilot.ipa` in an unpublished draft release. A direct download link is written to the workflow summary. The iPhone must be covered by the supplied development/ad-hoc profile.
 
-Tags do not start this signing workflow, and the workflow has read-only repository-content permission. It contains no release creation or upload step: a personally signed development/ad-hoc IPA must never become a public GitHub Release asset automatically. Public releases may contain source, changelogs, firmware, APKs, and the separately built unsigned IPA. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
+Tags do not start this signing workflow. Its repository write permission is used only to maintain the fixed, unpublished `private-ios-signed` draft release. A personally signed development/ad-hoc IPA never becomes a public GitHub Release asset automatically. Public releases contain firmware, the APK, and the separately built unsigned IPA. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
 
 All reconstructed inputs, derived data, archive, export options, and IPA staging live under `$RUNNER_TEMP`. The profile and temporary keychain are removed in an always-running cleanup step; GitHub also discards the hosted runner after the job.
 

@@ -33,7 +33,7 @@ void formatSoftApSsid(const char *suffix4, char out[24]) {
       up[i] = c;
     }
   }
-  snprintf(out, 24, "usb-hid-s3-%s", up);
+  snprintf(out, 24, "InputPilot-%s", up);
 }
 
 void formatMdnsHostname(const char *suffix4, char out[24]) {
@@ -46,7 +46,7 @@ void formatMdnsHostname(const char *suffix4, char out[24]) {
       low[i] = c;
     }
   }
-  snprintf(out, 24, "hid-helper-%s", low);
+  snprintf(out, 24, "inputpilot-%s", low);
 }
 
 #ifndef UNIT_TEST

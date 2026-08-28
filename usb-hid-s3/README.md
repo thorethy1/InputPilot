@@ -46,7 +46,7 @@ cp config.env.example config.env      # set ESP_PORT
 `wifi status|set|clear` · `status` · `version` · `help`
 
 WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts Soft-AP
-`usb-hid-s3-XXXX` (last 4 hex of MAC, uppercase; open by default; set
+`InputPilot-XXXX` (last 4 hex of MAC, uppercase; open by default; set
 `WIFI_AP_PASS` in `wifi_secrets.h` for WPA) with a setup page + REST at
 `http://192.168.4.1/api/wifi`.
 With creds, STA joins and exposes:
@@ -60,7 +60,7 @@ fixed 32-entry HID event queue. A dedicated executor task is the only runtime
 context that calls the USB mouse/keyboard report APIs; adjacent mouse moves are
 coalesced and six queue slots are reserved for release-critical events.
 
-On STA the device also advertises **mDNS** as `hid-helper-xxxx.local` (lowercase
+On STA the device also advertises **mDNS** as `inputpilot-xxxx.local` (lowercase
 suffix; HTTP service on port 80 with TXT `path`, `id`, `fw`), so apps can
 discover it without a hard-coded IP. `GET /api/status` returns `mdns` and
 `device_id` (12 lowercase hex).
@@ -81,7 +81,7 @@ stays open. TCP/BLE: send `auth change-me` once per session before commands.
 | Appearance | Meaning |
 |------------|---------|
 | Solid red | WiFi disconnected (radio off / not associated) |
-| Magenta blink | Soft-AP setup mode (`usb-hid-s3-XXXX`) |
+| Magenta blink | Soft-AP setup mode (`InputPilot-XXXX`) |
 | Dim solid green | STA connected, jiggle **off** |
 | Cyan breathing | STA connected, jiggle **on** |
 
@@ -92,10 +92,10 @@ Example:
 
 ```bash
 # Replace XXXX with your device suffix (from serial `status` or /api/status mdns field)
-curl http://hid-helper-XXXX.local/api/status
-curl -X POST http://hid-helper-XXXX.local/api/jiggle -H 'Content-Type: application/json' -d '{"enabled":true}'
-curl -X POST http://hid-helper-XXXX.local/api/move -H 'Content-Type: application/json' -d '{"dx":40,"dy":0}'
-curl -X POST http://hid-helper-XXXX.local/api/type -H 'Content-Type: application/json' -d '{"text":"hello"}'
+curl http://inputpilot-XXXX.local/api/status
+curl -X POST http://inputpilot-XXXX.local/api/jiggle -H 'Content-Type: application/json' -d '{"enabled":true}'
+curl -X POST http://inputpilot-XXXX.local/api/move -H 'Content-Type: application/json' -d '{"dx":40,"dy":0}'
+curl -X POST http://inputpilot-XXXX.local/api/type -H 'Content-Type: application/json' -d '{"text":"hello"}'
 ```
 
 ## Testing

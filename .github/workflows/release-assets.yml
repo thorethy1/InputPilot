@@ -121,7 +121,7 @@ jobs:
       - name: Download firmware artifact
         uses: actions/download-artifact@v4
         with:
-          name: usb-hid-s3-esp32s3-${{ steps.release.outputs.sha }}
+          name: InputPilot-Firmware-${{ steps.release.outputs.sha }}
           path: staging/firmware
           repository: ${{ github.repository }}
           run-id: ${{ steps.ci.outputs.run_id }}
@@ -160,7 +160,7 @@ jobs:
             echo "Source CI run: ${{ steps.ci.outputs.run_id }}"
             echo
             echo '```text'
-            cat release-assets/SHA256SUMS.txt
+            find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

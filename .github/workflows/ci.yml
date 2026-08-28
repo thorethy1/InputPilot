@@ -1,4 +1,4 @@
-# Cloud-runnable checks for usb-hid-s3 + InputPilot iOS (no physical board).
+# Cloud-runnable checks for InputPilot firmware + companion apps (no physical board).
 # On-device pytest (integration, HID E2E, WiFi, BLE, mDNS) stays local-only.
 name: CI
 
@@ -70,7 +70,7 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: usb-hid-s3-esp32s3-${{ github.sha }}
+          name: InputPilot-Firmware-${{ github.sha }}
           path: |
             usb-hid-s3/.pio/build/esp32s3/firmware.bin
             usb-hid-s3/.pio/build/esp32s3/bootloader.bin
@@ -130,6 +130,7 @@ jobs:
               "/api/release-all",
               "/api/wifi",
               "/api/wifi/clear",
+              "/api/usb",
           ]
           missing = [p for p in required if p not in doc["paths"]]
           assert not missing, f"missing paths: {missing}"
@@ -137,7 +138,7 @@ jobs:
           PY
 
   ios:
-    name: iOS build + unit tests
+    name: iOS unit tests
     runs-on: macos-26
     timeout-minutes: 30
 
@@ -171,7 +172,7 @@ jobs:
         id: sim
         run: |
           set -euo pipefail
-          name="$(python3 - <<'PY'
+          udid="$(python3 - <<'PY'
           import json, subprocess, sys
 
           data = json.loads(
@@ -192,26 +193,29 @@ jobs:
                   continue
               for device in devices:
                   if device.get("isAvailable") and str(device.get("name", "")).startswith("iPhone"):
-                      available.append(device["name"])
+                      available.append((device["name"], device["udid"]))
 
           # Prefer a known name, else first unique iPhone.
           seen = []
-          for n in available:
-              if n not in seen:
-                  seen.append(n)
+          for item in available:
+              if item not in seen:
+                  seen.append(item)
           for name in preferred:
-              if name in seen:
-                  print(name)
+              match = next((item for item in seen if item[0] == name), None)
+              if match:
+                  print(match[1])
                   sys.exit(0)
           if seen:
-              print(seen[0])
+              print(seen[0][1])
               sys.exit(0)
           sys.stderr.write("No available iPhone simulator\n")
           sys.exit(1)
           PY
           )"
-          echo "destination=platform=iOS Simulator,name=${name}" >> "$GITHUB_OUTPUT"
-          echo "Using simulator: ${name}"
+          xcrun simctl boot "$udid" 2>/dev/null || true
+          xcrun simctl bootstatus "$udid" -b
+          echo "destination=platform=iOS Simulator,id=${udid}" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: ${udid}"
 
       - name: Build and test InputPilot
         if: steps.guard.outputs.present == 'true'
@@ -223,13 +227,32 @@ jobs:
             -scheme InputPilot \
             -destination "${{ steps.sim.outputs.destination }}" \
             -derivedDataPath "$RUNNER_TEMP/InputPilotDerived" \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}"
 
+  ios-package:
+    name: iOS unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require Xcode 26 or newer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          major="$(xcodebuild -version | awk '/Xcode/{split($2,v,"."); print v[1]}')"
+          if [[ -z "$major" || "$major" -lt 26 ]]; then
+            echo "::error::InputPilot requires Xcode 26 or newer (found major=${major:-unknown})."
+            exit 1
+          fi
+
       - name: Build unsigned iOS device app
-        if: steps.guard.outputs.present == 'true'
         working-directory: ios
         run: |
           set -euo pipefail
@@ -249,32 +272,21 @@ jobs:
 
           app="$derived/Build/Products/Release-iphoneos/InputPilot.app"
           [[ -d "$app" ]] || { echo "::error::Unsigned device app was not produced."; exit 1; }
-
-          # A self-signing artifact must not contain any personal provisioning
-          # profile, device UDID list, team identity, or previous signature.
           find "$app" -name embedded.mobileprovision -type f -delete
           find "$app" -name _CodeSignature -type d -prune -exec rm -rf {} +
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"
-          [[ "$bundle_id" == com.thorethy.inputpilot ]] || {
-            echo "::error::Unexpected unsigned bundle ID: $bundle_id"
-            exit 1
-          }
+          [[ "$bundle_id" == com.thorethy.inputpilot ]] || { echo "::error::Unexpected unsigned bundle ID: $bundle_id"; exit 1; }
           if find "$app" \( -name embedded.mobileprovision -o -name _CodeSignature \) -print -quit | grep -q .; then
             echo "::error::Unsigned app still contains signing material."
             exit 1
           fi
-
           stage="$RUNNER_TEMP/InputPilotUnsigned"
           mkdir -p "$stage/Payload"
           ditto "$app" "$stage/Payload/InputPilot.app"
           (cd "$stage" && zip -qry "$RUNNER_TEMP/InputPilot-unsigned.ipa" Payload)
-          [[ -s "$RUNNER_TEMP/InputPilot-unsigned.ipa" ]] || {
-            echo "::error::Unsigned IPA was not produced."
-            exit 1
-          }
+          [[ -s "$RUNNER_TEMP/InputPilot-unsigned.ipa" ]] || { echo "::error::Unsigned IPA was not produced."; exit 1; }
 
       - name: Upload unsigned IPA artifact
-        if: steps.guard.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: InputPilot-unsigned-${{ github.sha }}

@@ -16,13 +16,13 @@ void test_device_id_from_mac() {
 void test_soft_ap_ssid_upper_suffix() {
   char ssid[24];
   formatSoftApSsid("eeff", ssid);
-  TEST_ASSERT_EQUAL_STRING("usb-hid-s3-EEFF", ssid);
+  TEST_ASSERT_EQUAL_STRING("InputPilot-EEFF", ssid);
 }
 
 void test_mdns_hostname_lower_suffix() {
   char host[24];
   formatMdnsHostname("EEFF", host);
-  TEST_ASSERT_EQUAL_STRING("hid-helper-eeff", host);
+  TEST_ASSERT_EQUAL_STRING("inputpilot-eeff", host);
 }
 
 void test_null_mac_rejected() {

@@ -6,6 +6,7 @@ final class MockAPIClient: DeviceAPIClientProtocol, @unchecked Sendable {
     var setJiggleResults: [URL: Result<Void, Error>] = [:]
     var getWifiResults: [URL: Result<WifiStatus, Error>] = [:]
     var provisionWifiResults: [URL: Result<Void, Error>] = [:]
+    var usbIdentityResults: [URL: Result<USBIdentity, Error>] = [:]
     private(set) var setJiggleCalls: [(URL, Bool, String?)] = []
     private(set) var provisionWifiCalls: [(URL, String, String, String?)] = []
 
@@ -39,4 +40,13 @@ final class MockAPIClient: DeviceAPIClientProtocol, @unchecked Sendable {
             return
         }
     }
+
+    func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity {
+        if let result = usbIdentityResults[baseURL] { return try result.get() }
+        throw DeviceAPIError.invalidResponse
+    }
+
+    func setUSBIdentity(baseURL: URL, identity: USBIdentityUpdate, token: String?) async throws {}
+
+    func resetUSBIdentity(baseURL: URL, token: String?) async throws {}
 }

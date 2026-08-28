@@ -195,7 +195,7 @@ def create_initial_flash_zip(source: Path, destination: Path) -> None:
 
 def copy_ota_assets(source: Path, output: Path) -> list[Path]:
     copied = []
-    for name in ("firmware.bin", "firmware.sha256", "firmware-manifest.json", *INITIAL_IMAGE_NAMES[:-1], "initial-flash-manifest.json"):
+    for name in ("firmware.bin", "firmware-manifest.json"):
         destination = output / name
         shutil.copyfile(only_named_file(source, name), destination)
         copied.append(destination)
@@ -204,19 +204,7 @@ def copy_ota_assets(source: Path, output: Path) -> list[Path]:
     digest = hashlib.sha256(firmware.read_bytes()).hexdigest()
     if manifest.get("size") != firmware.stat().st_size or manifest.get("sha256") != digest:
         raise ValueError("firmware manifest does not match firmware.bin")
-    if (output / "firmware.sha256").read_text(encoding="utf-8") != f"{digest}  firmware.bin\n":
-        raise ValueError("firmware.sha256 does not match firmware.bin")
     return copied
-
-
-def write_checksums(output: Path, assets: list[Path]) -> Path:
-    checksum_file = output / "SHA256SUMS.txt"
-    lines = []
-    for asset in sorted(assets, key=lambda path: path.name):
-        digest = hashlib.sha256(asset.read_bytes()).hexdigest()
-        lines.append(f"{digest}  {asset.name}\n")
-    checksum_file.write_text("".join(lines), encoding="utf-8")
-    return checksum_file
 
 
 def main() -> None:
@@ -240,8 +228,8 @@ def main() -> None:
 
     apk = args.output / f"InputPilot-{args.tag}-android.apk"
     ipa = args.output / f"InputPilot-{args.tag}-ios-unsigned.ipa"
-    initial_zip = args.output / f"InputPilot-{args.tag}-initial-flash.zip"
-    initial_bin = args.output / f"InputPilot-{args.tag}-initial-flash.bin"
+    initial_zip = args.output / f"InputPilot-Firmware-{args.tag}.zip"
+    initial_bin = args.output / "InitialFirmware.bin"
     shutil.copyfile(apk_source, apk)
     shutil.copyfile(ipa_source, ipa)
     firmware_source = args.input / "firmware"
@@ -261,13 +249,15 @@ def main() -> None:
     create_initial_flash_zip(firmware_source, initial_zip)
     shutil.copyfile(only_named_file(firmware_source, "initial-flash.bin"), initial_bin)
     ota_assets = copy_ota_assets(args.input / "firmware", args.output)
-    checksum_file = write_checksums(args.output, [apk, initial_zip, initial_bin, ipa, *ota_assets])
-    checksummed = {line.split("  ", 1)[1] for line in checksum_file.read_text(encoding="utf-8").splitlines()}
-    published_without_checksum = {path.name for path in args.output.iterdir() if path != checksum_file}
-    if checksummed != published_without_checksum:
-        raise ValueError("SHA256SUMS.txt does not cover every other release asset")
+    expected = {
+        apk.name, ipa.name, initial_zip.name, initial_bin.name,
+        "firmware.bin", "firmware-manifest.json",
+    }
+    actual = {path.name for path in args.output.iterdir() if path.is_file()}
+    if actual != expected:
+        raise ValueError(f"unexpected public release asset set: {sorted(actual)}")
 
-    for path in (apk, initial_zip, initial_bin, ipa, *ota_assets, checksum_file):
+    for path in (apk, initial_zip, initial_bin, ipa, *ota_assets):
         print(f"{path.name}\t{path.stat().st_size} bytes")
 
 

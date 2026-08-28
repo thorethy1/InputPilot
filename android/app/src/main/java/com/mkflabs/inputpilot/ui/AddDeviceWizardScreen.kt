@@ -210,7 +210,7 @@ private fun SoftApInstructions(viewModel: AddDeviceWizardViewModel) {
         Text("Before You Start", style = MaterialTheme.typography.titleMedium)
         Text("1. Power on the InputPilot device.")
         Text("2. Wait for the magenta setup LED.")
-        Text("3. The device broadcasts a setup Wi‑Fi network named like `usb-hid-s3-XXXX`.")
+        Text("3. The device broadcasts a setup Wi‑Fi network named like `InputPilot-XXXX`.")
         Button(onClick = viewModel::continueFromInstructions, modifier = Modifier.padding(top = 16.dp)) {
             Text("Continue")
         }

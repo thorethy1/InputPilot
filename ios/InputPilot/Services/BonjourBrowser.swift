@@ -27,13 +27,13 @@ struct DiscoveredService: Identifiable, Equatable, Sendable {
 }
 
 enum BonjourDiscoveryFilter {
-    /// Returns true when TXT contains an `id` key or the service/host name includes `hid-helper`.
+    /// Accepts current InputPilot names and legacy hid-helper firmware.
     static func isCandidate(serviceName: String, host: String, txt: [String: String]) -> Bool {
         if txt["id"] != nil {
             return true
         }
         let haystack = "\(serviceName) \(host)".lowercased()
-        return haystack.contains("hid-helper")
+        return haystack.contains("inputpilot-") || haystack.contains("hid-helper")
     }
 
     /// Collapses duplicate Bonjour hits for one physical board (same TXT `id`, same IP,
@@ -119,6 +119,7 @@ enum BonjourDiscoveryFilter {
 
     private static func scoreName(_ name: String) -> Int {
         let lower = name.lowercased()
+        if lower.range(of: #"^inputpilot-[0-9a-f]+$"#, options: .regularExpression) != nil { return 120 + name.count }
         if lower.range(of: #"^hid-helper-[0-9a-f]+$"#, options: .regularExpression) != nil { return 100 + name.count }
         if lower == "hid-helper" { return 1 }
         return name.count
@@ -127,6 +128,7 @@ enum BonjourDiscoveryFilter {
     private static func scoreHost(_ host: String) -> Int {
         let sanitized = DeviceEndpointResolver.sanitizeHost(host).lowercased()
         if ipv4Host(sanitized) != nil { return 100 }
+        if sanitized.range(of: #"^inputpilot-[0-9a-f]+\.local$"#, options: .regularExpression) != nil { return 90 }
         if sanitized.range(of: #"^hid-helper-[0-9a-f]+\.local$"#, options: .regularExpression) != nil {
             return 80
         }
@@ -161,8 +163,8 @@ enum BonjourDiscoveryFilter {
     private static func isVersionedHidHelper(_ service: DiscoveredService) -> Bool {
         let name = service.name.lowercased()
         let host = DeviceEndpointResolver.sanitizeHost(service.host).lowercased()
-        let pattern = #"^hid-helper-[0-9a-f]+(\.local)?$"#
-        return name.range(of: #"^hid-helper-[0-9a-f]+$"#, options: .regularExpression) != nil
+        let pattern = #"^(inputpilot|hid-helper)-[0-9a-f]+(\.local)?$"#
+        return name.range(of: #"^(inputpilot|hid-helper)-[0-9a-f]+$"#, options: .regularExpression) != nil
             || host.range(of: pattern, options: .regularExpression) != nil
     }
 }

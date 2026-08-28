@@ -134,7 +134,7 @@ private fun ColumnEnter(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             label = { Text("Host or IP") },
-            placeholder = { Text("hid-helper.local or 192.168.2.161") },
+            placeholder = { Text("inputpilot-xxxx.local or 192.168.2.161") },
         )
         OutlinedTextField(
             value = token,

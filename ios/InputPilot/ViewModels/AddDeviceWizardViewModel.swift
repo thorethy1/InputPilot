@@ -23,7 +23,7 @@ struct ProbedDevice: Equatable {
 @MainActor
 final class AddDeviceWizardViewModel: ObservableObject {
     static let softAPBaseURL = URL(string: "http://192.168.4.1/")!
-    static let softAPSSIDPrefix = "usb-hid-s3-"
+    static let softAPSSIDPrefix = "InputPilot-"
 
     @Published private(set) var step: AddDeviceWizardStep = .choosePath
     @Published private(set) var candidates: [DiscoveredService] = []

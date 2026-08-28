@@ -32,6 +32,14 @@ final class BonjourDiscoveryFilterTests: XCTestCase {
         )
     }
 
+    func testAcceptsCurrentInputPilotHostname() {
+        XCTAssertTrue(BonjourDiscoveryFilter.isCandidate(
+            serviceName: "inputpilot-a1b2",
+            host: "inputpilot-a1b2.local",
+            txt: [:]
+        ))
+    }
+
     func testRejectsUnrelatedService() {
         XCTAssertFalse(
             BonjourDiscoveryFilter.isCandidate(

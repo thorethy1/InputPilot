@@ -37,7 +37,7 @@ class AddDeviceWizardViewModel(
 ) : ViewModel() {
     companion object {
         const val SOFT_AP_BASE = "http://192.168.4.1/"
-        const val SOFT_AP_SSID_PREFIX = "usb-hid-s3-"
+        const val SOFT_AP_SSID_PREFIX = "InputPilot-"
 
         fun factory(
             repository: DeviceRepository,

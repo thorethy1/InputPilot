@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class DeviceStatus(
     val ok: Boolean = true,
-    val name: String = "usb-hid-s3",
+    val name: String = "InputPilot-Firmware",
     val version: String = "unknown",
     @SerialName("device_id") val deviceId: String? = null,
     val jiggle: Boolean = false,

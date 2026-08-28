@@ -86,6 +86,6 @@ Do not decode against a different build: addresses and stacks will not match.
 | Appearance | Meaning |
 |------------|---------|
 | Solid red | WiFi down / not associated |
-| Magenta blink | Soft-AP setup (`usb-hid-s3-XXXX`; suffix from device MAC) |
+| Magenta blink | Soft-AP setup (`InputPilot-XXXX`; suffix from device MAC) |
 | Dim solid green | STA up, jiggle off |
 | Cyan breathing | STA up, jiggle on |

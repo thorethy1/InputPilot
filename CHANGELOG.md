@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.5] - 2026-08-28
+
+### Fixed
+- Updated the two stale iOS jiggle-routing tests to match direct-IP-first endpoint selection, fixing the v0.8.4 CI failure.
+- Preboots one exact iOS simulator without parallel test clones and builds the unsigned device IPA in a parallel CI job.
+
+### Added
+- Added authenticated `/api/usb` read/update/reset operations backed by NVS, with editable USB product name, VID, PID, and serial number in the iOS device screen.
+- USB defaults are now product `InputPilot`, VID/PID `CAFE:4001`, and a stable serial derived from the ESP32-S3 chip MAC.
+- The private signed-iOS workflow now places a directly downloadable `InputPilot.ipa` in an unpublished draft release.
+
+### Changed
+- Firmware runtime identity is `InputPilot-Firmware`, Soft-AP names are `InputPilot-XXXX`, and Bonjour names are `inputpilot-xxxx.local`; iOS and Android retain legacy discovery compatibility.
+- Public releases keep the full initial-flash ZIP, `InitialFirmware.bin`, `firmware.bin`, the permanent `firmware-manifest.json`, Android APK, and unsigned iOS IPA without duplicating internal flash components.
+
 ## [0.8.4] - 2026-08-28
 
 ### Fixed

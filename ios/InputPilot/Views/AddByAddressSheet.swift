@@ -61,7 +61,7 @@ struct AddByAddressSheet: View {
     private var enterAddressForm: some View {
         Form {
             Section {
-                TextField("Host or IP", text: $host, prompt: Text("hid-helper.local or 192.168.2.161"))
+                TextField("Host or IP", text: $host, prompt: Text("inputpilot-xxxx.local or 192.168.2.161"))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)

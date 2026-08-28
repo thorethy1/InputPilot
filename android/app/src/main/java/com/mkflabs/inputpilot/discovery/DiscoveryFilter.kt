@@ -6,7 +6,7 @@ object DiscoveryFilter {
     fun isCandidate(serviceName: String, host: String, txt: Map<String, String>): Boolean {
         if (txt["id"] != null) return true
         val haystack = "$serviceName $host".lowercase()
-        return haystack.contains("hid-helper")
+        return haystack.contains("inputpilot-") || haystack.contains("hid-helper")
     }
 
     fun deduplicate(services: List<DiscoveredService>): List<DiscoveredService> {
@@ -74,6 +74,7 @@ object DiscoveryFilter {
 
     private fun scoreName(name: String): Int {
         val lower = name.lowercase()
+        if (Regex("^inputpilot-[0-9a-f]+$").matches(lower)) return 120 + name.length
         if (Regex("^hid-helper-[0-9a-f]+$").matches(lower)) return 100 + name.length
         if (lower == "hid-helper") return 1
         return name.length
@@ -82,6 +83,7 @@ object DiscoveryFilter {
     private fun scoreHost(host: String): Int {
         val sanitized = DeviceEndpointResolver.sanitizeHost(host).lowercase()
         if (ipv4Host(sanitized) != null) return 100
+        if (Regex("^inputpilot-[0-9a-f]+\\.local$").matches(sanitized)) return 90
         if (Regex("^hid-helper-[0-9a-f]+\\.local$").matches(sanitized)) return 80
         if (sanitized == "hid-helper.local") return 1
         return 40
@@ -109,7 +111,7 @@ object DiscoveryFilter {
     private fun isVersionedHidHelper(service: DiscoveredService): Boolean {
         val name = service.name.lowercase()
         val host = DeviceEndpointResolver.sanitizeHost(service.host).lowercase()
-        return Regex("^hid-helper-[0-9a-f]+$").matches(name) ||
-            Regex("^hid-helper-[0-9a-f]+(\\.local)?$").matches(host)
+        return Regex("^(inputpilot|hid-helper)-[0-9a-f]+$").matches(name) ||
+            Regex("^(inputpilot|hid-helper)-[0-9a-f]+(\\.local)?$").matches(host)
     }
 }

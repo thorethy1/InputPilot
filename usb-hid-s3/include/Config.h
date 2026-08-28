@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.4"
-#define FW_NAME         "usb-hid-s3"
+#define FW_VERSION      "0.8.5"
+#define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0804
+#define FW_VERSION_BCD  0x0805
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -25,7 +25,7 @@
 #define HID_USB_VID          0xCAFE
 #define HID_USB_PID          0x4001
 #define HID_USB_MANUFACTURER "MKF Labs"
-#define HID_USB_PRODUCT      "InputPilot S3"
+#define HID_USB_PRODUCT      "InputPilot"
 
 // --- HID report IDs (composite descriptor) ---
 #define HID_RID_KEYBOARD 1
@@ -71,9 +71,9 @@
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
 
 // Soft-AP / mDNS prefixes. Runtime SSIDs/hostnames append a MAC suffix via
-// DeviceIdentity (e.g. usb-hid-s3-EEFF, hid-helper-eeff.local).
-#define WIFI_AP_SSID_PREFIX  "usb-hid-s3-"
-#define MDNS_HOSTNAME_PREFIX "hid-helper-"
+// DeviceIdentity (e.g. InputPilot-EEFF, inputpilot-eeff.local).
+#define WIFI_AP_SSID_PREFIX  "InputPilot-"
+#define MDNS_HOSTNAME_PREFIX "inputpilot-"
 #define WIFI_AP_CHANNEL  1
 #define WIFI_HTTP_PORT   80
 
@@ -82,7 +82,7 @@
 #define STATUS_LED_BRIGHTNESS  48   // 0..255 peak channel value (keep modest)
 
 // BLE identity + Nordic UART Service (NUS) UUIDs for remote control (Phase 4).
-#define BLE_DEVICE_NAME  "usb-hid-s3"
+#define BLE_DEVICE_NAME  "InputPilot-Firmware"
 #define BLE_NUS_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_NUS_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // host -> device (write)
 #define BLE_NUS_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // device -> host (notify)

@@ -28,6 +28,9 @@ protocol DeviceAPIClientProtocol: Sendable {
     func setJiggle(baseURL: URL, enabled: Bool, token: String?) async throws
     func getWifi(baseURL: URL, token: String?) async throws -> WifiStatus
     func provisionWifi(baseURL: URL, ssid: String, password: String, token: String?) async throws
+    func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity
+    func setUSBIdentity(baseURL: URL, identity: USBIdentityUpdate, token: String?) async throws
+    func resetUSBIdentity(baseURL: URL, token: String?) async throws
 }
 
 struct DeviceAPIClient: DeviceAPIClientProtocol {
@@ -85,6 +88,41 @@ struct DeviceAPIClient: DeviceAPIClientProtocol {
         var request = authorizedRequest(url: url, method: "POST", token: token)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(WifiProvisionRequest(ssid: ssid, password: password))
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response)
+    }
+
+    func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity {
+        let request = authorizedRequest(
+            url: baseURL.appendingPathComponent("api/usb"),
+            method: "GET",
+            token: token
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response)
+        return try decoder.decode(USBIdentity.self, from: data)
+    }
+
+    func setUSBIdentity(baseURL: URL, identity: USBIdentityUpdate, token: String?) async throws {
+        var request = authorizedRequest(
+            url: baseURL.appendingPathComponent("api/usb"),
+            method: "POST",
+            token: token
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(identity)
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response)
+    }
+
+    func resetUSBIdentity(baseURL: URL, token: String?) async throws {
+        var request = authorizedRequest(
+            url: baseURL.appendingPathComponent("api/usb"),
+            method: "POST",
+            token: token
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(USBIdentityReset())
         let (_, response) = try await session.data(for: request)
         try validate(response: response)
     }

@@ -10,8 +10,8 @@
  *
  * device_id: 12 lowercase hex chars (no separators), e.g. "aabbccddeeff"
  * suffix:    last 4 hex of device_id, e.g. "eeff"
- * Soft-AP:   usb-hid-s3-<SUFFIX_UPPER>
- * mDNS:      hid-helper-<suffix_lower>
+ * Soft-AP:   InputPilot-<SUFFIX_UPPER>
+ * mDNS:      inputpilot-<suffix_lower>
  */
 
 // Pure helpers (unit-testable on host).
@@ -27,9 +27,9 @@ public:
 
   static const char *deviceId();      // 12-hex
   static const char *suffix();        // 4-hex lowercase
-  static const char *softApSsid();    // usb-hid-s3-XXXX
-  static const char *mdnsHostname();  // hid-helper-xxxx
-  static const char *mdnsFqdn();      // hid-helper-xxxx.local
+  static const char *softApSsid();    // InputPilot-XXXX
+  static const char *mdnsHostname();  // inputpilot-xxxx
+  static const char *mdnsFqdn();      // inputpilot-xxxx.local
 };
 #endif
 

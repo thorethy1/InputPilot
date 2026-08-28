@@ -114,7 +114,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = try container.decodeIfPresent(Bool.self, forKey: .ok) ?? true
-        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "usb-hid-s3"
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "InputPilot-Firmware"
         version = try container.decodeIfPresent(String.self, forKey: .version) ?? "unknown"
         deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
         jiggle = try container.decodeIfPresent(Bool.self, forKey: .jiggle) ?? false
@@ -163,4 +163,42 @@ struct WifiStatus: Codable, Equatable, Sendable {
         case apSsid = "ap_ssid"
         case apIp = "ap_ip"
     }
+}
+
+struct USBIdentity: Codable, Equatable, Sendable {
+    let productName: String
+    let vid: Int
+    let pid: Int
+    let vidHex: String?
+    let pidHex: String?
+    let serialNumber: String
+    let requiresRestart: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case productName = "product_name"
+        case vid
+        case pid
+        case vidHex = "vid_hex"
+        case pidHex = "pid_hex"
+        case serialNumber = "serial_number"
+        case requiresRestart = "requires_restart"
+    }
+}
+
+struct USBIdentityUpdate: Encodable, Sendable {
+    let productName: String
+    let vid: Int
+    let pid: Int
+    let serialNumber: String
+
+    enum CodingKeys: String, CodingKey {
+        case productName = "product_name"
+        case vid
+        case pid
+        case serialNumber = "serial_number"
+    }
+}
+
+struct USBIdentityReset: Encodable, Sendable {
+    let reset = true
 }
