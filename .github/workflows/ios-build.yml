@@ -157,13 +157,21 @@ jobs:
           fi
           existing_asset_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
             --jq '.[] | select(.name == "InputPilot.ipa") | .id' | head -1)"
+          temporary_name="InputPilot-${GITHUB_RUN_ID}.ipa"
+          upload_response="$RUNNER_TEMP/upload-response.json"
+          curl --fail-with-body --silent --show-error --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/octet-stream' \
+            --data-binary "@$RUNNER_TEMP/InputPilot.ipa" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$temporary_name" \
+            > "$upload_response"
+          uploaded_asset_id="$(jq -er '.id' "$upload_response")"
           if [[ -n "$existing_asset_id" ]]; then
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$existing_asset_id"
           fi
-          gh api --hostname uploads.github.com --method POST \
-            -H 'Content-Type: application/octet-stream' \
-            "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=InputPilot.ipa" \
-            --input "$RUNNER_TEMP/InputPilot.ipa" >/dev/null
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$uploaded_asset_id" \
+            -f name='InputPilot.ipa' >/dev/null
           asset_url="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
             --jq '.[] | select(.name == "InputPilot.ipa") | .browser_download_url' | head -1)"
           {
