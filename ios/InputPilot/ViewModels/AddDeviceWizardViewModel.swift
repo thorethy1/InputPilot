@@ -3,6 +3,7 @@ import SwiftData
 
 enum AddDeviceWizardStep: Equatable {
     case choosePath
+    case securePairing
     case scanning
     case bleScanning
     case confirm(ProbedDevice)
@@ -43,6 +44,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
     @Published private(set) var expectedDeviceId: String?
     @Published private(set) var probedWifiStatus: WifiStatus?
     @Published private(set) var mergeMessage: String?
+    @Published private(set) var securelyPairedDeviceId: String?
 
     /// Saved devices used to hide duplicates from scan results and reject re-adds.
     @Published private(set) var knownDevices = SavedDeviceIndex.empty
@@ -115,9 +117,34 @@ final class AddDeviceWizardViewModel: ObservableObject {
         startBrowsing()
     }
 
+    func chooseSecureSetup() {
+        browser.stopBrowsing()
+        resetSoftAPState()
+        mergeMessage = nil
+        errorMessage = nil
+        securelyPairedDeviceId = nil
+        step = .securePairing
+    }
+
+    func didPairSecurely(deviceId: String) {
+        securelyPairedDeviceId = deviceId.lowercased()
+    }
+
+    func continueSecureSetup() {
+        guard securelyPairedDeviceId != nil else {
+            errorMessage = "Connect InputPilot by USB and capture its pairing code first."
+            return
+        }
+        step = .bleScanning
+    }
+
     func chooseBluetooth() { browser.stopBrowsing(); resetSoftAPState(); mergeMessage = nil; errorMessage = nil; step = .bleScanning }
 
     func selectBluetooth(_ metadata: BLEDeviceMetadata) {
+        if let expected = securelyPairedDeviceId, metadata.deviceId.lowercased() != expected {
+            errorMessage = "This is not the InputPilot that was paired by USB."
+            return
+        }
         if let existing = knownDevices.match(deviceId: metadata.deviceId) {
             if existing.hasBluetooth {
                 errorMessage = "This device is already configured for Bluetooth."; return
@@ -243,6 +270,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         candidates = []
         errorMessage = nil
         resetSoftAPState()
+        securelyPairedDeviceId = nil
     }
 
     func backFromConfirm() {
@@ -288,6 +316,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         displayName = ""
         apiToken = ""
         mergeMessage = nil
+        securelyPairedDeviceId = nil
         resetSoftAPState()
     }
 
@@ -343,6 +372,10 @@ final class AddDeviceWizardViewModel: ObservableObject {
         let requiresAuth = probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true
         let deviceId = probedDevice?.status.deviceId ?? bleMetadata?.deviceId
         let hasPairingKey = deviceId.map { PairingKeyStore.load(deviceId: $0) != nil } ?? false
+        if securelyPairedDeviceId != nil && !hasPairingKey {
+            errorMessage = "Secure setup requires a valid USB pairing code."
+            return
+        }
         if requiresAuth && token == nil && !hasPairingKey {
             errorMessage = "This device requires an API token."
             return
@@ -352,6 +385,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
             let repository = DeviceRepository(context: context)
             _ = try await repository.addFromDiscovery(status: probed.status, fallbackHost: probed.candidate.host, displayName: trimmedName, token: token, api: apiClient)
         } else if case let .confirmBLE(metadata) = step {
+            if securelyPairedDeviceId != nil && metadata.capabilities.contains("secure_wifi_setup_v1") {
+                let ssid = homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !ssid.isEmpty {
+                    let bluetooth = InputPilotBluetoothManager.session(deviceId: metadata.deviceId, token: nil)
+                    try await bluetooth.setWiFi(ssid: ssid, password: homeWifiPassword)
+                }
+            }
             let repository = DeviceRepository(context: context)
             _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName, token: token)
         } else { return }

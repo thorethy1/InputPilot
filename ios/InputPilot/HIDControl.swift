@@ -294,8 +294,38 @@ final class TCPHIDControlTransport: HIDControlTransport {
             })
         }
     }
+    func waitUntilReady(timeout: TimeInterval = 5) async throws {
+        if state == .offline || state == .unavailable { await connect() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if state == .ready, isAvailable { return }
+            if state == .authenticationFailed {
+                throw TransportError.failed("Secure Wi-Fi authentication failed.")
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw TransportError.failed("Encrypted Wi-Fi connection timed out.")
+    }
+    func sendCommands(_ commands: [String]) async throws {
+        try await waitUntilReady()
+        guard !commands.contains(where: { $0.contains("\n") || $0.contains("\r") }) else {
+            throw TransportError.encoding
+        }
+        for command in commands {
+            let line = try secureChannel?.sealText(command) ?? command
+            try await sendLine(line)
+        }
+    }
+    func setKeepAwake(_ settings: KeepAwakeSettings) async throws {
+        try await sendCommands([
+            "jiggle interval \(settings.moveIntervalMs)",
+            settings.moveEnabled ? "jiggle on" : "jiggle off",
+            "autoclick interval \(settings.clickIntervalMs)",
+            settings.clickEnabled ? "autoclick on" : "autoclick off",
+        ])
+    }
     func send(_ event: HIDEvent) async throws {
-        guard isAvailable else { throw TransportError.unavailable }
+        try await waitUntilReady()
         let eid = AppLogContext.eventID.map(String.init) ?? "-"; appLog(.tcp, "id=\(eid) send event=\(event.diagnosticName)")
         do {
             let line = try secureChannel?.sealText(event.line) ?? event.line
@@ -1184,6 +1214,18 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
     }
     func connect() async { shouldReconnect = true; scan() }
+    func waitUntilReady(timeout: TimeInterval = 10) async throws {
+        await connect()
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if state == .ready, isAvailable { return }
+            if state == .authenticationFailed {
+                throw TransportError.failed("Secure Bluetooth authentication failed.")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw TransportError.failed("Encrypted Bluetooth connection timed out.")
+    }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn: radioState = .poweredOn; if state == .unavailable { state = .offline }; scan()
@@ -1369,6 +1411,35 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
                 ))
                 drainWrites(peripheral)
             }
+        }
+    }
+    func setWiFi(ssid: String, password: String) async throws {
+        try await waitUntilReady()
+        let ssidData = Data(ssid.utf8)
+        let passwordData = Data(password.utf8)
+        guard (1 ... 32).contains(ssidData.count), passwordData.count <= 63 else {
+            throw TransportError.failed("Wi-Fi names are limited to 32 bytes and passwords to 63 bytes.")
+        }
+        guard let peripheral, let commandCharacteristic = characteristics[control],
+              commandCharacteristic.properties.contains(.write) else {
+            throw TransportError.unavailable
+        }
+        guard let secureChannel else {
+            throw TransportError.failed("Wi-Fi setup requires secure USB pairing.")
+        }
+        var plaintext = Data([0xFE, 0x01, UInt8(ssidData.count), UInt8(passwordData.count)])
+        plaintext.append(ssidData)
+        plaintext.append(passwordData)
+        let payload = try secureChannel.sealBinary(plaintext)
+        guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+            throw TransportError.failed("Wi-Fi credentials exceed the encrypted Bluetooth frame size.")
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.append(PendingWrite(
+                id: "wifi-setup-\(UUID().uuidString)", characteristic: commandCharacteristic,
+                payload: payload, type: .withResponse, continuation: continuation
+            ))
+            drainWrites(peripheral)
         }
     }
     private func drainWrites(_ peripheral: CBPeripheral) {

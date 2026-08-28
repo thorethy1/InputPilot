@@ -359,8 +359,16 @@ private struct ConnectionSettingsView: View {
                 Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
             }
+            if let selected, PairingKeyStore.load(deviceId: selected.deviceId) == nil {
+                Section("Security") {
+                    Label("Communication with \(selected.displayName) may be unencrypted.", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(AppColors.warning)
+                    NavigationLink("Migrate to encrypted connections") { SecurityMigrationGuideView() }
+                }
+            }
             Section("Diagnostics") {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
+                NavigationLink("Security Migration Guide") { SecurityMigrationGuideView() }
                 if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
                 else { LabeledContent("Firmware Logs", value: "Add a device first") }
                 NavigationLink("App Logs") { AppLogsView() }
@@ -381,10 +389,13 @@ private struct ConnectionSettingsView: View {
             Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") }
         }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
     }
-    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses Bluetooth first for interactive controls and Wi-Fi first for bulk work, then falls back to another ready transport."; case .preferBluetooth: "Uses ready Bluetooth first, then falls back to Wi-Fi."; case .preferWiFi: "Uses ready Wi-Fi first, then falls back to Bluetooth."; case .bluetoothOnly: "Uses only an authenticated, ready Bluetooth connection."; case .wifiOnly: "Uses only a ready TCP or REST connection on the local Wi-Fi network." } }
+    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses Bluetooth first for interactive controls and Wi-Fi first for bulk work, then falls back to another ready transport."; case .preferBluetooth: "Uses ready Bluetooth first, then falls back to Wi-Fi."; case .preferWiFi: "Uses ready Wi-Fi first, then falls back to Bluetooth."; case .bluetoothOnly: "Uses only an authenticated, ready Bluetooth connection."; case .wifiOnly: "Uses encrypted TCP for paired devices. REST is retained only for unpaired legacy devices." } }
 }
 
-private struct USBPairingInputTestView: View {
+struct USBPairingInputTestView: View {
+    var onPaired: ((String) -> Void)? = nil
+    var embedded = false
+    var continueAction: (() -> Void)? = nil
     @State private var captured = ""
     @State private var result: ResultState = .waiting
     @State private var pairedDeviceId = ""
@@ -414,6 +425,10 @@ private struct USBPairingInputTestView: View {
                     Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(.red)
                 }
                 Button("Pair another device") { captured = ""; pairedDeviceId = ""; result = .waiting }
+                if result == .valid, let continueAction {
+                    Button("Continue with Encrypted Bluetooth") { continueAction() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
             Section("Safety") {
                 Text("The credential is saved only in this iPhone’s Keychain. It is cleared from the input field immediately and is never written to app logs. Generating a new code on InputPilot invalidates its previous pairing.")
@@ -421,7 +436,7 @@ private struct USBPairingInputTestView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Secure Pairing")
+        .navigationTitle(embedded ? "Secure Setup" : "Secure Pairing")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -447,10 +462,42 @@ private struct USBPairingInputTestView: View {
             try PairingKeyStore.save(frame.secret, deviceId: frame.deviceId)
             pairedDeviceId = frame.deviceId
             result = .valid
+            onPaired?(frame.deviceId)
             Task { await InputPilotBluetoothManager.removeSession(deviceId: frame.deviceId) }
         } catch {
             result = .storageFailed
         }
+    }
+}
+
+struct SecurityMigrationGuideView: View {
+    var body: some View {
+        List {
+            Section("Before pairing") {
+                Label("Install firmware with secure_channel_v1 before creating the pairing code.", systemImage: "1.circle")
+                Label("Legacy BLE, Wi-Fi TCP, REST, and API-token connections may transmit control data without encryption.", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(AppColors.warning)
+            }
+            Section("Migrate") {
+                Label("Update InputPilot to the current firmware.", systemImage: "2.circle")
+                Label("Connect it directly to this iPhone or to a computer by USB.", systemImage: "3.circle")
+                Label("Open Secure Pairing, focus the input field, then hold BOOT for two seconds. The complete frame can also be typed manually.", systemImage: "4.circle")
+                Label("The 128-bit secret is stored only in this iPhone's Keychain. Creating another code invalidates the previous one.", systemImage: "5.circle")
+            }
+            Section("After pairing") {
+                Label("Bluetooth uses BLE link encryption and the authenticated InputPilot secure channel.", systemImage: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+                Label("Wi-Fi control uses the authenticated encrypted channel. Paired firmware rejects plaintext REST control.", systemImage: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+                Text("If the key is lost, create a new pairing code over USB. Pair every iPhone again because the old code becomes invalid.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
+            }
+        }
+        .navigationTitle("Security Migration")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

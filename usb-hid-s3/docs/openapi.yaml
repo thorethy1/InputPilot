@@ -21,7 +21,7 @@ info:
     control return HTTP 426; only minimal `/api/status` discovery remains
     readable. Paired BLE and TCP use `secure_channel_v1` (HMAC-SHA-256, HKDF,
     and AES-256-GCM) and never transmit the pairing credential.
-  version: 0.8.7
+  version: 0.8.8
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -84,7 +84,7 @@ paths:
               example:
                 ok: true
                 name: InputPilot-Firmware
-                version: "0.8.7"
+                version: "0.8.8"
                 device_id: aabbccddeeff
                 uptime_s: 120
                 heap: 192000

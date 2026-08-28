@@ -121,10 +121,15 @@ struct DeviceDetailView: View {
             }
 
             Section("Security") {
-                if PairingKeyStore.load(deviceId: device.deviceId) != nil {
-                    Label("USB pairing key stored in Keychain", systemImage: "checkmark.shield.fill")
+                if hasPairingKey {
+                    Label("Encrypted Bluetooth and Wi-Fi", systemImage: "checkmark.shield.fill")
                         .foregroundStyle(.green)
                 } else {
+                    Label("Communication may be unencrypted", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(AppColors.warning)
+                    Text("This device uses the legacy migration path. Update its firmware before pairing; paired firmware rejects plaintext control.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    NavigationLink("Open Migration Guide") { SecurityMigrationGuideView() }
                     TextField("Legacy API Token (optional)", text: $apiToken)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -204,6 +209,8 @@ struct DeviceDetailView: View {
     private var canConfigureKeepAwake: Bool {
         bluetooth.state == .ready || viewModel.wifiState(for: device.deviceId) == .reachable
     }
+
+    private var hasPairingKey: Bool { PairingKeyStore.load(deviceId: device.deviceId) != nil }
     private var moveEnabledBinding: Binding<Bool> { Binding(get: { device.jiggleEnabled }, set: { device.jiggleEnabled = $0; saveKeepAwake() }) }
     private var clickEnabledBinding: Binding<Bool> { Binding(get: { device.clickEnabled }, set: { device.clickEnabled = $0; saveKeepAwake() }) }
     private var moveIntervalBinding: Binding<Int> { Binding(get: { device.moveIntervalMs }, set: { device.moveIntervalMs = $0; saveKeepAwake() }) }
@@ -238,6 +245,12 @@ struct DeviceDetailView: View {
                 try await bluetooth.setKeepAwake(settings)
                 DeviceRepository(context: modelContext).apply(settings, to: device)
                 try modelContext.save()
+            } else if hasPairingKey, let host = wifiControlHost {
+                let tcp = TCPHIDControlTransport(host: host, token: nil, deviceId: device.deviceId)
+                defer { Task { await tcp.disconnect() } }
+                try await tcp.setKeepAwake(settings)
+                DeviceRepository(context: modelContext).apply(settings, to: device)
+                try modelContext.save()
             } else {
                 try await DeviceRepository(context: modelContext).setKeepAwake(device, settings: settings, api: DeviceAPIClient())
             }
@@ -254,6 +267,10 @@ struct DeviceDetailView: View {
         do {
             if bluetooth.state == .ready {
                 try await bluetooth.send(event)
+            } else if hasPairingKey, let host = wifiControlHost {
+                let tcp = TCPHIDControlTransport(host: host, token: nil, deviceId: device.deviceId)
+                defer { Task { await tcp.disconnect() } }
+                try await tcp.send(event)
             } else if let url = endpointURLs.first {
                 let rest = RESTHIDControlTransport(baseURL: url, token: device.apiToken)
                 try await rest.send(event)
@@ -292,6 +309,14 @@ struct DeviceDetailView: View {
 
     private var endpointURLs: [URL] {
         DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
+    }
+
+    private var wifiControlHost: String? {
+        if let staIP = device.staIP, !DeviceEndpointResolver.sanitizeHost(staIP).isEmpty {
+            return DeviceEndpointResolver.sanitizeHost(staIP)
+        }
+        let host = DeviceEndpointResolver.sanitizeHost(device.mdnsHost)
+        return host.isEmpty ? nil : host
     }
 
     private func parseUSBHex(_ value: String) -> Int? {

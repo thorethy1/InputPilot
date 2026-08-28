@@ -14,6 +14,8 @@ struct AddDeviceWizardView: View {
                 switch viewModel.step {
                 case .choosePath:
                     choosePathStep
+                case .securePairing:
+                    securePairingStep
                 case .scanning:
                     scanningStep
                 case .bleScanning:
@@ -55,6 +57,8 @@ struct AddDeviceWizardView: View {
         switch viewModel.step {
         case .choosePath:
             "Add Device"
+        case .securePairing:
+            "Secure Setup"
         case .scanning:
             "Scan Network"
         case .bleScanning:
@@ -88,6 +92,22 @@ struct AddDeviceWizardView: View {
 
     private var choosePathStep: some View {
         List {
+            Section("New device") {
+                Button { viewModel.chooseSecureSetup() } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Set Up Securely").foregroundStyle(.primary)
+                            Text("Pair by USB first, then use encrypted Bluetooth and Wi-Fi.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } icon: { Image(systemName: "lock.shield") }
+                }
+            }
+            Section("Migrate an existing device") {
+                Label("Discovery can connect to older firmware without encryption. Update it, then pair by USB.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.warning)
+            }
             Section("Bluetooth") {
                 Button {
                     viewModel.chooseBluetooth(); bluetooth.start()
@@ -122,7 +142,7 @@ struct AddDeviceWizardView: View {
                 } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Set Up New Device")
+                            Text("Legacy Wi-Fi Setup")
                                 .foregroundStyle(.primary)
                             Text("Join the device setup network and provision Wi‑Fi.")
                                 .font(.footnote)
@@ -153,6 +173,8 @@ struct AddDeviceWizardView: View {
     private var bluetoothScanningStep: some View {
         Group {
             let candidates = bluetooth.devices.filter { device in
+                if let expected = viewModel.securelyPairedDeviceId,
+                   device.deviceId.lowercased() != expected { return false }
                 guard let existing = viewModel.knownDevices.match(deviceId: device.deviceId) else { return true }
                 return !existing.hasBluetooth
             }
@@ -436,10 +458,40 @@ struct AddDeviceWizardView: View {
                     LabeledContent("Connection", value: viewModel.mergeMessage == nil ? "Bluetooth" : "Bluetooth + existing connections")
                 }
                 Section("Friendly name") { TextField("Name", text: $viewModel.displayName) }
+                if viewModel.securelyPairedDeviceId != nil && metadata.capabilities.contains("secure_wifi_setup_v1") {
+                    Section("Encrypted Wi-Fi setup") {
+                        TextField("Wi-Fi name (SSID)", text: $viewModel.homeWifiSSID)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("Wi-Fi password", text: $viewModel.homeWifiPassword)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    } footer: {
+                        Text("Optional. Credentials are encrypted over the paired Bluetooth channel. Leave the SSID empty to use Bluetooth only.")
+                    }
+                } else if viewModel.securelyPairedDeviceId != nil {
+                    Section("Wi-Fi setup") {
+                        Label("Update firmware to configure Wi-Fi securely. This device can still be saved and used over encrypted Bluetooth.", systemImage: "info.circle")
+                    }
+                }
                 if viewModel.showsAuthTokenField {
                     Section { TextField("API Token", text: $viewModel.apiToken).textInputAutocapitalization(.never).autocorrectionDisabled() }
                     footer: { Text("This device requires an API token for control.") }
                 }
+            }
+        }
+    }
+
+    private var securePairingStep: some View {
+        USBPairingInputTestView(
+            onPaired: { viewModel.didPairSecurely(deviceId: $0) },
+            embedded: true,
+            continueAction: {
+                viewModel.continueSecureSetup()
+                bluetooth.start()
+            }
+        )
+        .toolbar {
+            ToolbarItem(placement: .bottomBar) {
+                Button("Back") { viewModel.backToChoosePath() }
             }
         }
     }

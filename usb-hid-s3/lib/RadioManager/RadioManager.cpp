@@ -152,7 +152,8 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
     const uint8_t *frameBytes = reinterpret_cast<const uint8_t *>(value.data());
     size_t frameLength = value.size();
     size_t decryptedLength = 0;
-    if (pairingSecurityEnabled()) {
+    const bool secureFrame = pairingSecurityEnabled();
+    if (secureFrame) {
       if (!s_bleSecureSession.decryptBinary(frameBytes, frameLength, decrypted,
                                             sizeof(decrypted), decryptedLength)) {
         LOG_INFO("encrypted binary control rejected");
@@ -174,6 +175,8 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
     BLEControlFrame frame;
     frame.length = static_cast<uint16_t>(frameLength);
     memcpy(frame.bytes, frameBytes, frameLength);
+    if (secureFrame && frame.length > 1 && frame.bytes[0] == 0xFE)
+      frame.bytes[0] = 0xFD;
     if (xQueueSend(s_bleControlQueue, &frame, 0) != pdTRUE)
       recordHIDDecodeError("ble-binary", frameLength);
   }
@@ -185,6 +188,32 @@ void processBLEControlFrames(size_t budget = 8) {
   for (size_t processed = 0;
        processed < budget && xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
        ++processed) {
+    // An external 0xFE marker is changed to internal 0xFD only after successful
+    // decryption. Type 1 carries length-prefixed raw Wi-Fi credentials, keeping
+    // the maximum encrypted record well below a typical iOS ATT write size.
+    if (frame.length > 1 && frame.bytes[0] == 0xFD) {
+      if (frame.length < 4 || frame.bytes[1] != 1) {
+        LOG_WARN("secure BLE management frame rejected: invalid type");
+        continue;
+      }
+      const size_t ssidLength = frame.bytes[2];
+      const size_t passwordLength = frame.bytes[3];
+      if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
+          frame.length != 4 + ssidLength + passwordLength) {
+        LOG_WARN("secure BLE Wi-Fi setup rejected: invalid lengths");
+        continue;
+      }
+      const String ssid(reinterpret_cast<const char *>(frame.bytes + 4), ssidLength);
+      const String password(reinterpret_cast<const char *>(frame.bytes + 4 + ssidLength),
+                            passwordLength);
+      if (!WifiCredentials::save(ssid, password)) {
+        LOG_WARN("secure BLE Wi-Fi setup failed");
+        continue;
+      }
+      LOG_WIFI("secure BLE Wi-Fi setup saved ssid=\"%s\"", ssid.c_str());
+      g_radio.applyWifiCredentials();
+      continue;
+    }
     HIDMessage message;
     std::string error;
     if (!HIDProtocol::decode(frame.bytes, frame.length, message, error)) {

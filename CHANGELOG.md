@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.8] - 2026-08-28
+
+### Security
+
+- Make USB pairing the default first step for new-device setup and restrict the following BLE scan to the paired device ID.
+- Provision Wi-Fi credentials through a compact authenticated AES-GCM BLE management frame, including maximum-length SSIDs and passwords containing spaces, without using the plaintext setup portal.
+- Route paired Keep Awake settings and test actions through encrypted BLE or Wi-Fi/TCP; REST remains available only for unpaired legacy migration.
+- Add prominent unencrypted-communication warnings, per-device security state, and an in-app migration/recovery guide.
+
+### Compatibility
+
+- Preserve BLE and Wi-Fi for paired devices while retaining BLE, TCP, REST, API-token, and Soft-AP discovery paths for unpaired older firmware.
+- Advertise `secure_wifi_setup_v1` so the app only offers encrypted credential provisioning to firmware that implements it.
+
 ## [0.8.7] - 2026-08-28
 
 ### Security

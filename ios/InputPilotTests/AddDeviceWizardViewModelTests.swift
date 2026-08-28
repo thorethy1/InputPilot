@@ -220,6 +220,34 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
         XCTAssertFalse(mockBrowser.isBrowsing)
     }
 
+    func testSecureSetupRequiresUSBPairingBeforeBluetoothScan() {
+        viewModel.chooseSecureSetup()
+        XCTAssertEqual(viewModel.step, .securePairing)
+
+        viewModel.continueSecureSetup()
+        XCTAssertEqual(viewModel.step, .securePairing)
+        XCTAssertNotNil(viewModel.errorMessage)
+
+        viewModel.didPairSecurely(deviceId: "AABBCCDDEEFF")
+        viewModel.continueSecureSetup()
+        XCTAssertEqual(viewModel.step, .bleScanning)
+        XCTAssertEqual(viewModel.securelyPairedDeviceId, "aabbccddeeff")
+    }
+
+    func testSecureSetupRejectsDifferentBluetoothDevice() {
+        viewModel.chooseSecureSetup()
+        viewModel.didPairSecurely(deviceId: "aabbccddeeff")
+        viewModel.continueSecureSetup()
+        let other = BLEDeviceMetadata(
+            product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "112233445566",
+            deviceName: "Other", firmware: "0.8.8", protocolVersion: 1,
+            otaSchema: 1, capabilities: ["secure_channel_v1"], authRequired: true
+        )
+        viewModel.selectBluetooth(other)
+        XCTAssertEqual(viewModel.step, .bleScanning)
+        XCTAssertEqual(viewModel.errorMessage, "This is not the InputPilot that was paired by USB.")
+    }
+
     func testKnownWiFiDeviceCanAddBluetoothMetadata() {
         let known = StoredDevice(deviceId: "abcd1234efgh", displayName: "Desk", mdnsHost: "hid-helper.local",
             staIP: "192.168.2.10", capabilities: ["wifi_control"], bluetoothDiscovered: false)

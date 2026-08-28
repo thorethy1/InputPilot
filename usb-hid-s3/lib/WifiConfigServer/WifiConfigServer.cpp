@@ -345,7 +345,7 @@ void WifiConfigServer::handleGetStatus() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"secure_pairing\",\"secure_channel_v1\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"secure_pairing\",\"secure_channel_v1\",\"secure_wifi_setup_v1\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }

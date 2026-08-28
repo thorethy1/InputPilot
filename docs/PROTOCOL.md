@@ -40,7 +40,7 @@ older clients and changes only movement enablement.
 
 ## Secure pairing and encrypted control
 
-Capability `secure_channel_v1` indicates v0.8.7 pairing and encrypted control.
+Capability `secure_channel_v1` indicates v0.8.7-or-newer pairing and encrypted control.
 The `IPPAIR1` USB frame carries a 128-bit credential associated with the
 12-character device ID. iOS stores it in Keychain; firmware stores it in NVS.
 
@@ -55,6 +55,12 @@ Binary BLE records are `0xA1 || counter_be64 || ciphertext || tag_128`. TCP uses
 the equivalent hexadecimal `secure data` line. The AES-GCM nonce is
 `IPC || 0x01 || counter_be64`, and the lowercase device ID is authenticated
 additional data. Counters must increase strictly within a session.
+Capability `secure_wifi_setup_v1` adds an authenticated BLE management payload.
+Inside an encrypted binary record it is `0xFE || 0x01 || ssid_length:u8 ||
+password_length:u8 || ssid_utf8 || password_utf8`. Firmware accepts this marker
+only after decrypting a paired session. The compact length-prefixed form fits a
+maximum 32-byte SSID and 63-byte password in one common iOS ATT write and
+preserves spaces without placing credentials on the legacy text channel.
 After normal USB enumeration, holding BOOT for two seconds types a fixed-length
 `IPPAIR1` frame through USB HID. The frame carries device ID, a fresh 128-bit
 hexadecimal pairing credential, and a corruption checksum. Firmware omits the
