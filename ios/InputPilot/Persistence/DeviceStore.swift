@@ -9,6 +9,9 @@ final class StoredDevice {
     var staIP: String?
     var apiToken: String?
     var jiggleEnabled: Bool
+    var moveIntervalMs: Int = 30_000
+    var clickEnabled: Bool = false
+    var clickIntervalMs: Int = 60_000
     var lastSeen: Date?
     var firmwareVersion: String?
     var protocolVersion: Int = 0
@@ -26,6 +29,9 @@ final class StoredDevice {
         staIP: String? = nil,
         apiToken: String? = nil,
         jiggleEnabled: Bool = false,
+        moveIntervalMs: Int = 30_000,
+        clickEnabled: Bool = false,
+        clickIntervalMs: Int = 60_000,
         lastSeen: Date? = nil,
         firmwareVersion: String? = nil,
         protocolVersion: Int = 0,
@@ -40,6 +46,9 @@ final class StoredDevice {
         self.staIP = staIP
         self.apiToken = apiToken
         self.jiggleEnabled = jiggleEnabled
+        self.moveIntervalMs = moveIntervalMs
+        self.clickEnabled = clickEnabled
+        self.clickIntervalMs = clickIntervalMs
         self.lastSeen = lastSeen
         self.firmwareVersion = firmwareVersion
         self.protocolVersion = protocolVersion
@@ -59,6 +68,9 @@ final class StoredDevice {
             staIP: device.staIP,
             apiToken: device.apiToken,
             jiggleEnabled: device.jiggleEnabled,
+            moveIntervalMs: device.moveIntervalMs,
+            clickEnabled: device.clickEnabled,
+            clickIntervalMs: device.clickIntervalMs,
             lastSeen: device.lastSeen,
             firmwareVersion: device.firmwareVersion,
             protocolVersion: device.protocolVersion,
@@ -76,6 +88,9 @@ final class StoredDevice {
             staIP: staIP,
             apiToken: apiToken,
             jiggleEnabled: jiggleEnabled,
+            moveIntervalMs: moveIntervalMs,
+            clickEnabled: clickEnabled,
+            clickIntervalMs: clickIntervalMs,
             lastSeen: lastSeen,
             firmwareVersion: firmwareVersion,
             protocolVersion: protocolVersion,
@@ -98,6 +113,9 @@ enum DeviceStore {
             if let staIP = device.staIP { existing.staIP = staIP }
             if let apiToken = device.apiToken { existing.apiToken = apiToken }
             existing.jiggleEnabled = device.jiggleEnabled
+            existing.moveIntervalMs = device.moveIntervalMs
+            existing.clickEnabled = device.clickEnabled
+            existing.clickIntervalMs = device.clickIntervalMs
             existing.lastSeen = device.lastSeen
             existing.firmwareVersion = device.firmwareVersion
             existing.protocolVersion = device.protocolVersion
@@ -125,6 +143,9 @@ enum DeviceMerge {
         }
         if let token, !token.isEmpty { stored.apiToken = token }
         stored.jiggleEnabled = status.jiggle
+        stored.moveIntervalMs = status.jiggleIntervalMs
+        stored.clickEnabled = status.clickEnabled
+        stored.clickIntervalMs = status.clickIntervalMs
         stored.lastSeen = Date()
         stored.firmwareVersion = status.version
         stored.protocolVersion = status.protocolVersion

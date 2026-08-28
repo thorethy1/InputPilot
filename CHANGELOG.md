@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.6] - Unreleased
+
+### Added
+
+- Added independent, persistent firmware schedules for periodic pointer movement and left click, with separate iOS toggles, interval pickers, and test actions over BLE or Wi-Fi.
+- Added the first non-enforcing secure-onboarding hardware proof: holding BOOT after USB startup types a single-use 128-bit pairing test frame that the iOS Settings screen can validate without logging or retaining the credential.
+- Documented the staged USB-authenticated key exchange and encrypted BLE/Wi-Fi transport design, including explicit hardware gates before enforcement.
+
+### Changed
+
+- Bluetooth presence now reads “Ready” and Wi-Fi presence reads “Online,” with the transport explained in the supporting description.
+- Keep Awake runs in firmware after the phone disconnects and restores its movement/click configuration from NVS after restart.
+- v0.8.6 development focuses on firmware and iOS; Android remains unchanged pending a separate archival task.
+
 ## [0.8.5] - 2026-08-28
 
 ### Fixed

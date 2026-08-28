@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.5"
+#define FW_VERSION      "0.8.6"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0805
+#define FW_VERSION_BCD  0x0806
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -32,9 +32,15 @@
 #define HID_RID_MOUSE    2
 
 // --- Jiggle behaviour (Phase 1) ---
-#define JIGGLE_INTERVAL_MS 10000UL  // time between jiggle bursts
+#define JIGGLE_INTERVAL_MS 30000UL  // default time between pointer movements
 #define JIGGLE_MAX_DELTA   8         // max +/- pixels per jiggle step
 #define JIGGLE_ENABLED_DEFAULT 0     // 0 = off at boot; toggle via serial
+#define CLICK_INTERVAL_MS 60000UL    // default time between automatic left clicks
+#define CLICK_ENABLED_DEFAULT 0      // automatic clicks are opt-in
+#define KEEP_AWAKE_MIN_INTERVAL_MS 5000UL
+#define KEEP_AWAKE_MAX_INTERVAL_MS 3600000UL
+#define PAIRING_BUTTON_PIN 0
+#define PAIRING_BUTTON_HOLD_MS 2000UL
 
 // --- Serial command interface ---
 #define SERIAL_BAUD        115200

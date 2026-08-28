@@ -7,6 +7,7 @@ enum KeyboardInputEvent {
 }
 
 struct KeyboardInputBridge: UIViewRepresentable {
+    var autoFocus = false
     let onEvent: (KeyboardInputEvent) -> Void
 
     func makeUIView(context: Context) -> RemoteKeyboardTextView {
@@ -24,6 +25,7 @@ struct KeyboardInputBridge: UIViewRepresentable {
         view.keyboardType = .default
         view.returnKeyType = .default
         view.accessibilityLabel = "Remote keyboard input"
+        if autoFocus { DispatchQueue.main.async { view.becomeFirstResponder() } }
         return view
     }
 

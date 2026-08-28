@@ -82,6 +82,24 @@ final class DeviceRepositoryTests: XCTestCase {
         XCTAssertEqual(device.displayName, "Desk Mouse")
     }
 
+    func testSetKeepAwakePersistsIndependentSchedules() async throws {
+        let device = StoredDevice(deviceId: "keep-awake", displayName: "Desk", mdnsHost: "desk.local")
+        context.insert(device)
+        try context.save()
+        let url = URL(string: "http://desk.local/")!
+        mockAPI.setKeepAwakeResults[url] = .success(())
+        let settings = KeepAwakeSettings(moveEnabled: true, moveIntervalMs: 30_000,
+                                         clickEnabled: true, clickIntervalMs: 60_000)
+
+        try await repository.setKeepAwake(device, settings: settings, api: mockAPI)
+
+        XCTAssertTrue(device.jiggleEnabled)
+        XCTAssertEqual(device.moveIntervalMs, 30_000)
+        XCTAssertTrue(device.clickEnabled)
+        XCTAssertEqual(device.clickIntervalMs, 60_000)
+        XCTAssertEqual(mockAPI.setKeepAwakeCalls.first?.1, settings)
+    }
+
     func testAddPersistsProtocolCapabilitiesImmediately() async throws {
         let status = DeviceStatus(
             ok: true,

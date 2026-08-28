@@ -4,6 +4,14 @@
 
 BLE OTA uses the same optional `CONTROL_API_TOKEN` session authentication as BLE control; no separate or weaker credential path exists. Tokens are never included in OTA metadata or logs. The device validates declared size, contiguous offsets, target OTA slot, complete byte count, and SHA-256 before selecting a boot partition. Abort, timeout, disconnect, or verification failure leaves the running firmware selected. SHA-256 detects corruption but is not a cryptographic firmware signature.
 
+## v0.8.6 security development
+
+The USB-authenticated, key-based replacement for the compile-time token is
+specified in [`docs/SECURE_PAIRING_DESIGN_0.8.6.md`](docs/SECURE_PAIRING_DESIGN_0.8.6.md).
+The first v0.8.6 development slice is intentionally a non-enforcing hardware
+input test. Until its rollout gates are complete, the default posture below is
+still authoritative.
+
 ## What this project does
 
 `usb-hid-s3` presents itself to a host PC as a **USB mouse and keyboard**, and

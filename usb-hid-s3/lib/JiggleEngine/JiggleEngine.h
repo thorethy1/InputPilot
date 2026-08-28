@@ -24,6 +24,12 @@ public:
   // non-zero (dx,dy) within [-maxDelta,maxDelta] and returns true.
   bool update(uint32_t nowMs, int &dx, int &dy);
 
+  void setClickEnabled(bool enabled);
+  bool isClickEnabled() const { return clickEnabled_; }
+  uint32_t clickIntervalMs() const { return clickIntervalMs_; }
+  void setClickIntervalMs(uint32_t ms) { clickIntervalMs_ = ms; }
+  bool updateClick(uint32_t nowMs);
+
   // Time (ms) until the next jiggle fires, or 0 if due/disabled.
   uint32_t msUntilNext(uint32_t nowMs) const;
 
@@ -37,6 +43,10 @@ private:
   uint32_t lastFireMs_ = 0;
   bool anchored_ = false;
   uint32_t rngState_;
+  bool clickEnabled_ = false;
+  uint32_t clickIntervalMs_ = 60000;
+  uint32_t lastClickMs_ = 0;
+  bool clickAnchored_ = false;
 };
 
 #endif // JIGGLE_ENGINE_H

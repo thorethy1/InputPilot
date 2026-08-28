@@ -26,6 +26,8 @@ enum DeviceAPIError: Error, Equatable, LocalizedError {
 protocol DeviceAPIClientProtocol: Sendable {
     func status(baseURL: URL, token: String?) async throws -> DeviceStatus
     func setJiggle(baseURL: URL, enabled: Bool, token: String?) async throws
+    func keepAwake(baseURL: URL, token: String?) async throws -> KeepAwakeSettings
+    func setKeepAwake(baseURL: URL, settings: KeepAwakeSettings, token: String?) async throws
     func getWifi(baseURL: URL, token: String?) async throws -> WifiStatus
     func provisionWifi(baseURL: URL, ssid: String, password: String, token: String?) async throws
     func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity
@@ -88,6 +90,29 @@ struct DeviceAPIClient: DeviceAPIClientProtocol {
         var request = authorizedRequest(url: url, method: "POST", token: token)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(WifiProvisionRequest(ssid: ssid, password: password))
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response)
+    }
+
+    func keepAwake(baseURL: URL, token: String?) async throws -> KeepAwakeSettings {
+        let request = authorizedRequest(
+            url: baseURL.appendingPathComponent("api/keep-awake"),
+            method: "GET",
+            token: token
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response)
+        return try decoder.decode(KeepAwakeSettings.self, from: data)
+    }
+
+    func setKeepAwake(baseURL: URL, settings: KeepAwakeSettings, token: String?) async throws {
+        var request = authorizedRequest(
+            url: baseURL.appendingPathComponent("api/keep-awake"),
+            method: "POST",
+            token: token
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(settings)
         let (_, response) = try await session.data(for: request)
         try validate(response: response)
     }

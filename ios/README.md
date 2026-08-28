@@ -93,7 +93,8 @@ Run on Simulator unless noted. Physical device required for Soft-AP join and the
 - [ ] **Add by address** — save a lab device by IP/hostname; list shows offline until refresh
 - [ ] **Wizard Path A** — scan finds Bonjour candidate (or empty scan on Simulator); probe + save
 - [ ] **Wizard Path B** (device) — join Soft-AP, provision home Wi‑Fi, rediscover or manual fallback
-- [ ] **Keep Awake** — enable/disable pointer movement from device details while the device is online via Wi-Fi
+- [ ] **Keep Awake** — independently configure persistent movement and clicking over BLE or Wi-Fi; verify both continue after the phone disconnects
+- [ ] **USB pairing input test** — connect InputPilot directly, open Settings → USB Pairing Input Test, then hold BOOT after startup
 - [ ] **Presence** — saved devices move through checking, offline, connecting/authenticating, and ready states without capability-derived false positives
 - [ ] **Firmware state** — installed/latest versions, up-to-date, update available, incompatibility, and app-update requirements are distinct
 - [ ] **Rename** — detail screen display name persists after relaunch

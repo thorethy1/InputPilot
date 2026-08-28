@@ -19,7 +19,7 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyWiFi)
-        XCTAssertEqual(status.title, "Online via Wi-Fi")
+        XCTAssertEqual(status.title, "Online")
     }
 
     func testBluetoothReadyWinsOverWiFiFailure() {
@@ -29,7 +29,7 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyBluetooth)
-        XCTAssertEqual(status.title, "Ready via Bluetooth")
+        XCTAssertEqual(status.title, "Ready")
     }
 
     func testWorkingWiFiWinsOverBluetoothReconnect() {

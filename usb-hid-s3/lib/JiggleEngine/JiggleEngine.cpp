@@ -48,6 +48,24 @@ bool JiggleEngine::update(uint32_t nowMs, int &dx, int &dy) {
   return true;
 }
 
+void JiggleEngine::setClickEnabled(bool enabled) {
+  clickEnabled_ = enabled;
+  clickAnchored_ = false;
+}
+
+bool JiggleEngine::updateClick(uint32_t nowMs) {
+  if (!clickEnabled_) return false;
+  if (!clickAnchored_) {
+    // Unlike pointer movement, never click immediately when enabled.
+    lastClickMs_ = nowMs;
+    clickAnchored_ = true;
+    return false;
+  }
+  if ((uint32_t)(nowMs - lastClickMs_) < clickIntervalMs_) return false;
+  lastClickMs_ = nowMs;
+  return true;
+}
+
 uint32_t JiggleEngine::msUntilNext(uint32_t nowMs) const {
   if (!enabled_ || !anchored_) return 0;
   const uint32_t elapsed = (uint32_t)(nowMs - lastFireMs_);

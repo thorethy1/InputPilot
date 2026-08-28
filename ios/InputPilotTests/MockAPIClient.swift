@@ -4,10 +4,13 @@ import Foundation
 final class MockAPIClient: DeviceAPIClientProtocol, @unchecked Sendable {
     var statusResults: [URL: Result<DeviceStatus, Error>] = [:]
     var setJiggleResults: [URL: Result<Void, Error>] = [:]
+    var keepAwakeResults: [URL: Result<KeepAwakeSettings, Error>] = [:]
+    var setKeepAwakeResults: [URL: Result<Void, Error>] = [:]
     var getWifiResults: [URL: Result<WifiStatus, Error>] = [:]
     var provisionWifiResults: [URL: Result<Void, Error>] = [:]
     var usbIdentityResults: [URL: Result<USBIdentity, Error>] = [:]
     private(set) var setJiggleCalls: [(URL, Bool, String?)] = []
+    private(set) var setKeepAwakeCalls: [(URL, KeepAwakeSettings, String?)] = []
     private(set) var provisionWifiCalls: [(URL, String, String, String?)] = []
 
     func status(baseURL: URL, token: String?) async throws -> DeviceStatus {
@@ -39,6 +42,17 @@ final class MockAPIClient: DeviceAPIClientProtocol, @unchecked Sendable {
             try result.get()
             return
         }
+    }
+
+    func keepAwake(baseURL: URL, token: String?) async throws -> KeepAwakeSettings {
+        if let result = keepAwakeResults[baseURL] { return try result.get() }
+        throw DeviceAPIError.invalidResponse
+    }
+
+    func setKeepAwake(baseURL: URL, settings: KeepAwakeSettings, token: String?) async throws {
+        setKeepAwakeCalls.append((baseURL, settings, token))
+        if let result = setKeepAwakeResults[baseURL] { try result.get(); return }
+        throw DeviceAPIError.invalidResponse
     }
 
     func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity {

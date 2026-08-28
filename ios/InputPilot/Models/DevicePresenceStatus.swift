@@ -30,8 +30,8 @@ enum DevicePresenceStatus: Equatable, Sendable {
         case .reconnecting: "Reconnecting…"
         case .authenticating: "Authenticating…"
         case .authenticationFailed: "Authentication failed"
-        case .readyBluetooth: "Ready via Bluetooth"
-        case .readyWiFi: "Online via Wi-Fi"
+        case .readyBluetooth: "Ready"
+        case .readyWiFi: "Online"
         }
     }
 
@@ -45,8 +45,8 @@ enum DevicePresenceStatus: Equatable, Sendable {
         case .reconnecting: "The previous connection was lost"
         case .authenticating: "Verifying device access"
         case .authenticationFailed: "Check the device API token"
-        case .readyBluetooth: "Bluetooth is connected and authenticated"
-        case .readyWiFi: "Device responded on the local network"
+        case .readyBluetooth: "Connected securely over Bluetooth and ready for control"
+        case .readyWiFi: "Reachable on the local Wi-Fi network"
         }
     }
 

@@ -87,4 +87,13 @@ final class DeviceAPIClientTests: XCTestCase {
         XCTAssertEqual(identity.serialNumber, "aabbccddeeff")
         XCTAssertTrue(identity.requiresRestart)
     }
+
+    func testDecodeIndependentKeepAwakeSettings() throws {
+        let data = Data(#"{"move_enabled":true,"move_interval_ms":30000,"click_enabled":false,"click_interval_ms":60000}"#.utf8)
+        let settings = try JSONDecoder().decode(KeepAwakeSettings.self, from: data)
+        XCTAssertTrue(settings.moveEnabled)
+        XCTAssertEqual(settings.moveIntervalMs, 30_000)
+        XCTAssertFalse(settings.clickEnabled)
+        XCTAssertEqual(settings.clickIntervalMs, 60_000)
+    }
 }

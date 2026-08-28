@@ -18,6 +18,8 @@ struct DeviceDetailView: View {
     @State private var usbSerialNumber = ""
     @State private var usbBusy = false
     @State private var usbMessage: String?
+    @State private var keepAwakeBusy = false
+    @State private var keepAwakeMessage: String?
 
     init(device: StoredDevice) {
         _device = Bindable(wrappedValue: device)
@@ -126,9 +128,29 @@ struct DeviceDetailView: View {
             }
 
             Section("Keep Awake") {
-                Toggle("Move pointer periodically", isOn: jiggleBinding)
-                    .disabled(viewModel.wifiState(for: device.deviceId) != .reachable)
-                Text("Prevents the attached computer from becoming idle. This setting currently requires a live Wi-Fi connection to the device.")
+                Toggle("Move pointer periodically", isOn: moveEnabledBinding)
+                    .disabled(!canConfigureKeepAwake || keepAwakeBusy)
+                Picker("Movement interval", selection: moveIntervalBinding) {
+                    ForEach(keepAwakeIntervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
+                }
+                .disabled(!device.jiggleEnabled || !canConfigureKeepAwake || keepAwakeBusy)
+                Toggle("Click periodically", isOn: clickEnabledBinding)
+                    .disabled(!canConfigureKeepAwake || keepAwakeBusy)
+                Picker("Click interval", selection: clickIntervalBinding) {
+                    ForEach(keepAwakeIntervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
+                }
+                .disabled(!device.clickEnabled || !canConfigureKeepAwake || keepAwakeBusy)
+                HStack {
+                    Button("Test movement") { Task { await testKeepAwake(.mouseMove(8, 0)) } }
+                    Spacer()
+                    Button("Test click") { Task { await testKeepAwake(.click(.left)) } }
+                }
+                .disabled(!canConfigureKeepAwake || keepAwakeBusy)
+                if keepAwakeBusy { ProgressView() }
+                if let keepAwakeMessage {
+                    Text(keepAwakeMessage).font(.caption).foregroundStyle(.secondary)
+                }
+                Text("InputPilot stores both schedules in firmware and continues running them after the phone disconnects.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -173,15 +195,66 @@ struct DeviceDetailView: View {
         )
     }
 
-    private var jiggleBinding: Binding<Bool> {
-        Binding(
-            get: { device.jiggleEnabled },
-            set: { newValue in
-                Task {
-                    await viewModel.setJiggle(device: device, enabled: newValue, context: modelContext)
-                }
-            }
+    private let keepAwakeIntervals = [5_000, 10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000]
+    private var canConfigureKeepAwake: Bool {
+        bluetooth.state == .ready || viewModel.wifiState(for: device.deviceId) == .reachable
+    }
+    private var moveEnabledBinding: Binding<Bool> { Binding(get: { device.jiggleEnabled }, set: { device.jiggleEnabled = $0; saveKeepAwake() }) }
+    private var clickEnabledBinding: Binding<Bool> { Binding(get: { device.clickEnabled }, set: { device.clickEnabled = $0; saveKeepAwake() }) }
+    private var moveIntervalBinding: Binding<Int> { Binding(get: { device.moveIntervalMs }, set: { device.moveIntervalMs = $0; saveKeepAwake() }) }
+    private var clickIntervalBinding: Binding<Int> { Binding(get: { device.clickIntervalMs }, set: { device.clickIntervalMs = $0; saveKeepAwake() }) }
+
+    private func intervalLabel(_ milliseconds: Int) -> String {
+        if milliseconds < 60_000 { return "\(milliseconds / 1000) seconds" }
+        let minutes = milliseconds / 60_000
+        return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+    }
+
+    private func saveKeepAwake() {
+        let settings = KeepAwakeSettings(
+            moveEnabled: device.jiggleEnabled,
+            moveIntervalMs: device.moveIntervalMs,
+            clickEnabled: device.clickEnabled,
+            clickIntervalMs: device.clickIntervalMs
         )
+        Task { await applyKeepAwake(settings) }
+    }
+
+    @MainActor
+    private func applyKeepAwake(_ settings: KeepAwakeSettings) async {
+        guard canConfigureKeepAwake else {
+            keepAwakeMessage = "Connect once over Bluetooth or Wi-Fi to send this change."
+            return
+        }
+        keepAwakeBusy = true
+        defer { keepAwakeBusy = false }
+        do {
+            if bluetooth.state == .ready {
+                try await bluetooth.setKeepAwake(settings)
+                DeviceRepository(context: modelContext).apply(settings, to: device)
+                try modelContext.save()
+            } else {
+                try await DeviceRepository(context: modelContext).setKeepAwake(device, settings: settings, api: DeviceAPIClient())
+            }
+            keepAwakeMessage = "Saved in InputPilot firmware."
+        } catch {
+            keepAwakeMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func testKeepAwake(_ event: HIDEvent) async {
+        keepAwakeBusy = true
+        defer { keepAwakeBusy = false }
+        do {
+            if bluetooth.state == .ready {
+                try await bluetooth.send(event)
+            } else if let url = endpointURLs.first {
+                let rest = RESTHIDControlTransport(baseURL: url, token: device.apiToken)
+                try await rest.send(event)
+            } else { throw TransportError.unavailable }
+            keepAwakeMessage = "Test action sent."
+        } catch { keepAwakeMessage = error.localizedDescription }
     }
 
     private func saveDisplayName() {

@@ -167,6 +167,32 @@ final class DeviceRepository {
         throw lastError
     }
 
+    func setKeepAwake(
+        _ device: StoredDevice,
+        settings: KeepAwakeSettings,
+        api: any DeviceAPIClientProtocol
+    ) async throws {
+        let urls = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
+        guard !urls.isEmpty else { throw DeviceRepositoryError.deviceUnreachable }
+        var lastError: Error = DeviceRepositoryError.deviceUnreachable
+        for url in urls {
+            do {
+                try await api.setKeepAwake(baseURL: url, settings: settings, token: device.apiToken)
+                apply(settings, to: device)
+                try context.save()
+                return
+            } catch { lastError = error }
+        }
+        throw lastError
+    }
+
+    func apply(_ settings: KeepAwakeSettings, to device: StoredDevice) {
+        device.jiggleEnabled = settings.moveEnabled
+        device.moveIntervalMs = settings.moveIntervalMs
+        device.clickEnabled = settings.clickEnabled
+        device.clickIntervalMs = settings.clickIntervalMs
+    }
+
     func rename(_ device: StoredDevice, name: String) throws {
         device.displayName = name
         try context.save()

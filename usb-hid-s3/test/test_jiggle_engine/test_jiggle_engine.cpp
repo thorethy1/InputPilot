@@ -75,6 +75,17 @@ void test_ms_until_next() {
   TEST_ASSERT_EQUAL_UINT32(0, j.msUntilNext(2000));
 }
 
+void test_click_uses_independent_interval_and_never_fires_immediately() {
+  JiggleEngine j(8, 1000);
+  j.setClickIntervalMs(5000);
+  j.setClickEnabled(true);
+  TEST_ASSERT_FALSE(j.updateClick(100));
+  TEST_ASSERT_FALSE(j.updateClick(5099));
+  TEST_ASSERT_TRUE(j.updateClick(5100));
+  TEST_ASSERT_FALSE(j.updateClick(6000));
+  TEST_ASSERT_TRUE(j.updateClick(10100));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_disabled_never_fires);
@@ -83,5 +94,6 @@ int main(int, char **) {
   RUN_TEST(test_delta_within_bounds_and_nonzero);
   RUN_TEST(test_deterministic_with_seed);
   RUN_TEST(test_ms_until_next);
+  RUN_TEST(test_click_uses_independent_interval_and_never_fires_immediately);
   return UNITY_END();
 }

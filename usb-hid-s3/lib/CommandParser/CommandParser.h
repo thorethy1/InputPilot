@@ -20,6 +20,12 @@ enum class CmdType {
   JiggleOn,      // jiggle on
   JiggleOff,     // jiggle off
   JiggleStatus,  // jiggle | jiggle status
+  JiggleInterval,// jiggle interval <milliseconds>
+  AutoClickOn,   // autoclick on
+  AutoClickOff,  // autoclick off
+  AutoClickStatus,
+  AutoClickInterval,
+  PairingTest,    // pairtest: emit a non-enforcing USB HID pairing frame
   Radio,         // radio wifi|ble|none
   WifiStatus,    // wifi | wifi status
   WifiSet,       // wifi set <ssid> <pass...>
@@ -41,6 +47,7 @@ struct ParsedCommand {
   int wheel = 0;
   int modifier = 0;
   int keycode = 0;
+  int intervalMs = 0;
 
   // Click
   MouseBtn button = MouseBtn::Left;

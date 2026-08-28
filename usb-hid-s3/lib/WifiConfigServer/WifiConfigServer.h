@@ -19,6 +19,7 @@
  *   GET  /api/logs         bounded recent firmware logs
  *   GET  /api/jiggle       {"enabled", "interval_ms"}
  *   POST /api/jiggle       {"enabled": true|false}
+ *   GET/POST /api/keep-awake  independent movement/click settings
  *   POST /api/move         {"dx", "dy", "wheel"?}
  *   POST /api/type         {"text": "..."}
  *   POST /api/key          {"key": "enter"}  (or "name")
@@ -62,6 +63,8 @@ private:
   void handleOtaUploadComplete();
   void handleGetJiggle();
   void handlePostJiggle();
+  void handleGetKeepAwake();
+  void handlePostKeepAwake();
   void handlePostMove();
   void handlePostType();
   void handlePostKey();

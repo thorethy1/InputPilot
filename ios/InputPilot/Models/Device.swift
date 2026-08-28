@@ -7,6 +7,9 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
     var staIP: String?
     var apiToken: String?
     var jiggleEnabled: Bool
+    var moveIntervalMs: Int
+    var clickEnabled: Bool
+    var clickIntervalMs: Int
     var lastSeen: Date?
     var firmwareVersion: String?
     var protocolVersion: Int
@@ -20,6 +23,9 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         staIP: String? = nil,
         apiToken: String? = nil,
         jiggleEnabled: Bool = false,
+        moveIntervalMs: Int = 30_000,
+        clickEnabled: Bool = false,
+        clickIntervalMs: Int = 60_000,
         lastSeen: Date? = nil,
         firmwareVersion: String? = nil,
         protocolVersion: Int = 0,
@@ -32,6 +38,9 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         self.staIP = staIP
         self.apiToken = apiToken
         self.jiggleEnabled = jiggleEnabled
+        self.moveIntervalMs = moveIntervalMs
+        self.clickEnabled = clickEnabled
+        self.clickIntervalMs = clickIntervalMs
         self.lastSeen = lastSeen
         self.firmwareVersion = firmwareVersion
         self.protocolVersion = protocolVersion
@@ -46,6 +55,9 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         staIP = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost)
         apiToken = nil
         jiggleEnabled = status.jiggle
+        moveIntervalMs = status.jiggleIntervalMs
+        clickEnabled = status.clickEnabled
+        clickIntervalMs = status.clickIntervalMs
         lastSeen = Date()
         firmwareVersion = status.version
         protocolVersion = status.protocolVersion
@@ -61,6 +73,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let deviceId: String?
     let jiggle: Bool
     let jiggleIntervalMs: Int
+    let clickEnabled: Bool
+    let clickIntervalMs: Int
     let staIp: String?
     let mdns: String?
     let authRequired: Bool
@@ -75,6 +89,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case deviceId = "device_id"
         case jiggle
         case jiggleIntervalMs = "jiggle_interval_ms"
+        case clickEnabled = "click_enabled"
+        case clickIntervalMs = "click_interval_ms"
         case staIp = "sta_ip"
         case mdns
         case authRequired = "auth_required"
@@ -90,6 +106,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         deviceId: String? = nil,
         jiggle: Bool,
         jiggleIntervalMs: Int,
+        clickEnabled: Bool = false,
+        clickIntervalMs: Int = 60_000,
         staIp: String? = nil,
         mdns: String? = nil,
         authRequired: Bool = false,
@@ -103,6 +121,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.deviceId = deviceId
         self.jiggle = jiggle
         self.jiggleIntervalMs = jiggleIntervalMs
+        self.clickEnabled = clickEnabled
+        self.clickIntervalMs = clickIntervalMs
         self.staIp = staIp
         self.mdns = mdns
         self.authRequired = authRequired
@@ -119,6 +139,8 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
         jiggle = try container.decodeIfPresent(Bool.self, forKey: .jiggle) ?? false
         jiggleIntervalMs = try container.decodeIfPresent(Int.self, forKey: .jiggleIntervalMs) ?? 10000
+        clickEnabled = try container.decodeIfPresent(Bool.self, forKey: .clickEnabled) ?? false
+        clickIntervalMs = try container.decodeIfPresent(Int.self, forKey: .clickIntervalMs) ?? 60_000
         staIp = try container.decodeIfPresent(String.self, forKey: .staIp)
         mdns = try container.decodeIfPresent(String.self, forKey: .mdns)
         // Older firmware (e.g. 0.3.3) omits auth_required.
@@ -162,6 +184,20 @@ struct WifiStatus: Codable, Equatable, Sendable {
         case deviceId = "device_id"
         case apSsid = "ap_ssid"
         case apIp = "ap_ip"
+    }
+}
+
+struct KeepAwakeSettings: Codable, Equatable, Sendable {
+    let moveEnabled: Bool
+    let moveIntervalMs: Int
+    let clickEnabled: Bool
+    let clickIntervalMs: Int
+
+    enum CodingKeys: String, CodingKey {
+        case moveEnabled = "move_enabled"
+        case moveIntervalMs = "move_interval_ms"
+        case clickEnabled = "click_enabled"
+        case clickIntervalMs = "click_interval_ms"
     }
 }
 

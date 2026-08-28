@@ -21,7 +21,7 @@ info:
     `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
     (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
     authenticate with a line: `auth <token>`.
-  version: 0.8.5
+  version: 0.8.6
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -84,13 +84,15 @@ paths:
               example:
                 ok: true
                 name: InputPilot-Firmware
-                version: "0.8.5"
+                version: "0.8.6"
                 device_id: aabbccddeeff
                 uptime_s: 120
                 heap: 192000
                 usb: ready
                 jiggle: false
-                jiggle_interval_ms: 10000
+                jiggle_interval_ms: 30000
+                click_enabled: false
+                click_interval_ms: 60000
                 sta_ip: 192.168.2.161
                 mdns: inputpilot-eeff.local
                 protocol_version: 1
@@ -299,6 +301,33 @@ paths:
       responses:
         "204":
           description: No content
+
+  /api/keep-awake:
+    get:
+      tags: [control]
+      summary: Read independent persistent movement and click schedules
+      responses:
+        "200":
+          description: Current firmware-owned Keep Awake settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeepAwakeSettings" }
+    post:
+      tags: [control]
+      summary: Replace independent persistent movement and click schedules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeepAwakeSettings" }
+      responses:
+        "200": { description: Settings persisted and applied }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    options:
+      tags: [control]
+      summary: CORS preflight
+      responses:
+        "204": { description: No content }
 
   /api/move:
     post:
@@ -699,6 +728,10 @@ components:
           type: boolean
         jiggle_interval_ms:
           type: integer
+        click_enabled:
+          type: boolean
+        click_interval_ms:
+          type: integer
         sta_ip:
           type: string
           description: Empty when not on STA
@@ -752,6 +785,15 @@ components:
           enum: [true]
         enabled:
           type: boolean
+
+    KeepAwakeSettings:
+      type: object
+      required: [move_enabled, move_interval_ms, click_enabled, click_interval_ms]
+      properties:
+        move_enabled: { type: boolean }
+        move_interval_ms: { type: integer, minimum: 5000, maximum: 3600000, example: 30000 }
+        click_enabled: { type: boolean }
+        click_interval_ms: { type: integer, minimum: 5000, maximum: 3600000, example: 60000 }
 
     MoveRequest:
       type: object

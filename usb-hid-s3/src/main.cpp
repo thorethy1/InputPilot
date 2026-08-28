@@ -21,6 +21,8 @@
 #include "CommandSink.h"
 #include "DeviceIdentity.h"
 #include "JiggleEngine.h"
+#include "KeepAwakeConfig.h"
+#include "PairingInputFrame.h"
 #include "KeyMap.h"
 #include "RadioMode.h"
 #include "RadioManager.h"
@@ -68,6 +70,7 @@ static_assert(sizeof(hid_mouse_report_t) == 5, "Unexpected mouse report layout")
 // Shared state
 // ---------------------------------------------------------------------------
 static JiggleEngine g_jiggle(JIGGLE_MAX_DELTA, JIGGLE_INTERVAL_MS);
+static KeepAwakeSettings g_keepAwake;
 static SemaphoreHandle_t g_hidQueueMutex = nullptr;
 static HIDEventQueue g_hidQueue;
 static std::atomic<uint32_t> g_hidEnqueueSequence{0};
@@ -114,6 +117,8 @@ static char g_cmdBuf[SERIAL_CMD_MAXLEN];
 static size_t g_cmdLen = 0;
 static uint32_t g_lastHeartbeatMs = 0;
 static const uint32_t HEARTBEAT_MS = 10000;
+static uint32_t g_pairingButtonPressedAt = 0;
+static bool g_pairingButtonEmitted = false;
 
 // ---------------------------------------------------------------------------
 // HID helpers. These functions are called only by processHIDQueue() from the
@@ -475,23 +480,29 @@ static void printHelp() {
   LOG_INFO("  key <name[+name...]>     press a key/combo (enter,esc,cmd+space,...)");
   LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report");
   LOG_INFO("  hidtest mouse|keyboard   exercise USB HID without a radio transport");
-  LOG_INFO("  jiggle on|off|status");
+  LOG_INFO("  jiggle on|off|status|interval <ms>");
+  LOG_INFO("  autoclick on|off|status|interval <ms>");
+  LOG_INFO("  pairtest                 type a USB pairing test frame");
   LOG_INFO("  radio wifi|ble|both|none enable control radios");
   LOG_INFO("  wifi status|set|clear    NVS WiFi creds (Soft-AP if none)");
   LOG_INFO("  status | version | help");
 }
 
 static void printStatus() {
-  LOG_INFO("status version=%s uptime=%lus heap=%u usb=%s jiggle=%s interval=%lums radio=%s",
+  LOG_INFO("status version=%s uptime=%lus heap=%u usb=%s jiggle=%s interval=%lums autoclick=%s click_interval=%lums radio=%s",
            FW_VERSION, (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            hidReady() ? "ready" : "not-ready",
            g_jiggle.isEnabled() ? "on" : "off",
            (unsigned long)g_jiggle.intervalMs(),
+           g_jiggle.isClickEnabled() ? "on" : "off",
+           (unsigned long)g_jiggle.clickIntervalMs(),
            g_radio.statusStr());
 }
 
 bool deviceJiggleEnabled() { return g_jiggle.isEnabled(); }
 uint32_t deviceJiggleIntervalMs() { return g_jiggle.intervalMs(); }
+bool deviceAutoClickEnabled() { return g_jiggle.isClickEnabled(); }
+uint32_t deviceAutoClickIntervalMs() { return g_jiggle.clickIntervalMs(); }
 bool deviceHidReady() { return hidReady(); }
 bool deviceOtaActive() { return g_otaEngine.active(); }
 HIDDiagnosticsSnapshot deviceHidDiagnostics() {
@@ -532,6 +543,32 @@ void recordHIDBleFrame(uint8_t type, size_t length) {
     portEXIT_CRITICAL(&g_breadcrumbMux);
   }
   portENTER_CRITICAL(&g_hidStatsMux); g_hidStats.lastBleRxType = type; g_hidStats.lastBleRxLength = length; portEXIT_CRITICAL(&g_hidStatsMux);
+}
+
+static void persistKeepAwake() {
+  g_keepAwake.moveEnabled = g_jiggle.isEnabled();
+  g_keepAwake.moveIntervalMs = g_jiggle.intervalMs();
+  g_keepAwake.clickEnabled = g_jiggle.isClickEnabled();
+  g_keepAwake.clickIntervalMs = g_jiggle.clickIntervalMs();
+  if (!KeepAwakeConfig::save(g_keepAwake)) LOG_WARN("keep-awake persistence failed");
+}
+
+static void emitPairingInputTest() {
+  uint8_t secret[PairingInputFrame::SecretSize];
+  esp_fill_random(secret, sizeof(secret));
+  char frame[PairingInputFrame::EncodedLength + 1]{};
+  if (!PairingInputFrame::format(DeviceIdentity::deviceId(), secret, frame, sizeof(frame))) {
+    LOG_WARN("pairing input test frame generation failed");
+    memset(secret, 0, sizeof(secret));
+    return;
+  }
+  HIDEvent event;
+  event.type = HIDEventType::TypeText;
+  strncpy(event.text, frame, sizeof(event.text) - 1);
+  if (enqueueHIDEvent(event, "pair-test"))
+    LOG_INFO("pairing input test queued (credential omitted)");
+  memset(secret, 0, sizeof(secret));
+  memset(frame, 0, sizeof(frame));
 }
 
 void handleCommandLine(const std::string &line, const char *source) {
@@ -595,15 +632,52 @@ void handleCommandLine(const std::string &line, const char *source) {
       break;
     case CmdType::JiggleOn:
       g_jiggle.setEnabled(true);
+      persistKeepAwake();
       LOG_JIG("jiggle=on interval=%lums", (unsigned long)g_jiggle.intervalMs());
       break;
     case CmdType::JiggleOff:
       g_jiggle.setEnabled(false);
+      persistKeepAwake();
       LOG_JIG("jiggle=off");
       break;
     case CmdType::JiggleStatus:
       LOG_JIG("jiggle=%s interval=%lums", g_jiggle.isEnabled() ? "on" : "off",
               (unsigned long)g_jiggle.intervalMs());
+      break;
+    case CmdType::JiggleInterval:
+      if (!KeepAwakeConfig::validInterval(static_cast<uint32_t>(c.intervalMs))) {
+        LOG_WARN("jiggle interval out of range");
+        break;
+      }
+      g_jiggle.setIntervalMs(static_cast<uint32_t>(c.intervalMs));
+      persistKeepAwake();
+      LOG_JIG("jiggle interval=%lums", (unsigned long)g_jiggle.intervalMs());
+      break;
+    case CmdType::AutoClickOn:
+      g_jiggle.setClickEnabled(true);
+      persistKeepAwake();
+      LOG_JIG("autoclick=on interval=%lums", (unsigned long)g_jiggle.clickIntervalMs());
+      break;
+    case CmdType::AutoClickOff:
+      g_jiggle.setClickEnabled(false);
+      persistKeepAwake();
+      LOG_JIG("autoclick=off");
+      break;
+    case CmdType::AutoClickStatus:
+      LOG_JIG("autoclick=%s interval=%lums", g_jiggle.isClickEnabled() ? "on" : "off",
+              (unsigned long)g_jiggle.clickIntervalMs());
+      break;
+    case CmdType::AutoClickInterval:
+      if (!KeepAwakeConfig::validInterval(static_cast<uint32_t>(c.intervalMs))) {
+        LOG_WARN("autoclick interval out of range");
+        break;
+      }
+      g_jiggle.setClickIntervalMs(static_cast<uint32_t>(c.intervalMs));
+      persistKeepAwake();
+      LOG_JIG("autoclick interval=%lums", (unsigned long)g_jiggle.clickIntervalMs());
+      break;
+    case CmdType::PairingTest:
+      emitPairingInputTest();
       break;
     case CmdType::Radio: {
       RadioMode target = RadioMode::None;
@@ -681,7 +755,28 @@ static void jiggleTask(void *) {
     if (g_jiggle.update(millis(), dx, dy)) {
       if (enqueueHIDEvent(HIDEvent::move(dx, dy), "jiggle")) LOG_JIG("auto dx=%d dy=%d", dx, dy);
     }
+    if (g_jiggle.updateClick(millis())) {
+      HIDEvent click;
+      click.type = HIDEventType::Click;
+      click.button = static_cast<uint8_t>(MouseBtn::Left);
+      if (enqueueHIDEvent(click, "autoclick")) LOG_JIG("automatic left click queued");
+    }
     vTaskDelay(pdMS_TO_TICKS(50));
+  }
+}
+
+static void servicePairingButton() {
+  const bool pressed = digitalRead(PAIRING_BUTTON_PIN) == LOW;
+  if (!pressed) {
+    g_pairingButtonPressedAt = 0;
+    g_pairingButtonEmitted = false;
+    return;
+  }
+  if (g_pairingButtonPressedAt == 0) g_pairingButtonPressedAt = millis();
+  if (!g_pairingButtonEmitted &&
+      millis() - g_pairingButtonPressedAt >= PAIRING_BUTTON_HOLD_MS) {
+    g_pairingButtonEmitted = true;
+    emitPairingInputTest();
   }
 }
 
@@ -779,10 +874,12 @@ void setup() {
   printBanner();
 
   g_statusLed.begin();
-
-#if JIGGLE_ENABLED_DEFAULT
-  g_jiggle.setEnabled(true);
-#endif
+  pinMode(PAIRING_BUTTON_PIN, INPUT_PULLUP);
+  g_keepAwake = KeepAwakeConfig::load();
+  g_jiggle.setIntervalMs(g_keepAwake.moveIntervalMs);
+  g_jiggle.setEnabled(g_keepAwake.moveEnabled);
+  g_jiggle.setClickIntervalMs(g_keepAwake.clickIntervalMs);
+  g_jiggle.setClickEnabled(g_keepAwake.clickEnabled);
 
   xTaskCreatePinnedToCore(jiggleTask, "jiggle", 4096, nullptr, 1, nullptr, 0);
 
@@ -803,6 +900,7 @@ void setup() {
 void loop() {
   processHIDQueue(6);
   serviceSerialCommands();
+  servicePairingButton();
   g_radio.loop();
   processHIDQueue(6);
   g_statusLed.loop();
@@ -810,9 +908,10 @@ void loop() {
   const uint32_t now = millis();
   if (now - g_lastHeartbeatMs >= HEARTBEAT_MS) {
     g_lastHeartbeatMs = now;
-    LOG_INFO("heartbeat uptime=%lus heap=%u usb=%s jiggle=%s radio=%s",
+    LOG_INFO("heartbeat uptime=%lus heap=%u usb=%s jiggle=%s autoclick=%s radio=%s",
              (unsigned long)(now / 1000), (unsigned)ESP.getFreeHeap(),
              hidReady() ? "ready" : "not-ready", g_jiggle.isEnabled() ? "on" : "off",
+             g_jiggle.isClickEnabled() ? "on" : "off",
              g_radio.statusStr());
   }
   delay(2);

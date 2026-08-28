@@ -21,6 +21,32 @@ The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET 
 | Layout-resolved key | `report <modifiers:u8> <usage:u8>` | `POST /api/report` |
 | Release all | `release all` | `POST /api/release-all` |
 
+## Keep Awake v2
+
+Firmware capability `keep_awake_v2` means movement and clicking are independent,
+persistent schedules. Both continue without a connected client and restore from
+NVS after restart. Valid intervals are 5,000 through 3,600,000 milliseconds.
+
+| Setting | BLE/TCP text command | REST |
+|---|---|---|
+| Movement enabled | `jiggle on\|off` | `POST /api/keep-awake` |
+| Movement interval | `jiggle interval <ms>` | `POST /api/keep-awake` |
+| Click enabled | `autoclick on\|off` | `POST /api/keep-awake` |
+| Click interval | `autoclick interval <ms>` | `POST /api/keep-awake` |
+
+`GET /api/keep-awake` returns `move_enabled`, `move_interval_ms`,
+`click_enabled`, and `click_interval_ms`. `/api/jiggle` remains compatible with
+older clients and changes only movement enablement.
+
+## USB pairing input test
+
+Capability `pairing_input_test` is a v0.8.6 development proof, not authentication.
+After normal USB enumeration, holding BOOT for two seconds types a fixed-length
+`IPPAIR1` frame through USB HID. The frame carries device ID, a fresh 128-bit
+hexadecimal test credential, and a corruption checksum. Firmware omits the
+credential from logs. See `docs/SECURE_PAIRING_DESIGN_0.8.6.md` for the staged
+enforcement design.
+
 TCP listens on port 3333 and is persistent. Commands and replies are UTF-8 lines ending in LF. Replies include `auth ok`, `auth failed`, `pong`, and `error ...`. A disconnect releases all held keys, modifiers, and mouse buttons.
 
 `report` is the v0.6 layout boundary. The client maps each Unicode character for the selected host layout to a USB HID usage and modifier byte (including right Alt/AltGr bit `0x40`), then sends one report. The firmware presses and releases that report; it does not interpret UTF-8 as HID key codes. Legacy `type` and `key` remain supported. Multiline and long input is emitted as ordered per-character reports (newline becomes Enter), so neither TCP line framing nor BLE MTU splits UTF-8.

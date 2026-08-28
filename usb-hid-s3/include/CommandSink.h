@@ -16,6 +16,8 @@ bool requestReleaseAllAndWait(const char *source, uint32_t timeoutMs);
 // Status hooks for HTTP GET endpoints (implemented in main.cpp).
 bool deviceJiggleEnabled();
 uint32_t deviceJiggleIntervalMs();
+bool deviceAutoClickEnabled();
+uint32_t deviceAutoClickIntervalMs();
 bool deviceHidReady();
 bool deviceOtaActive();
 HIDDiagnosticsSnapshot deviceHidDiagnostics();

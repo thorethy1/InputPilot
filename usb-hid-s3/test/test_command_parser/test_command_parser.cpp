@@ -74,6 +74,19 @@ void test_jiggle() {
   TEST_ASSERT_EQUAL(int(CmdType::JiggleStatus), int(P("jiggle status").type));
   TEST_ASSERT_EQUAL(int(CmdType::JiggleStatus), int(P("jiggle").type));
   TEST_ASSERT_EQUAL(int(CmdType::Unknown), int(P("jiggle maybe").type));
+  ParsedCommand interval = P("jiggle interval 30000");
+  TEST_ASSERT_EQUAL(int(CmdType::JiggleInterval), int(interval.type));
+  TEST_ASSERT_EQUAL(30000, interval.intervalMs);
+}
+
+void test_autoclick() {
+  TEST_ASSERT_EQUAL(int(CmdType::AutoClickOn), int(P("autoclick on").type));
+  TEST_ASSERT_EQUAL(int(CmdType::AutoClickOff), int(P("autoclick off").type));
+  TEST_ASSERT_EQUAL(int(CmdType::AutoClickStatus), int(P("autoclick").type));
+  ParsedCommand interval = P("autoclick interval 60000");
+  TEST_ASSERT_EQUAL(int(CmdType::AutoClickInterval), int(interval.type));
+  TEST_ASSERT_EQUAL(60000, interval.intervalMs);
+  TEST_ASSERT_EQUAL(int(CmdType::Unknown), int(P("autoclick interval 0").type));
 }
 
 void test_radio() {
@@ -106,6 +119,7 @@ void test_simple_verbs() {
   TEST_ASSERT_EQUAL(int(CmdType::Version), int(P("version").type));
   TEST_ASSERT_EQUAL(int(CmdType::Help), int(P("help").type));
   TEST_ASSERT_EQUAL(int(CmdType::Help), int(P("?").type));
+  TEST_ASSERT_EQUAL(int(CmdType::PairingTest), int(P("pairtest").type));
 }
 
 void test_keyboard_report() {
@@ -135,6 +149,7 @@ int main(int, char **) {
   RUN_TEST(test_type_requires_text);
   RUN_TEST(test_key);
   RUN_TEST(test_jiggle);
+  RUN_TEST(test_autoclick);
   RUN_TEST(test_radio);
   RUN_TEST(test_wifi);
   RUN_TEST(test_simple_verbs);

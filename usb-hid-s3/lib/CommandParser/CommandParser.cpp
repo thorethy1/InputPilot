@@ -155,7 +155,28 @@ ParsedCommand CommandParser::parse(const std::string &rawLine) {
     if (sub == "on") c.type = CmdType::JiggleOn;
     else if (sub == "off") c.type = CmdType::JiggleOff;
     else if (sub == "status") c.type = CmdType::JiggleStatus;
-    else return unknown("jiggle needs on|off|status");
+    else if (sub == "interval" && tok.size() == 3 && parseInt(tok[2], c.intervalMs) && c.intervalMs > 0)
+      c.type = CmdType::JiggleInterval;
+    else return unknown("jiggle needs on|off|status|interval <ms>");
+    return c;
+  }
+
+  if (cmd == "autoclick") {
+    if (tok.size() < 2) { ParsedCommand c; c.type = CmdType::AutoClickStatus; return c; }
+    const std::string sub = lower(tok[1]);
+    ParsedCommand c;
+    if (sub == "on") c.type = CmdType::AutoClickOn;
+    else if (sub == "off") c.type = CmdType::AutoClickOff;
+    else if (sub == "status") c.type = CmdType::AutoClickStatus;
+    else if (sub == "interval" && tok.size() == 3 && parseInt(tok[2], c.intervalMs) && c.intervalMs > 0)
+      c.type = CmdType::AutoClickInterval;
+    else return unknown("autoclick needs on|off|status|interval <ms>");
+    return c;
+  }
+
+  if (cmd == "pairtest") {
+    ParsedCommand c;
+    c.type = CmdType::PairingTest;
     return c;
   }
 

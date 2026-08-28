@@ -1271,6 +1271,28 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             drainWrites(peripheral)
         }
     }
+    func setKeepAwake(_ settings: KeepAwakeSettings) async throws {
+        guard state == .ready, let peripheral, let rx = characteristics[legacyRX],
+              rx.properties.contains(.write) else { throw TransportError.unavailable }
+        let commands = [
+            "jiggle interval \(settings.moveIntervalMs)",
+            settings.moveEnabled ? "jiggle on" : "jiggle off",
+            "autoclick interval \(settings.clickIntervalMs)",
+            settings.clickEnabled ? "autoclick on" : "autoclick off",
+        ]
+        for command in commands {
+            try await withCheckedThrowingContinuation { continuation in
+                writeQueue.append(PendingWrite(
+                    id: "keep-awake-\(UUID().uuidString)",
+                    characteristic: rx,
+                    payload: Data(command.utf8),
+                    type: .withResponse,
+                    continuation: continuation
+                ))
+                drainWrites(peripheral)
+            }
+        }
+    }
     private func drainWrites(_ peripheral: CBPeripheral) {
         guard responseWrite == nil else { return }
         while !writeQueue.isEmpty {

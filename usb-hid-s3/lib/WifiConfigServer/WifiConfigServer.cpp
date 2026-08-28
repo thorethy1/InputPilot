@@ -217,7 +217,7 @@ document.getElementById('save').onclick=save;
   json += "\"name\":\"" + String(FW_NAME) + "\",";
   json += "\"version\":\"" + String(FW_VERSION) + "\",";
   json += "\"endpoints\":[";
-  json += "\"GET /api/status\",\"GET /api/diagnostics\",\"GET /api/logs\",\"GET /api/jiggle\",\"POST /api/jiggle\",";
+  json += "\"GET /api/status\",\"GET /api/diagnostics\",\"GET /api/logs\",\"GET /api/jiggle\",\"POST /api/jiggle\",\"GET /api/keep-awake\",\"POST /api/keep-awake\",";
   json += "\"POST /api/move\",\"POST /api/type\",\"POST /api/key\",\"POST /api/click\",";
   json += "\"GET /api/wifi\",\"POST /api/wifi\",\"GET /api/usb\",\"POST /api/usb\",\"POST /api/ota/start\",\"POST /api/ota/firmware\",\"GET /api/ota/status\",\"POST /api/ota/abort\"";
   json += "]}";
@@ -322,6 +322,11 @@ void WifiConfigServer::handleGetStatus() {
   json += "\"jiggle_interval_ms\":";
   json += String(deviceJiggleIntervalMs());
   json += ",";
+  json += "\"click_enabled\":";
+  json += deviceAutoClickEnabled() ? "true" : "false";
+  json += ",\"click_interval_ms\":";
+  json += String(deviceAutoClickIntervalMs());
+  json += ",";
   json += "\"sta_ip\":\"";
   json += (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "";
   json += "\",";
@@ -333,7 +338,7 @@ void WifiConfigServer::handleGetStatus() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
@@ -599,6 +604,41 @@ void WifiConfigServer::handlePostClick() {
   sendOk("\"button\":\"" + jsonEscape(button) + "\"");
 }
 
+void WifiConfigServer::handleGetKeepAwake() {
+  if (!requireApiAuth()) return;
+  handleCors();
+  String json = "{\"ok\":true,\"move_enabled\":";
+  json += deviceJiggleEnabled() ? "true" : "false";
+  json += ",\"move_interval_ms\":" + String(deviceJiggleIntervalMs());
+  json += ",\"click_enabled\":";
+  json += deviceAutoClickEnabled() ? "true" : "false";
+  json += ",\"click_interval_ms\":" + String(deviceAutoClickIntervalMs()) + "}";
+  s_server->send(200, "application/json", json);
+}
+
+void WifiConfigServer::handlePostKeepAwake() {
+  if (!requireApiAuth()) return;
+  const String body = bodyOrEmpty();
+  bool moveEnabled = false, clickEnabled = false;
+  int moveInterval = 0, clickInterval = 0;
+  if (!jsonGetBool(body, "move_enabled", moveEnabled) ||
+      !jsonGetBool(body, "click_enabled", clickEnabled) ||
+      !jsonGetInt(body, "move_interval_ms", moveInterval) ||
+      !jsonGetInt(body, "click_interval_ms", clickInterval) ||
+      moveInterval < (int)KEEP_AWAKE_MIN_INTERVAL_MS ||
+      moveInterval > (int)KEEP_AWAKE_MAX_INTERVAL_MS ||
+      clickInterval < (int)KEEP_AWAKE_MIN_INTERVAL_MS ||
+      clickInterval > (int)KEEP_AWAKE_MAX_INTERVAL_MS) {
+    sendErr(400, "valid move/click settings required");
+    return;
+  }
+  handleCommandLine(("jiggle interval " + String(moveInterval)).c_str(), "http");
+  handleCommandLine(moveEnabled ? "jiggle on" : "jiggle off", "http");
+  handleCommandLine(("autoclick interval " + String(clickInterval)).c_str(), "http");
+  handleCommandLine(clickEnabled ? "autoclick on" : "autoclick off", "http");
+  handleGetKeepAwake();
+}
+
 void WifiConfigServer::handlePostReport() {
   if (!requireApiAuth()) return;
   const String body = bodyOrEmpty();
@@ -668,6 +708,9 @@ void WifiConfigServer::begin() {
   s_server->on("/api/jiggle", HTTP_GET, [this]() { handleGetJiggle(); });
   s_server->on("/api/jiggle", HTTP_POST, [this]() { handlePostJiggle(); });
   s_server->on("/api/jiggle", HTTP_OPTIONS, [this]() { handleOptions(); });
+  s_server->on("/api/keep-awake", HTTP_GET, [this]() { handleGetKeepAwake(); });
+  s_server->on("/api/keep-awake", HTTP_POST, [this]() { handlePostKeepAwake(); });
+  s_server->on("/api/keep-awake", HTTP_OPTIONS, [this]() { handleOptions(); });
 
   s_server->on("/api/move", HTTP_POST, [this]() { handlePostMove(); });
   s_server->on("/api/move", HTTP_OPTIONS, [this]() { handleOptions(); });

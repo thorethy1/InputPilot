@@ -42,7 +42,8 @@ cp config.env.example config.env      # set ESP_PORT
 ## Serial commands
 
 `move <dx> <dy> [wheel]` · `click [left|right|middle]` · `type <text>` ·
-`key <name>` · `jiggle on|off|status` · `radio wifi|ble|none` ·
+`key <name>` · `jiggle on|off|status|interval <ms>` ·
+`autoclick on|off|status|interval <ms>` · `pairtest` · `radio wifi|ble|none` ·
 `wifi status|set|clear` · `status` · `version` · `help`
 
 WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts Soft-AP
@@ -94,6 +95,7 @@ Example:
 # Replace XXXX with your device suffix (from serial `status` or /api/status mdns field)
 curl http://inputpilot-XXXX.local/api/status
 curl -X POST http://inputpilot-XXXX.local/api/jiggle -H 'Content-Type: application/json' -d '{"enabled":true}'
+curl -X POST http://inputpilot-XXXX.local/api/keep-awake -H 'Content-Type: application/json' -d '{"move_enabled":true,"move_interval_ms":30000,"click_enabled":false,"click_interval_ms":60000}'
 curl -X POST http://inputpilot-XXXX.local/api/move -H 'Content-Type: application/json' -d '{"dx":40,"dy":0}'
 curl -X POST http://inputpilot-XXXX.local/api/type -H 'Content-Type: application/json' -d '{"text":"hello"}'
 ```

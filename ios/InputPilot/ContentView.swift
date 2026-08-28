@@ -360,6 +360,7 @@ private struct ConnectionSettingsView: View {
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
             }
             Section("Diagnostics") {
+                NavigationLink("USB Pairing Input Test") { USBPairingInputTestView() }
                 if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
                 else { LabeledContent("Firmware Logs", value: "Add a device first") }
                 NavigationLink("App Logs") { AppLogsView() }
@@ -381,6 +382,80 @@ private struct ConnectionSettingsView: View {
         }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
     }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses Bluetooth first for interactive controls and Wi-Fi first for bulk work, then falls back to another ready transport."; case .preferBluetooth: "Uses ready Bluetooth first, then falls back to Wi-Fi."; case .preferWiFi: "Uses ready Wi-Fi first, then falls back to Bluetooth."; case .bluetoothOnly: "Uses only an authenticated, ready Bluetooth connection."; case .wifiOnly: "Uses only a ready TCP or REST connection on the local Wi-Fi network." } }
+}
+
+private struct USBPairingInputTestView: View {
+    @State private var captured = ""
+    @State private var result: ResultState = .waiting
+    private enum ResultState: Equatable { case waiting, valid, invalid }
+
+    var body: some View {
+        Form {
+            Section("Test USB keyboard input") {
+                Text("Connect InputPilot to this iPhone, wait for it to power on, then hold BOOT for two seconds. InputPilot will type a temporary test frame into the focused field below.")
+                KeyboardInputBridge(autoFocus: true) { event in
+                    switch event {
+                    case let .insert(text): receive(text)
+                    case .deleteBackward: if !captured.isEmpty { captured.removeLast() }
+                    }
+                }
+                .frame(height: 44)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary))
+                LabeledContent("Received", value: "\(captured.count) characters")
+                switch result {
+                case .waiting:
+                    Text("Waiting for InputPilot…").foregroundStyle(.secondary)
+                case .valid:
+                    Label("USB pairing input received successfully", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                case .invalid:
+                    Label("Input was received, but it was not a valid InputPilot test frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+                Button("Reset Test") { captured = ""; result = .waiting }
+            }
+            Section("Safety") {
+                Text("This v0.8.6 test does not enable mandatory authentication or save the temporary credential. The captured value is cleared after validation and is never written to app logs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("USB Pairing Test")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func receive(_ text: String) {
+        guard result == .waiting else { return }
+        for character in text.uppercased() {
+            if character == "\n" || character == "\r" {
+                validateAndClear()
+            } else if "0123456789ABCDEFIPR".contains(character) {
+                if captured.count < 80 { captured.append(character) }
+            }
+        }
+    }
+
+    private func validateAndClear() {
+        let value = captured
+        let prefixOK = value.hasPrefix("IPPAIR1")
+        let tail = value.dropFirst(7)
+        let hexOK = tail.count == 52 && tail.allSatisfy { $0.isHexDigit }
+        var checksumOK = false
+        if hexOK {
+            let secret = tail.dropFirst(12).prefix(32)
+            let expected = String(tail.suffix(8))
+            var checksum: UInt32 = 2_166_136_261
+            var index = secret.startIndex
+            while index < secret.endIndex {
+                let next = secret.index(index, offsetBy: 2)
+                if let byte = UInt8(secret[index ..< next], radix: 16) {
+                    checksum = (checksum ^ UInt32(byte)) &* 16_777_619
+                }
+                index = next
+            }
+            checksumOK = String(format: "%08X", checksum) == expected
+        }
+        result = prefixOK && hexOK && checksumOK ? .valid : .invalid
+        captured = ""
+    }
 }
 
 private struct AppLogsView: View {
