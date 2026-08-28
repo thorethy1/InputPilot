@@ -459,11 +459,13 @@ struct AddDeviceWizardView: View {
                 }
                 Section("Friendly name") { TextField("Name", text: $viewModel.displayName) }
                 if viewModel.securelyPairedDeviceId != nil && metadata.capabilities.contains("secure_wifi_setup_v1") {
-                    Section("Encrypted Wi-Fi setup") {
+                    Section {
                         TextField("Wi-Fi name (SSID)", text: $viewModel.homeWifiSSID)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecureField("Wi-Fi password", text: $viewModel.homeWifiPassword)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    } header: {
+                        Text("Encrypted Wi-Fi setup")
                     } footer: {
                         Text("Optional. Credentials are encrypted over the paired Bluetooth channel. Leave the SSID empty to use Bluetooth only.")
                     }
