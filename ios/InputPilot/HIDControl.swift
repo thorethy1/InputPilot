@@ -1419,7 +1419,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     func releaseAll() async {
         let now = Date()
-        guard now.timeIntervalSince(lastReleaseAllAt) >= 0.1 else {
+        guard now.timeIntervalSince(lastReleaseAllAt) >= 0.5 else {
             appLog(.control, "release_all coalesced duplicate=yes")
             return
         }
