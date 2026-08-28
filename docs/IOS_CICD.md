@@ -24,7 +24,7 @@ On Linux/Windows, use a Base64 encoder that does not add line wrapping. Never ad
 
 Open **Actions → iOS Signed Build → Run workflow**. The job validates that a signing identity exists, checks profile expiry and bundle/team compatibility, archives the app with manual signing, and replaces `InputPilot.ipa` in an unpublished draft release. A direct download link is written to the workflow summary. The iPhone must be covered by the supplied development/ad-hoc profile.
 
-Tags do not start this signing workflow. Its repository write permission is used only to maintain the fixed, unpublished `private-ios-signed` draft release. A personally signed development/ad-hoc IPA never becomes a public GitHub Release asset automatically. Public releases contain firmware, the APK, and the separately built unsigned IPA. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
+Tags do not start this signing workflow. Its repository write permission is used only to maintain the fixed, unpublished `private-ios-signed` draft release. A personally signed development/ad-hoc IPA never becomes a public GitHub Release asset automatically. Public releases contain firmware and the separately built unsigned IPA. If secrets are absent, the signed job fails safely with their names only; regular PR CI remains usable.
 
 All reconstructed inputs, derived data, archive, export options, and IPA staging live under `$RUNNER_TEMP`. The profile and temporary keychain are removed in an always-running cleanup step; GitHub also discards the hosted runner after the job.
 
@@ -32,10 +32,10 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 
 ## Release assets (public)
 
-The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned assets to published GitHub Releases:
+The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned firmware and iOS assets to published GitHub Releases. Android is archived and is no longer built or attached:
 
 - Published releases with a `vMAJOR.MINOR.PATCH` tag trigger it automatically.
-- It validates source version consistency (Android `versionName`, iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, README).
+- It validates source version consistency (iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, README).
 - It waits for a successful CI run on the exact tag commit.
 - Assets downloaded from that CI run are validated, renamed, and uploaded as Release assets.
 - The iOS asset is the **unsigned** IPA from CI — identical to `InputPilot-unsigned-${{ github.sha }}` with no provisioning profile or signature. The signed IPA from the `ios-build.yml` workflow is never included in release assets, even if it exists on a previous CI run.

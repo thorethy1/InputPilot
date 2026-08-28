@@ -1,6 +1,20 @@
 # Changelog
 
-## [0.8.6] - Unreleased
+## [0.8.7] - 2026-08-28
+
+### Security
+
+- Turn the successful USB input proof into pairing: BOOT generates and persists a fresh 128-bit device credential, and iOS validates the frame and stores it as a this-device-only Keychain item.
+- Add an HMAC-SHA-256 authenticated handshake, HKDF-SHA-256 session keys, and AES-256-GCM encrypted BLE and Wi-Fi/TCP control records with directional nonces and replay counters.
+- Require BLE Secure Connections encryption for control characteristics and reject plaintext REST control, settings, credentials, diagnostics, and OTA after pairing. Minimal discovery metadata remains public.
+- Keep the legacy compile-time API token only for unpaired upgrade compatibility; secure pairing does not require a secret compiled into firmware.
+
+### Release
+
+- Remove archived Android artifacts and Android version checks from public release packaging.
+- Repair v0.8.6's missing public firmware and unsigned-iOS assets.
+
+## [0.8.6] - 2026-08-28
 
 ### Added
 

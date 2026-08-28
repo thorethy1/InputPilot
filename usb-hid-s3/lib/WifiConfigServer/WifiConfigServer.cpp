@@ -7,6 +7,7 @@
 #include "CommandSink.h"
 #include "Config.h"
 #include "ControlAuth.h"
+#include "PairingSecretStore.h"
 #include "DeviceIdentity.h"
 #include "Logging.h"
 #include "FirmwareLog.h"
@@ -137,6 +138,10 @@ bool WifiConfigServer::isSoftApProvisioning() const {
 }
 
 bool WifiConfigServer::requireApiAuth() {
+  if (PairingSecretStore::hasSecret()) {
+    sendErr(426, "secure transport required");
+    return false;
+  }
   if (!controlAuthRequired()) return true;
   if (!s_server) return false;
 
@@ -225,7 +230,7 @@ document.getElementById('save').onclick=save;
 }
 
 void WifiConfigServer::handleGetWifi() {
-  if (!isSoftApProvisioning() && !requireApiAuth()) return;
+  if ((!isSoftApProvisioning() || PairingSecretStore::hasSecret()) && !requireApiAuth()) return;
   handleCors();
   WifiCreds c = WifiCredentials::get();
   const bool ap = WiFi.getMode() & WIFI_AP;
@@ -267,7 +272,7 @@ void WifiConfigServer::handleGetWifi() {
 void WifiConfigServer::handlePostWifi() {
   if (deviceOtaActive()) { sendErr(409, "firmware update in progress"); return; }
   // Soft-AP setup stays open so a phone can provision WiFi without a token.
-  if (!isSoftApProvisioning() && !requireApiAuth()) return;
+  if ((!isSoftApProvisioning() || PairingSecretStore::hasSecret()) && !requireApiAuth()) return;
   const String body = bodyOrEmpty();
   if (!body.length()) {
     sendErr(400, "body required");
@@ -299,7 +304,9 @@ void WifiConfigServer::handleClearWifi() {
 }
 
 void WifiConfigServer::handleGetStatus() {
-  if (!requireApiAuth()) return;
+  // Minimal discovery metadata stays public. Control, settings, credentials,
+  // diagnostics, and OTA are rejected on plaintext REST after pairing.
+  if (!PairingSecretStore::hasSecret() && !requireApiAuth()) return;
   handleCors();
   DeviceIdentity::begin();
   String json = "{";
@@ -334,11 +341,11 @@ void WifiConfigServer::handleGetStatus() {
   json += String(DeviceIdentity::mdnsFqdn());
   json += "\",";
   json += "\"auth_required\":";
-  json += controlAuthRequired() ? "true" : "false";
+  json += (PairingSecretStore::hasSecret() || controlAuthRequired()) ? "true" : "false";
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"rest_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"secure_pairing\",\"secure_channel_v1\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }

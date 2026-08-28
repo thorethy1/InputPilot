@@ -16,12 +16,12 @@ info:
     for browser / future mobile apps. Control routes feed the same command
     sink as USB serial and TCP `:3333`.
 
-    **Optional auth:** when firmware is built with a non-empty
-    `CONTROL_API_TOKEN`, protect `/api/*` with header `X-API-Token` or
-    `Authorization: Bearer <token>`. Soft-AP WiFi provisioning
-    (`GET`/`POST /api/wifi` while AP-only) stays open. TCP/BLE sessions
-    authenticate with a line: `auth <token>`.
-  version: 0.8.6
+    Unpaired legacy firmware can protect `/api/*` with a compile-time
+    `CONTROL_API_TOKEN`. After USB pairing, plaintext REST management and
+    control return HTTP 426; only minimal `/api/status` discovery remains
+    readable. Paired BLE and TCP use `secure_channel_v1` (HMAC-SHA-256, HKDF,
+    and AES-256-GCM) and never transmit the pairing credential.
+  version: 0.8.7
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -84,7 +84,7 @@ paths:
               example:
                 ok: true
                 name: InputPilot-Firmware
-                version: "0.8.6"
+                version: "0.8.7"
                 device_id: aabbccddeeff
                 uptime_s: 120
                 heap: 192000

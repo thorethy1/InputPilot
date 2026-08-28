@@ -360,7 +360,7 @@ private struct ConnectionSettingsView: View {
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
             }
             Section("Diagnostics") {
-                NavigationLink("USB Pairing Input Test") { USBPairingInputTestView() }
+                NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
                 if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
                 else { LabeledContent("Firmware Logs", value: "Add a device first") }
                 NavigationLink("App Logs") { AppLogsView() }
@@ -387,12 +387,13 @@ private struct ConnectionSettingsView: View {
 private struct USBPairingInputTestView: View {
     @State private var captured = ""
     @State private var result: ResultState = .waiting
-    private enum ResultState: Equatable { case waiting, valid, invalid }
+    @State private var pairedDeviceId = ""
+    private enum ResultState: Equatable { case waiting, valid, invalid, storageFailed }
 
     var body: some View {
         Form {
-            Section("Test USB keyboard input") {
-                Text("Connect InputPilot to this iPhone, wait for it to power on, then hold BOOT for two seconds. InputPilot will type a temporary test frame into the focused field below.")
+            Section("Secure USB pairing") {
+                Text("Connect InputPilot to this iPhone, wait for it to power on, then hold BOOT for two seconds. InputPilot types a one-time, 128-bit pairing credential into the focused field below.")
                 KeyboardInputBridge(autoFocus: true) { event in
                     switch event {
                     case let .insert(text): receive(text)
@@ -406,19 +407,21 @@ private struct USBPairingInputTestView: View {
                 case .waiting:
                     Text("Waiting for InputPilot…").foregroundStyle(.secondary)
                 case .valid:
-                    Label("USB pairing input received successfully", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    Label("Paired securely with \(pairedDeviceId)", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
                 case .invalid:
-                    Label("Input was received, but it was not a valid InputPilot test frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label("Input was received, but it was not a valid InputPilot pairing frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                case .storageFailed:
+                    Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(.red)
                 }
-                Button("Reset Test") { captured = ""; result = .waiting }
+                Button("Pair another device") { captured = ""; pairedDeviceId = ""; result = .waiting }
             }
             Section("Safety") {
-                Text("This v0.8.6 test does not enable mandatory authentication or save the temporary credential. The captured value is cleared after validation and is never written to app logs.")
+                Text("The credential is saved only in this iPhone’s Keychain. It is cleared from the input field immediately and is never written to app logs. Generating a new code on InputPilot invalidates its previous pairing.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("USB Pairing Test")
+        .navigationTitle("Secure Pairing")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -435,26 +438,19 @@ private struct USBPairingInputTestView: View {
 
     private func validateAndClear() {
         let value = captured
-        let prefixOK = value.hasPrefix("IPPAIR1")
-        let tail = value.dropFirst(7)
-        let hexOK = tail.count == 52 && tail.allSatisfy { $0.isHexDigit }
-        var checksumOK = false
-        if hexOK {
-            let secret = tail.dropFirst(12).prefix(32)
-            let expected = String(tail.suffix(8))
-            var checksum: UInt32 = 2_166_136_261
-            var index = secret.startIndex
-            while index < secret.endIndex {
-                let next = secret.index(index, offsetBy: 2)
-                if let byte = UInt8(secret[index ..< next], radix: 16) {
-                    checksum = (checksum ^ UInt32(byte)) &* 16_777_619
-                }
-                index = next
-            }
-            checksumOK = String(format: "%08X", checksum) == expected
-        }
-        result = prefixOK && hexOK && checksumOK ? .valid : .invalid
         captured = ""
+        guard let frame = PairingInputFrame(encoded: value) else {
+            result = .invalid
+            return
+        }
+        do {
+            try PairingKeyStore.save(frame.secret, deviceId: frame.deviceId)
+            pairedDeviceId = frame.deviceId
+            result = .valid
+            Task { await InputPilotBluetoothManager.removeSession(deviceId: frame.deviceId) }
+        } catch {
+            result = .storageFailed
+        }
     }
 }
 

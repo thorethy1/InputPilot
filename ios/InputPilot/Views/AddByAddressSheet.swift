@@ -34,7 +34,7 @@ struct AddByAddressSheet: View {
                             probed: probed,
                             displayName: $displayName,
                             apiToken: $apiToken,
-                            showsAuthTokenField: probed.status.authRequired || !token.isEmpty
+                            showsAuthTokenField: (probed.status.deviceId.map { PairingKeyStore.load(deviceId: $0) == nil } ?? true) && (probed.status.authRequired || !token.isEmpty)
                         )
                     }
                 }
@@ -158,7 +158,8 @@ struct AddByAddressSheet: View {
         let trimmedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let tokenToSave = trimmedToken.isEmpty ? nil : trimmedToken
 
-        if probed.status.authRequired && tokenToSave == nil {
+        let hasPairingKey = probed.status.deviceId.map { PairingKeyStore.load(deviceId: $0) != nil } ?? false
+        if probed.status.authRequired && tokenToSave == nil && !hasPairingKey {
             errorMessage = "This device requires an API token."
             return
         }

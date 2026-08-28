@@ -1,10 +1,10 @@
 # InputPilot HID Control Protocol v1
 
-This protocol carries semantic HID events from a trusted phone to the ESP32-S3. The firmware turns them into USB HID reports; it never captures input from the attached computer. BLE, persistent TCP, and REST share the same command sink.
+This protocol carries semantic HID events from a trusted phone to the ESP32-S3. The firmware turns them into USB HID reports; it never captures input from the attached computer. BLE and persistent TCP share the encrypted command sink. REST remains available only to unpaired legacy installations and for minimal paired-device discovery.
 
 ## Security and discovery
 
-Control is local-only. Set `CONTROL_API_TOKEN` at firmware build time. REST uses `X-API-Token` or `Authorization: Bearer`; TCP and NUS RX authenticate once with `auth <token>`. The firmware answers on the same TCP connection or through NUS TX notify with `auth ok` or `auth failed`; clients must not become ready before `auth ok`. No token value is returned. Binary BLE events are rejected until that session is authenticated. This application token does not provide BLE pairing, bonding, or transport encryption; use the device only on trusted networks and physical environments.
+Paired v0.8.7 devices use the secure channel described below and reject legacy plaintext control. `CONTROL_API_TOKEN` remains an upgrade-only option for devices that have not yet been paired. It authenticates but does not encrypt legacy traffic.
 
 The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET /api/status` and BLE OTA Status both report protocol and capabilities, so BLE-only clients do not depend on REST.
 
@@ -38,16 +38,30 @@ NVS after restart. Valid intervals are 5,000 through 3,600,000 milliseconds.
 `click_enabled`, and `click_interval_ms`. `/api/jiggle` remains compatible with
 older clients and changes only movement enablement.
 
-## USB pairing input test
+## Secure pairing and encrypted control
 
-Capability `pairing_input_test` is a v0.8.6 development proof, not authentication.
+Capability `secure_channel_v1` indicates v0.8.7 pairing and encrypted control.
+The `IPPAIR1` USB frame carries a 128-bit credential associated with the
+12-character device ID. iOS stores it in Keychain; firmware stores it in NVS.
+
+BLE and TCP start with `secure begin`. Firmware returns
+`secure challenge 1 <device-id> <server-nonce>`. The app replies with
+`secure hello <client-nonce> <hmac>`, and firmware confirms with
+`secure ready <hmac>`. HMAC-SHA-256 covers the protocol direction, device ID,
+and both nonces. HKDF-SHA-256 with both nonces as salt and
+`InputPilot secure channel v1` as info derives the AES-256-GCM key.
+
+Binary BLE records are `0xA1 || counter_be64 || ciphertext || tag_128`. TCP uses
+the equivalent hexadecimal `secure data` line. The AES-GCM nonce is
+`IPC || 0x01 || counter_be64`, and the lowercase device ID is authenticated
+additional data. Counters must increase strictly within a session.
 After normal USB enumeration, holding BOOT for two seconds types a fixed-length
 `IPPAIR1` frame through USB HID. The frame carries device ID, a fresh 128-bit
-hexadecimal test credential, and a corruption checksum. Firmware omits the
+hexadecimal pairing credential, and a corruption checksum. Firmware omits the
 credential from logs. See `docs/SECURE_PAIRING_DESIGN_0.8.6.md` for the staged
 enforcement design.
 
-TCP listens on port 3333 and is persistent. Commands and replies are UTF-8 lines ending in LF. Replies include `auth ok`, `auth failed`, `pong`, and `error ...`. A disconnect releases all held keys, modifiers, and mouse buttons.
+TCP listens on port 3333 and is persistent. Handshake and encrypted records are UTF-8 lines ending in LF. A disconnect clears the session key and releases all held keys, modifiers, and mouse buttons.
 
 `report` is the v0.6 layout boundary. The client maps each Unicode character for the selected host layout to a USB HID usage and modifier byte (including right Alt/AltGr bit `0x40`), then sends one report. The firmware presses and releases that report; it does not interpret UTF-8 as HID key codes. Legacy `type` and `key` remain supported. Multiline and long input is emitted as ordered per-character reports (newline becomes Enter), so neither TCP line framing nor BLE MTU splits UTF-8.
 

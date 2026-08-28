@@ -75,7 +75,9 @@ final class AddDeviceWizardViewModel: ObservableObject {
     var bleMetadata: BLEDeviceMetadata? { if case let .confirmBLE(metadata) = step { metadata } else { nil } }
 
     var showsAuthTokenField: Bool {
-        probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true
+        let id = probedDevice?.status.deviceId ?? bleMetadata?.deviceId
+        let paired = id.map { PairingKeyStore.load(deviceId: $0) != nil } ?? false
+        return !paired && (probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true)
     }
 
     /// Candidates for Soft-AP rediscovery (optionally filtered to expected device id).
@@ -339,7 +341,9 @@ final class AddDeviceWizardViewModel: ObservableObject {
         let token = trimmedToken.isEmpty ? nil : trimmedToken
 
         let requiresAuth = probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true
-        if requiresAuth && token == nil {
+        let deviceId = probedDevice?.status.deviceId ?? bleMetadata?.deviceId
+        let hasPairingKey = deviceId.map { PairingKeyStore.load(deviceId: $0) != nil } ?? false
+        if requiresAuth && token == nil && !hasPairingKey {
             errorMessage = "This device requires an API token."
             return
         }

@@ -2,11 +2,11 @@
 
 ## Status
 
-This document is the implementation design for secure onboarding. v0.8.6 starts
-with a hardware input proof and capability-gated protocol work. Authentication
-and encryption must not become mandatory until the physical iPhone tests in
-this document pass. The existing `CONTROL_API_TOKEN` behavior remains in place
-during this development stage and must not be described as encryption.
+This document began as the v0.8.6 implementation design. The physical iPhone
+USB-input proof passed on 2026-08-28. v0.8.7 therefore activates pairing and a
+capability-gated encrypted control channel. The existing `CONTROL_API_TOKEN`
+behavior remains only as an unpaired upgrade path and is not described as
+encryption.
 
 ## First trust
 
@@ -33,17 +33,18 @@ Two retrieval paths are required:
   Test, and hold BOOT. UIKit receives InputPilot as a physical USB keyboard and
   validates the frame without retaining the secret.
 
-The v0.8.6 input-test screen validates transport and framing only. It does not
-save trust or enable mandatory authentication.
+From v0.8.7 onward, the iOS screen saves a valid credential in the
+this-device-only Keychain. The firmware saves the same credential in NVS; a new
+BOOT pairing action rotates it and invalidates the previous pairing.
 
 ## Target cryptographic exchange
 
-After the USB input proof passes, the iPhone and firmware will exchange
-ephemeral P-256 public keys over BLE. The one-time USB secret authenticates the
-complete transcript with HMAC-SHA-256. HKDF-SHA-256 derives directional session
-keys. A successful exchange pins the device identity key in iOS Keychain and
-stores the phone public key on the device. The temporary secret is erased after
-success, timeout, reboot, or too many failed attempts.
+The implemented v1 exchange uses the 128-bit USB credential as a per-device
+pre-shared key. Independent 128-bit client and device nonces form an
+HMAC-SHA-256 authenticated transcript, and HKDF-SHA-256 derives a fresh
+AES-256-GCM session key. Strictly increasing counters provide replay rejection.
+An asymmetric device identity and credential replacement exchange remain a
+future hardening step; v1 intentionally does not claim forward secrecy.
 
 A short numeric PIN is intentionally not used: without a reviewed PAKE it would
 permit offline guessing if an attacker captured the transcript. The 128-bit
@@ -54,10 +55,11 @@ typed value has enough entropy to authenticate the exchange directly.
 - BLE: LE Secure Connections and bonding plus application-level authenticated
   encryption, unique nonces, monotonically increasing counters, and replay
   rejection. Advertising and minimal discovery identity remain public.
-- Wi-Fi REST: HTTPS with a per-device certificate/key created on the device.
-  The iOS app pins the device identity learned during USB-authenticated pairing.
-- Wi-Fi stream control: TLS or an authenticated-encryption record layer before
-  plaintext TCP control is disabled.
+- Wi-Fi REST: paired firmware rejects plaintext management and control. Minimal
+  discovery identity remains public; HTTPS with a pinned per-device certificate
+  remains future work.
+- Wi-Fi stream control: the authenticated AES-GCM record layer is implemented;
+  plaintext TCP control is rejected for paired devices.
 - Secrets: iOS Keychain and protected device storage. No compile-time API key.
 
 No input, OTA data, credentials, diagnostics, or management settings may use an
@@ -77,9 +79,12 @@ unauthenticated plaintext channel after secure mode becomes mandatory.
 
 | Test | Result | Notes |
 |---|---|---|
-| USB-C iPhone powers and enumerates InputPilot | NOT RUN | Required before enforcement |
-| Pairing screen receives one complete frame | NOT RUN | Secret must not enter logs |
+| USB-C iPhone powers and enumerates InputPilot | PASS | Physical test reported 2026-08-28 with the configured HID VID/PID |
+| Pairing screen receives one complete frame | PASS | Physical test reported 2026-08-28; secret is not logged |
 | Computer text editor receives one complete frame | NOT RUN | Test common host layouts |
 | Two-second BOOT hold emits once per press | NOT RUN | Holding BOOT during plug-in enters bootloader; press after startup |
 | Invalid/truncated frame is rejected | NOT RUN | No credential retained |
 
+The current `0xCAFE:0x4001` identity is suitable for development testing and was
+accepted by the tested iPhone. It is not evidence of an InputPilot-owned USB ID;
+a product release must use VID/PID values the distributor is entitled to use.

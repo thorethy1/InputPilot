@@ -44,6 +44,9 @@ public:
   // If currently in Wifi mode, restarts WiFi to Soft-AP or STA as appropriate.
   void applyWifiCredentials();
 
+  // Invalidate authenticated sessions immediately after BOOT rotates pairing.
+  void pairingCredentialRotated();
+
   // True while Soft-AP setup portal is up.
   bool isSoftAp() const { return softAp_; }
 

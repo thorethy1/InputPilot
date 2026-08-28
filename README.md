@@ -4,11 +4,10 @@
 [![Firmware + unit tests](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Native%20unit%20tests%20%2B%20firmware%20build&label=firmware%20%2B%20unit%20tests)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![OpenAPI](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=OpenAPI%20lint&label=OpenAPI)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![iOS](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=iOS%20build%20%2B%20unit%20tests&label=iOS)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
-[![Android](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Android%20build%20%2B%20unit%20tests&label=Android)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 
 
 
-**InputPilot 0.8.6** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE, persistent Wi-Fi/TCP, or REST. The app adds firmware-owned Keep Awake movement and click schedules plus a non-enforcing USB pairing-input test as the first stage of secure onboarding.
+**InputPilot 0.8.7** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. It adds USB-established pairing, Keychain storage, mutually authenticated sessions, and AES-256-GCM encrypted control alongside firmware-owned Keep Awake movement and click schedules.
 
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
@@ -52,7 +51,7 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 ### 3. Companions (optional)
 
 - **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
-- **[Android InputPilot](android/)** — Kotlin + Jetpack Compose; NSD, Soft-AP, same REST. Firmware **0.4.0+**. See [`android/README.md`](android/README.md).
+- **[Archived Android client](android/)** — retained for possible later development; current work and releases target iOS.
 
 <p align="center">
   <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two online hid-helpers" width="240">
@@ -67,7 +66,7 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 | Native unit tests (`pio test -e native`) | Linux / macOS / CI |
 | Firmware compile (`pio run -e esp32s3`) | Linux / macOS / CI |
 | iOS companion (`xcodebuild test`) | **macOS with Xcode 26+** / CI (`macos-26`) |
-| Android companion (`./gradlew test`) | Linux / macOS / CI (`ubuntu-latest`) |
+| Archived Android companion (`./gradlew test`) | Linux / macOS (not in current CI) |
 | On-device pytest (serial / HID E2E / WiFi / BLE / mDNS) | **macOS + board** only |
 
 ## Layout
@@ -76,7 +75,7 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 |--------|---------|
 | [`usb-hid-s3/`](usb-hid-s3/) | ESP32-S3 firmware (USB HID + WiFi REST + Soft-AP + mDNS) |
 | [`ios/`](ios/) | **InputPilot** iOS companion (SwiftUI) |
-| [`android/`](android/) | **InputPilot** Android companion (Kotlin + Compose) |
+| [`android/`](android/) | Archived Android companion source |
 
 ## CI
 
@@ -87,7 +86,6 @@ Badges above track the latest `main` workflow run
 - **esp32s3 firmware compile**
 - OpenAPI 3 schema validation and required-path audit
 - **InputPilot iOS** build + unit tests (`macos-26`, Xcode 26+ Simulator)
-- **InputPilot Android** unit tests + `assembleDebug` (`ubuntu-latest`)
 
 ## Using the iOS remote
 
@@ -138,7 +136,7 @@ BLE OTA
 
 ## Bluetooth firmware updates
 
-Firmware v0.8.6 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
+Firmware v0.8.7 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
 The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
@@ -148,7 +146,7 @@ Contributors should use `AppColors` and the `AccentColor` asset for the red bran
 
 ## iOS builds on GitHub
 
-No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes three downloadable artifacts on each `main` build: ESP32-S3 firmware, the Android debug APK, and an unsigned iOS device IPA. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
+No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes ESP32-S3 firmware and an unsigned iOS device IPA on each `main` build. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
 
 Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow**. The workflow replaces `InputPilot.ipa` in the unpublished **Private Signed InputPilot IPA** draft release and writes its direct download link to the run summary. Only authorized repository collaborators can access that draft; the signed IPA is never added to a public release.
 
@@ -160,7 +158,6 @@ Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) wi
 
 | Asset | Content |
 |-------|---------|
-| `InputPilot-vX.Y.Z-android.apk` | Android debug APK |
 | `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
 | `InitialFirmware.bin` | Single merged image for initial USB installation or migration; never OTA |
 | `InputPilot-Firmware-vX.Y.Z.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |

@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.6"
+#define FW_VERSION      "0.8.7"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0806
+#define FW_VERSION_BCD  0x0807
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -92,6 +92,7 @@
 #define BLE_NUS_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_NUS_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // host -> device (write)
 #define BLE_NUS_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // device -> host (notify)
+#define SECURE_CHANNEL_VERSION 1
 
 // InputPilot Control Service v1. NUS remains for backwards compatibility.
 #define BLE_HID_SERVICE_UUID  "7d9f0001-4f4d-4f56-4552-484944000001"

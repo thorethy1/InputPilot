@@ -21,6 +21,8 @@
 #include "BLEDiagnostics.h"
 #include "OTAEngine.h"
 #include "KeyMap.h"
+#include "PairingSecretStore.h"
+#include "SecureSession.h"
 
 RadioManager g_radio;
 
@@ -42,6 +44,12 @@ bool s_tcpAuthed = false;
 WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
 WiFiClient s_tcpClient;
 std::string s_tcpLineBuf;
+SecureSession s_bleSecureSession;
+SecureSession s_tcpSecureSession;
+
+bool pairingSecurityEnabled() {
+  return PairingSecretStore::hasSecret();
+}
 
 struct BLEControlFrame {
   uint16_t length = 0;
@@ -64,6 +72,34 @@ void sendControlReply(const char *source, const char *reply) {
 
 void dispatchControlLine(const std::string &line, const char *source,
                          bool *authed) {
+  if (pairingSecurityEnabled()) {
+    SecureSession &session = strcmp(source, "ble") == 0
+                                 ? s_bleSecureSession : s_tcpSecureSession;
+    std::string reply;
+    if (line == "secure begin") {
+      uint8_t secret[PairingSecretStore::SecretSize];
+      const bool ok = PairingSecretStore::load(secret) &&
+                      session.begin(secret, DeviceIdentity::deviceId(), reply);
+      memset(secret, 0, sizeof(secret));
+      if (ok) sendControlReply(source, reply.c_str());
+      if (authed) *authed = false;
+      return;
+    }
+    if (line.rfind("secure hello ", 0) == 0) {
+      const bool ok = session.acceptHello(line, reply);
+      if (authed) *authed = ok;
+      sendControlReply(source, ok ? reply.c_str() : "secure failed");
+      return;
+    }
+    std::string plaintext;
+    if (session.established() && session.decryptText(line, plaintext)) {
+      if (authed) *authed = true;
+      handleCommandLine(plaintext, source);
+    } else {
+      LOG_INFO("unencrypted or invalid control rejected src=%s", source);
+    }
+    return;
+  }
   const ControlLineGate gate = controlGateLine(line.c_str(), authed);
   if (gate == ControlLineGate::Reject) {
     LOG_INFO("control auth rejected src=%s", source);
@@ -112,21 +148,34 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     const std::string &value = c->getValue();
     if (value.empty()) return;
-    // Authentication is performed once through the backwards-compatible text
-    // control characteristic before binary event characteristics are accepted.
+    uint8_t decrypted[BLE_CONTROL_FRAME_MAX];
+    const uint8_t *frameBytes = reinterpret_cast<const uint8_t *>(value.data());
+    size_t frameLength = value.size();
+    size_t decryptedLength = 0;
+    if (pairingSecurityEnabled()) {
+      if (!s_bleSecureSession.decryptBinary(frameBytes, frameLength, decrypted,
+                                            sizeof(decrypted), decryptedLength)) {
+        LOG_INFO("encrypted binary control rejected");
+        return;
+      }
+      frameBytes = decrypted;
+      frameLength = decryptedLength;
+    }
+    // Authentication is performed through the text control characteristic
+    // before binary event characteristics are accepted.
     if (!s_bleAuthed) {
       LOG_INFO("binary control rejected: BLE session not authenticated");
       return;
     }
-    if (!s_bleControlQueue || value.size() > BLE_CONTROL_FRAME_MAX) {
-      recordHIDDecodeError("ble-binary", value.size());
+    if (!s_bleControlQueue || frameLength > BLE_CONTROL_FRAME_MAX) {
+      recordHIDDecodeError("ble-binary", frameLength);
       return;
     }
     BLEControlFrame frame;
-    frame.length = static_cast<uint16_t>(value.size());
-    memcpy(frame.bytes, value.data(), value.size());
+    frame.length = static_cast<uint16_t>(frameLength);
+    memcpy(frame.bytes, frameBytes, frameLength);
     if (xQueueSend(s_bleControlQueue, &frame, 0) != pdTRUE)
-      recordHIDDecodeError("ble-binary", value.size());
+      recordHIDDecodeError("ble-binary", frameLength);
   }
 };
 
@@ -181,12 +230,14 @@ void processBLEControlFrames(size_t budget = 8) {
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override {
     s_bleConnected = true;
-    s_bleAuthed = !controlAuthRequired();
+    s_bleSecureSession.reset();
+    s_bleAuthed = !pairingSecurityEnabled() && !controlAuthRequired();
     LOG_BLE("central connected");
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
     s_bleConnected = false;
     s_bleAuthed = false;
+    s_bleSecureSession.reset();
     g_bleOta.disconnected();
     g_bleDiagnostics.disconnected();
     if (s_bleControlQueue) xQueueReset(s_bleControlQueue);
@@ -225,6 +276,14 @@ ServerCallbacks s_serverCallbacks;
 }  // namespace
 
 bool deviceBleAuthenticated() { return s_bleConnected && s_bleAuthed; }
+
+void RadioManager::pairingCredentialRotated() {
+  s_bleAuthed = false;
+  s_tcpAuthed = false;
+  s_bleSecureSession.reset();
+  s_tcpSecureSession.reset();
+  requestReleaseAll("pairing-rotated");
+}
 
 // ---------------------------------------------------------------------------
 void RadioManager::begin(RadioMode initial) {
@@ -371,6 +430,8 @@ void RadioManager::startBle() {
       LOG_BLE("init failed");
       return;
     }
+    NimBLEDevice::setSecurityAuth(true, false, true);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
     LOG_BLE("initialized");
     s_bleServer = NimBLEDevice::createServer();
     if (!s_bleServer) {
@@ -388,8 +449,10 @@ void RadioManager::startBle() {
       return;
     }
     NimBLECharacteristic *rx = svc->createCharacteristic(
-        BLE_NUS_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    s_bleTx = svc->createCharacteristic(BLE_NUS_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
+        BLE_NUS_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
+                             NIMBLE_PROPERTY::WRITE_ENC);
+    s_bleTx = svc->createCharacteristic(
+        BLE_NUS_TX_UUID, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
     if (!rx || !s_bleTx) {
       snprintf(status_, sizeof(status_), "ble:service-fail");
       LOG_BLE("NUS characteristic creation failed");
@@ -407,7 +470,8 @@ void RadioManager::startBle() {
     for (const char *uuid : {BLE_HID_CONTROL_UUID, BLE_HID_MOUSE_UUID,
                              BLE_HID_KEYBOARD_UUID}) {
       NimBLECharacteristic *characteristic = hidSvc->createCharacteristic(
-          uuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+          uuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
+                    NIMBLE_PROPERTY::WRITE_ENC);
       if (!characteristic) {
         snprintf(status_, sizeof(status_), "ble:service-fail");
         LOG_BLE("HID characteristic creation failed uuid=%s", uuid);
@@ -545,7 +609,8 @@ void RadioManager::loop() {
     if (nc) {
       s_tcpClient = nc;
       s_tcpLineBuf.clear();
-      s_tcpAuthed = !controlAuthRequired();
+      s_tcpSecureSession.reset();
+      s_tcpAuthed = !pairingSecurityEnabled() && !controlAuthRequired();
       LOG_WIFI("control client connected");
     }
   }
@@ -558,13 +623,14 @@ void RadioManager::loop() {
           dispatchControlLine(s_tcpLineBuf, "wifi", &s_tcpAuthed);
         }
         s_tcpLineBuf.clear();
-      } else if (s_tcpLineBuf.size() < 256) {
+      } else if (s_tcpLineBuf.size() < 768) {
         s_tcpLineBuf.push_back(ch);
       }
     }
   } else {
     if (s_tcpAuthed) requestReleaseAll("tcp-disconnect");
     s_tcpAuthed = false;
+    s_tcpSecureSession.reset();
   }
 }
 

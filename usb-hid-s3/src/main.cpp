@@ -23,6 +23,7 @@
 #include "JiggleEngine.h"
 #include "KeepAwakeConfig.h"
 #include "PairingInputFrame.h"
+#include "PairingSecretStore.h"
 #include "KeyMap.h"
 #include "RadioMode.h"
 #include "RadioManager.h"
@@ -562,11 +563,18 @@ static void emitPairingInputTest() {
     memset(secret, 0, sizeof(secret));
     return;
   }
+  if (!PairingSecretStore::replace(secret)) {
+    LOG_WARN("pairing credential persistence failed");
+    memset(secret, 0, sizeof(secret));
+    memset(frame, 0, sizeof(frame));
+    return;
+  }
+  g_radio.pairingCredentialRotated();
   HIDEvent event;
   event.type = HIDEventType::TypeText;
   strncpy(event.text, frame, sizeof(event.text) - 1);
   if (enqueueHIDEvent(event, "pair-test"))
-    LOG_INFO("pairing input test queued (credential omitted)");
+    LOG_INFO("pairing credential queued; previous pairing invalidated (credential omitted)");
   memset(secret, 0, sizeof(secret));
   memset(frame, 0, sizeof(frame));
 }

@@ -174,7 +174,8 @@ final class RESTHIDControlTransport: HIDControlTransport {
 
 final class TCPHIDControlTransport: HIDControlTransport {
     let kind = TransportKind.tcp
-    private let host: NWEndpoint.Host; private let token: String?; private var connection: NWConnection?
+    private let host: NWEndpoint.Host; private let token: String?; private let deviceId: String?; private var connection: NWConnection?
+    private var secureChannel: SecureChannel?
     private(set) var isAvailable = false
     private(set) var state: TransportConnectionState = .offline
     private var shouldReconnect = false
@@ -182,7 +183,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var receiving = false
     private var authTimeoutWork: DispatchWorkItem?
     private let authTimeout: TimeInterval
-    init(host: String, token: String?, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.token = token; self.authTimeout = authTimeout }
+    init(host: String, token: String?, deviceId: String? = nil, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.token = token; self.deviceId = deviceId?.lowercased(); self.authTimeout = authTimeout }
     func connect() async {
         shouldReconnect = true
         if connection != nil { return }
@@ -193,7 +194,16 @@ final class TCPHIDControlTransport: HIDControlTransport {
             switch state {
             case .ready:
                 self.startReceiveLoop(on: conn)
-                if let token = self.token, !token.isEmpty {
+                if let deviceId = self.deviceId, let secret = PairingKeyStore.load(deviceId: deviceId),
+                   let channel = try? SecureChannel(deviceId: deviceId, secret: secret) {
+                    self.secureChannel = channel
+                    self.state = .authenticating
+                    self.startAuthTimeout(for: conn)
+                    conn.send(content: Data("secure begin\n".utf8), completion: .contentProcessed { [weak self, weak conn] error in
+                        guard let self, let conn, self.connection === conn, let error else { return }
+                        self.failConnection(error.localizedDescription, on: conn)
+                    })
+                } else if let token = self.token, !token.isEmpty {
                     self.state = .authenticating
                     guard !token.contains("\n"), !token.contains("\r") else { self.isAvailable = false; self.state = .authenticationFailed; conn.cancel(); return }
                     self.startAuthTimeout(for: conn)
@@ -203,7 +213,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
                     })
                 } else { self.isAvailable = true; self.state = .ready }
             case .failed, .cancelled:
-                self.authTimeoutWork?.cancel(); self.authTimeoutWork = nil; self.receiving = false; self.receiveBuffer.removeAll(); self.isAvailable = false; self.connection = nil
+                self.authTimeoutWork?.cancel(); self.authTimeoutWork = nil; self.receiving = false; self.receiveBuffer.removeAll(); self.secureChannel = nil; self.isAvailable = false; self.connection = nil
                 let authFailed = self.state == .authenticationFailed
                 self.state = authFailed ? .authenticationFailed : (self.shouldReconnect ? .reconnecting : .offline)
                 if self.shouldReconnect && !authFailed { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
@@ -237,6 +247,26 @@ final class TCPHIDControlTransport: HIDControlTransport {
         }
     }
     private func handleReply(_ reply: String, on conn: NWConnection) {
+        if state == .authenticating, let secureChannel {
+            do {
+                if reply.hasPrefix("secure challenge ") {
+                    let hello = try secureChannel.hello(for: reply)
+                    conn.send(content: Data((hello + "\n").utf8), completion: .contentProcessed { [weak self, weak conn] error in
+                        guard let self, let conn, self.connection === conn, let error else { return }
+                        self.failConnection(error.localizedDescription, on: conn)
+                    })
+                    return
+                }
+                if reply.hasPrefix("secure ready ") {
+                    try secureChannel.acceptReady(reply)
+                    authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
+                    return
+                }
+            } catch {
+                failAuthentication(on: conn)
+                return
+            }
+        }
         switch reply.lowercased() {
         case "auth ok" where state == .authenticating:
             authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
@@ -267,9 +297,13 @@ final class TCPHIDControlTransport: HIDControlTransport {
     func send(_ event: HIDEvent) async throws {
         guard isAvailable else { throw TransportError.unavailable }
         let eid = AppLogContext.eventID.map(String.init) ?? "-"; appLog(.tcp, "id=\(eid) send event=\(event.diagnosticName)")
-        do { try await sendLine(event.line); appLog(.tcp, "id=\(eid) delivered") } catch { appLog(.errors, "TCP id=\(eid) error=\(error.localizedDescription)"); isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
+        do {
+            let line = try secureChannel?.sealText(event.line) ?? event.line
+            try await sendLine(line)
+            appLog(.tcp, "id=\(eid) delivered")
+        } catch { appLog(.errors, "TCP id=\(eid) error=\(error.localizedDescription)"); isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
     }
-    func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; receiveBuffer.removeAll(); isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); isAvailable = false; state = .offline }
 }
 
 enum FirmwareUpdateState: Equatable {
@@ -1080,6 +1114,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     @Published private(set) var radioState: BluetoothRadioState = .unknown
     private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var characteristics: [CBUUID: CBCharacteristic] = [:]
     private var token: String?
+    private var secureChannel: SecureChannel?
     private let deviceId: String
     private let service = CBUUID(string: "7D9F0001-4F4D-4F56-4552-484944000001")
     private let legacyService = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -1185,6 +1220,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         isAvailable = false
         state = authFailed ? .authenticationFailed : (shouldReconnect ? .reconnecting : .offline)
         self.peripheral = nil
+        secureChannel = nil
         failPendingWrites(TransportError.failed("Bluetooth disconnected before HID delivery was confirmed."))
         authTimeoutWork?.cancel(); authTimeoutWork = nil
         if firmwareUpdater.activeTransport != .wifi { firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot) }
@@ -1201,6 +1237,14 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         guard pendingServices == 0 else { return }
         let hasBinary = characteristics[mouse] != nil && characteristics[keyboard] != nil && characteristics[control] != nil
         guard hasBinary else { appLog(.errors, "BLE control characteristics missing"); isAvailable = false; state = .offline; central.cancelPeripheralConnection(peripheral); return }
+        if let secret = PairingKeyStore.load(deviceId: deviceId) {
+            guard let channel = try? SecureChannel(deviceId: deviceId, secret: secret),
+                  let tx = characteristics[legacyTX], characteristics[legacyRX] != nil else { failAuthentication(peripheral); return }
+            secureChannel = channel
+            state = .authenticating
+            peripheral.setNotifyValue(true, for: tx)
+            return
+        }
         guard let token, !token.isEmpty else { isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral); return }
         guard !token.contains("\n"), !token.contains("\r"), let tx = characteristics[legacyTX], characteristics[legacyRX] != nil else { failAuthentication(peripheral); return }
         state = .authenticating
@@ -1208,9 +1252,15 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == legacyTX, state == .authenticating else { return }
-        guard error == nil, characteristic.isNotifying, let token, let rx = characteristics[legacyRX] else { failAuthentication(peripheral); return }
+        guard error == nil, characteristic.isNotifying, let rx = characteristics[legacyRX] else { failAuthentication(peripheral); return }
         startAuthTimeout(peripheral)
-        peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse)
+        if secureChannel != nil {
+            peripheral.writeValue(Data("secure begin".utf8), for: rx, type: .withResponse)
+        } else if let token {
+            peripheral.writeValue(Data("auth \(token)".utf8), for: rx, type: .withResponse)
+        } else {
+            failAuthentication(peripheral)
+        }
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if characteristic.uuid == diagnosticsInfo || characteristic.uuid == diagnosticsLog {
@@ -1220,6 +1270,24 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         }
         if characteristic.uuid == otaStatus { firmwareUpdater.receive(characteristic.value, error: error); return }
         guard characteristic.uuid == legacyTX, error == nil, let data = characteristic.value, let reply = String(data: data, encoding: .utf8) else { return }
+        if state == .authenticating, let secureChannel {
+            do {
+                if reply.hasPrefix("secure challenge "), let rx = characteristics[legacyRX] {
+                    peripheral.writeValue(Data(try secureChannel.hello(for: reply).utf8), for: rx, type: .withResponse)
+                    return
+                }
+                if reply.hasPrefix("secure ready ") {
+                    try secureChannel.acceptReady(reply)
+                    authTimeoutWork?.cancel(); authTimeoutWork = nil
+                    isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral)
+                    return
+                }
+            } catch {
+                appLog(.errors, "BLE secure handshake failed")
+                failAuthentication(peripheral)
+                return
+            }
+        }
         switch reply.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "auth ok" where state == .authenticating: authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral)
         case "auth failed" where state == .authenticating: failAuthentication(peripheral)
@@ -1261,7 +1329,12 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         if firmwareUpdater.blocksControl, event != .releaseAll { throw TransportError.failed("Controls are unavailable during a firmware update.") }
         let uuid: CBUUID = { switch event { case .mouseMove, .scroll, .mouseDown, .mouseUp, .click: mouse; case .typeText, .key, .keyCombo, .keyboardReport: keyboard; default: control } }()
         guard let peripheral, let characteristic = characteristics[uuid] else { throw TransportError.unavailable }
-        let id = AppLogContext.eventID.map(String.init) ?? "-"; let payload = event.binary
+        let id = AppLogContext.eventID.map(String.init) ?? "-"
+        let payload: Data
+        if let secureChannel {
+            do { payload = try secureChannel.sealBinary(event.binary) }
+            catch { throw TransportError.failed("Could not encrypt Bluetooth control event.") }
+        } else { payload = event.binary }
         let properties = characteristic.properties
         guard let writeType = Self.writeType(for: event, properties: properties) else { appLog(.errors, "BLE id=\(id) characteristic not writable properties=\(properties.rawValue)"); throw TransportError.failed("Bluetooth HID characteristic is not writable.") }
         guard payload.count <= peripheral.maximumWriteValueLength(for: writeType) else { throw TransportError.failed("Bluetooth HID frame exceeds the negotiated ATT write size.") }
@@ -1281,11 +1354,16 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             settings.clickEnabled ? "autoclick on" : "autoclick off",
         ]
         for command in commands {
+            let payload: Data
+            if let secureChannel {
+                do { payload = Data(try secureChannel.sealText(command).utf8) }
+                catch { throw TransportError.failed("Could not encrypt keep-awake settings.") }
+            } else { payload = Data(command.utf8) }
             try await withCheckedThrowingContinuation { continuation in
                 writeQueue.append(PendingWrite(
                     id: "keep-awake-\(UUID().uuidString)",
                     characteristic: rx,
-                    payload: Data(command.utf8),
+                    payload: payload,
                     type: .withResponse,
                     continuation: continuation
                 ))
@@ -1328,7 +1406,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         let queued = writeQueue; writeQueue.removeAll(keepingCapacity: true)
         queued.forEach { $0.continuation.resume(throwing: error) }
     }
-    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
 }
 
 @MainActor enum InputPilotBluetoothManager {
@@ -1369,8 +1447,10 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         ble = bluetooth
         if host.isEmpty { tcp = UnavailableHIDControlTransport(kind: .tcp); rest = UnavailableHIDControlTransport(kind: .rest) }
         else {
-            tcp = TCPHIDControlTransport(host: host, token: device.apiToken)
-            if let url = DeviceEndpointResolver.baseURL(from: host) { rest = RESTHIDControlTransport(baseURL: url, token: device.apiToken) }
+            tcp = TCPHIDControlTransport(host: host, token: device.apiToken, deviceId: device.deviceId)
+            if PairingKeyStore.load(deviceId: device.deviceId) != nil {
+                rest = UnavailableHIDControlTransport(kind: .rest)
+            } else if let url = DeviceEndpointResolver.baseURL(from: host) { rest = RESTHIDControlTransport(baseURL: url, token: device.apiToken) }
             else { rest = UnavailableHIDControlTransport(kind: .rest) }
         }
         capabilities = Set(device.capabilities)

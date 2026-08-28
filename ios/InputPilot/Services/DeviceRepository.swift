@@ -199,6 +199,7 @@ final class DeviceRepository {
     }
 
     func delete(_ device: StoredDevice) throws {
+        PairingKeyStore.remove(deviceId: device.deviceId)
         context.delete(device)
         try context.save()
     }

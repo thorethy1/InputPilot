@@ -83,17 +83,6 @@ def macho_has_code_signature(data: bytes) -> bool | None:
     return any(results)
 
 
-def validate_apk(apk: Path) -> None:
-    if not zipfile.is_zipfile(apk):
-        raise ValueError(f"APK is not a ZIP archive: {apk}")
-    with zipfile.ZipFile(apk) as archive:
-        names = set(archive.namelist())
-    required = {"AndroidManifest.xml", "classes.dex", "resources.arsc"}
-    missing = sorted(required - names)
-    if missing:
-        raise ValueError(f"APK is missing required members: {missing}")
-
-
 def validate_unsigned_ipa(ipa: Path) -> None:
     if not zipfile.is_zipfile(ipa):
         raise ValueError(f"IPA is not a ZIP archive: {ipa}")
@@ -221,16 +210,12 @@ def main() -> None:
     if any(args.output.iterdir()):
         raise ValueError(f"output directory must be empty: {args.output}")
 
-    apk_source = only_named_file(args.input / "android", "app-debug.apk")
     ipa_source = only_named_file(args.input / "ios", "InputPilot-unsigned.ipa")
-    validate_apk(apk_source)
     validate_unsigned_ipa(ipa_source)
 
-    apk = args.output / f"InputPilot-{args.tag}-android.apk"
     ipa = args.output / f"InputPilot-{args.tag}-ios-unsigned.ipa"
     initial_zip = args.output / f"InputPilot-Firmware-{args.tag}.zip"
     initial_bin = args.output / "InitialFirmware.bin"
-    shutil.copyfile(apk_source, apk)
     shutil.copyfile(ipa_source, ipa)
     firmware_source = args.input / "firmware"
     validate_initial_flash_assets(firmware_source)
@@ -250,14 +235,14 @@ def main() -> None:
     shutil.copyfile(only_named_file(firmware_source, "initial-flash.bin"), initial_bin)
     ota_assets = copy_ota_assets(args.input / "firmware", args.output)
     expected = {
-        apk.name, ipa.name, initial_zip.name, initial_bin.name,
+        ipa.name, initial_zip.name, initial_bin.name,
         "firmware.bin", "firmware-manifest.json",
     }
     actual = {path.name for path in args.output.iterdir() if path.is_file()}
     if actual != expected:
         raise ValueError(f"unexpected public release asset set: {sorted(actual)}")
 
-    for path in (apk, initial_zip, initial_bin, ipa, *ota_assets):
+    for path in (initial_zip, initial_bin, ipa, *ota_assets):
         print(f"{path.name}\t{path.stat().st_size} bytes")
 
 

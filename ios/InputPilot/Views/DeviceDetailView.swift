@@ -120,11 +120,16 @@ struct DeviceDetailView: View {
                 }
             }
 
-            Section("Auth") {
-                TextField("API Token (optional)", text: $apiToken)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .onSubmit { saveApiToken() }
+            Section("Security") {
+                if PairingKeyStore.load(deviceId: device.deviceId) != nil {
+                    Label("USB pairing key stored in Keychain", systemImage: "checkmark.shield.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    TextField("Legacy API Token (optional)", text: $apiToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onSubmit { saveApiToken() }
+                }
             }
 
             Section("Keep Awake") {

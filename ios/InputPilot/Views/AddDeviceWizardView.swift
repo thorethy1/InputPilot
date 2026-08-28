@@ -436,7 +436,7 @@ struct AddDeviceWizardView: View {
                     LabeledContent("Connection", value: viewModel.mergeMessage == nil ? "Bluetooth" : "Bluetooth + existing connections")
                 }
                 Section("Friendly name") { TextField("Name", text: $viewModel.displayName) }
-                if metadata.authRequired {
+                if viewModel.showsAuthTokenField {
                     Section { TextField("API Token", text: $viewModel.apiToken).textInputAutocapitalization(.never).autocorrectionDisabled() }
                     footer: { Text("This device requires an API token for control.") }
                 }
