@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.8"
+#define FW_VERSION      "0.8.9"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0808
+#define FW_VERSION_BCD  0x0809
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -88,7 +88,7 @@
 #define STATUS_LED_BRIGHTNESS  48   // 0..255 peak channel value (keep modest)
 
 // BLE identity + Nordic UART Service (NUS) UUIDs for remote control (Phase 4).
-#define BLE_DEVICE_NAME  "InputPilot-Firmware"
+#define BLE_DEVICE_NAME  "InputPilot"  // legacy compile-time fallback only
 #define BLE_NUS_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_NUS_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // host -> device (write)
 #define BLE_NUS_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // device -> host (notify)

@@ -25,6 +25,12 @@ void test_mdns_hostname_lower_suffix() {
   TEST_ASSERT_EQUAL_STRING("inputpilot-eeff", host);
 }
 
+void test_device_name_uses_upper_suffix() {
+  char name[24];
+  formatDeviceName("eeff", name);
+  TEST_ASSERT_EQUAL_STRING("InputPilot-EEFF", name);
+}
+
 void test_null_mac_rejected() {
   char id[13];
   char suffix[5];
@@ -39,6 +45,7 @@ int main() {
   RUN_TEST(test_device_id_from_mac);
   RUN_TEST(test_soft_ap_ssid_upper_suffix);
   RUN_TEST(test_mdns_hostname_lower_suffix);
+  RUN_TEST(test_device_name_uses_upper_suffix);
   RUN_TEST(test_null_mac_rejected);
   return UNITY_END();
 }

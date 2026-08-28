@@ -23,6 +23,7 @@
 #include "KeyMap.h"
 #include "PairingSecretStore.h"
 #include "SecureSession.h"
+#include "USBIdentityConfig.h"
 
 RadioManager g_radio;
 
@@ -58,6 +59,7 @@ struct BLEControlFrame {
 QueueHandle_t s_bleControlQueue = nullptr;
 constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
 constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
+uint32_t s_managementRebootAtMs = 0;
 
 void sendControlReply(const char *source, const char *reply) {
   if (!reply) return;
@@ -192,6 +194,42 @@ void processBLEControlFrames(size_t budget = 8) {
     // decryption. Type 1 carries length-prefixed raw Wi-Fi credentials, keeping
     // the maximum encrypted record well below a typical iOS ATT write size.
     if (frame.length > 1 && frame.bytes[0] == 0xFD) {
+      if (frame.bytes[1] == 2 && frame.length == 2) {
+        if (!USBIdentityConfig::reset()) {
+          LOG_WARN("secure BLE USB identity reset failed");
+          continue;
+        }
+        requestReleaseAll("usb-identity-reset");
+        s_managementRebootAtMs = millis() + 750;
+        LOG_USB("secure BLE USB identity defaults restored; reboot scheduled");
+        continue;
+      }
+      if (frame.bytes[1] == 3 && frame.length >= 8) {
+        const uint16_t vid = static_cast<uint16_t>(frame.bytes[2]) |
+                             (static_cast<uint16_t>(frame.bytes[3]) << 8);
+        const uint16_t pid = static_cast<uint16_t>(frame.bytes[4]) |
+                             (static_cast<uint16_t>(frame.bytes[5]) << 8);
+        const size_t productLength = frame.bytes[6];
+        const size_t serialLength = frame.bytes[7];
+        if (productLength == 0 || productLength > USB_PRODUCT_NAME_MAX ||
+            serialLength == 0 || serialLength > USB_SERIAL_NUMBER_MAX ||
+            frame.length != 8 + productLength + serialLength) {
+          LOG_WARN("secure BLE USB identity update rejected: invalid lengths");
+          continue;
+        }
+        char product[USB_PRODUCT_NAME_MAX + 1]{};
+        char serial[USB_SERIAL_NUMBER_MAX + 1]{};
+        memcpy(product, frame.bytes + 8, productLength);
+        memcpy(serial, frame.bytes + 8 + productLength, serialLength);
+        if (!USBIdentityConfig::save(product, vid, pid, serial)) {
+          LOG_WARN("secure BLE USB identity update failed validation");
+          continue;
+        }
+        requestReleaseAll("usb-identity-update");
+        s_managementRebootAtMs = millis() + 750;
+        LOG_USB("secure BLE USB identity saved; reboot scheduled");
+        continue;
+      }
       if (frame.length < 4 || frame.bytes[1] != 1) {
         LOG_WARN("secure BLE management frame rejected: invalid type");
         continue;
@@ -454,7 +492,7 @@ void RadioManager::startBle() {
       return;
     }
     LOG_BLE("init start");
-    if (!NimBLEDevice::init(BLE_DEVICE_NAME)) {
+    if (!NimBLEDevice::init(DeviceIdentity::deviceName())) {
       snprintf(status_, sizeof(status_), "ble:init-failed");
       LOG_BLE("init failed");
       return;
@@ -553,7 +591,7 @@ void RadioManager::startBle() {
     const bool identityOk = advData.setFlags(BLE_HS_ADV_F_DISC_GEN |
                                               BLE_HS_ADV_F_BREDR_UNSUP) &&
                             advData.setManufacturerData(identity);
-    const bool nameOk = scanData.setName(BLE_DEVICE_NAME);
+    const bool nameOk = scanData.setName(DeviceIdentity::deviceName());
     const bool payloadOk = identityOk && nameOk &&
                            adv->setAdvertisementData(advData) &&
                            adv->setScanResponseData(scanData);
@@ -578,7 +616,7 @@ void RadioManager::startBle() {
   }
 
   snprintf(status_, sizeof(status_), "ble:adv");
-  LOG_BLE("advertising started as '%s'", BLE_DEVICE_NAME);
+  LOG_BLE("advertising started as '%s'", DeviceIdentity::deviceName());
 }
 
 void RadioManager::setBleAdvertisingStatus(bool active) {
@@ -619,6 +657,10 @@ void RadioManager::loop() {
   processBLEControlFrames();
   g_bleOta.loop();
   g_bleDiagnostics.loop(g_otaEngine.active());
+  if (s_managementRebootAtMs &&
+      static_cast<int32_t>(millis() - s_managementRebootAtMs) >= 0) {
+    esp_restart();
+  }
   if (!wifiEnabled()) return;
 
   // Soft-AP HTTP portal / REST (also handles reconnect requests from POST).

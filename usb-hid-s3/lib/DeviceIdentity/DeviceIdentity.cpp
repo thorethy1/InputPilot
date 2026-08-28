@@ -36,6 +36,10 @@ void formatSoftApSsid(const char *suffix4, char out[24]) {
   snprintf(out, 24, "InputPilot-%s", up);
 }
 
+void formatDeviceName(const char *suffix4, char out[24]) {
+  formatSoftApSsid(suffix4, out);
+}
+
 void formatMdnsHostname(const char *suffix4, char out[24]) {
   if (!out) return;
   char low[5] = {'0', '0', '0', '0', '\0'};
@@ -59,6 +63,7 @@ bool s_ready = false;
 char s_deviceId[13];
 char s_suffix[5];
 char s_softAp[24];
+char s_deviceName[24];
 char s_mdns[24];
 char s_mdnsFqdn[32];
 
@@ -71,6 +76,7 @@ void ensureReady() {
   }
   deviceIdFromMacBytes(mac, s_deviceId, s_suffix);
   formatSoftApSsid(s_suffix, s_softAp);
+  formatDeviceName(s_suffix, s_deviceName);
   formatMdnsHostname(s_suffix, s_mdns);
   snprintf(s_mdnsFqdn, sizeof(s_mdnsFqdn), "%s.local", s_mdns);
   s_ready = true;
@@ -94,6 +100,11 @@ const char *DeviceIdentity::suffix() {
 const char *DeviceIdentity::softApSsid() {
   ensureReady();
   return s_softAp;
+}
+
+const char *DeviceIdentity::deviceName() {
+  ensureReady();
+  return s_deviceName;
 }
 
 const char *DeviceIdentity::mdnsHostname() {

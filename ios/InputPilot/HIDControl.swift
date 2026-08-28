@@ -867,9 +867,9 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
     private var control: CBCharacteristic?
     private var data: CBCharacteristic?
     private var status: CBCharacteristic?
-    private var hidControl: CBCharacteristic?
     private var acknowledged = 0
     private var windowSize = 32 * 1024
+    private var maximumChunkSize = 500
     private var statusEvent = ""
     private var targetVersion: String?
     private var cancelled = false
@@ -902,8 +902,8 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         preUpdateDeviceId = device.deviceId
     }
 
-    func attach(peripheral: CBPeripheral, control: CBCharacteristic, data: CBCharacteristic, status: CBCharacteristic, hidControl: CBCharacteristic? = nil) {
-        self.peripheral = peripheral; self.control = control; self.data = data; self.status = status; self.hidControl = hidControl
+    func attach(peripheral: CBPeripheral, control: CBCharacteristic, data: CBCharacteristic, status: CBCharacteristic) {
+        self.peripheral = peripheral; self.control = control; self.data = data; self.status = status
         peripheral.readValue(for: status)
     }
 
@@ -913,6 +913,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         statusEvent = object["event"] as? String ?? ""
         acknowledged = object["offset"] as? Int ?? acknowledged
         windowSize = object["windowSize"] as? Int ?? windowSize
+        maximumChunkSize = object["maxChunk"] as? Int ?? maximumChunkSize
         installedVersion = object["firmware"] as? String ?? installedVersion
         if let metadata = try? JSONDecoder().decode(BLEDeviceMetadata.self, from: value) {
             metadataHandler?(metadata)
@@ -968,12 +969,20 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
         if let expectedSHA256, expectedSHA256.lowercased() != digest { state = .failed("Firmware verification failed. The selected file was not transferred."); return }
         cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema; totalBytes = firmware.count; bytesSent = 0; acknowledged = 0; state = .preparing; lastProgress = Date()
-        if let hidControl { peripheral.writeValue(HIDEvent.releaseAll.binary, for: hidControl, type: .withResponse) }
+        statusEvent = ""
+        if let status, !status.isNotifying {
+            peripheral.setNotifyValue(true, for: status)
+            let notificationDeadline = Date().addingTimeInterval(5)
+            while !status.isNotifying && Date() < notificationDeadline {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            guard status.isNotifying else { state = .failed("InputPilot firmware update status is not ready."); return }
+        }
         let command = "START protocol=1 version=\(version) size=\(firmware.count) sha256=\(digest)"
         peripheral.writeValue(Data(command.utf8), for: control, type: .withResponse)
         guard await wait(for: "READY", timeout: 10) else { if case .failed = state { return }; state = .failed("InputPilot did not become ready for the update."); return }
         let started = Date()
-        let maximum = max(5, peripheral.maximumWriteValueLength(for: .withoutResponse) - 4)
+        let maximum = max(5, min(maximumChunkSize, peripheral.maximumWriteValueLength(for: .withoutResponse) - 4))
         var offset = 0
         while offset < firmware.count && !cancelled {
             while (!peripheral.canSendWriteWithoutResponse || offset - acknowledged >= windowSize) && !cancelled {
@@ -1347,7 +1356,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     private func prepareFirmwareUpdater(_ peripheral: CBPeripheral) {
         guard let control = characteristics[otaControl], let data = characteristics[otaData], let status = characteristics[otaStatus] else { return }
-        firmwareUpdater.attach(peripheral: peripheral, control: control, data: data, status: status, hidControl: characteristics[self.control])
+        firmwareUpdater.attach(peripheral: peripheral, control: control, data: data, status: status)
         peripheral.setNotifyValue(true, for: status)
         prepareDiagnostics(peripheral)
     }
@@ -1380,6 +1389,9 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         let properties = characteristic.properties
         guard let writeType = Self.writeType(for: event, properties: properties) else { appLog(.errors, "BLE id=\(id) characteristic not writable properties=\(properties.rawValue)"); throw TransportError.failed("Bluetooth HID characteristic is not writable.") }
         guard payload.count <= peripheral.maximumWriteValueLength(for: writeType) else { throw TransportError.failed("Bluetooth HID frame exceeds the negotiated ATT write size.") }
+        if writeType == .withoutResponse, writeQueue.count >= 32 {
+            throw TransportError.failed("Bluetooth control is busy; high-frequency input was throttled.")
+        }
         appLog(.bluetooth, "HID write requested id=\(id) uuid=\(uuid.uuidString) bytes=\(payload.count) writeType=\(writeType == .withResponse ? "withResponse" : "withoutResponse") canSendWithoutResponse=\(peripheral.canSendWriteWithoutResponse) maximum=\(peripheral.maximumWriteValueLength(for: writeType))")
         try await withCheckedThrowingContinuation { continuation in
             writeQueue.append(PendingWrite(id: id, characteristic: characteristic, payload: payload, type: writeType, continuation: continuation))
@@ -1437,6 +1449,50 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         try await withCheckedThrowingContinuation { continuation in
             writeQueue.append(PendingWrite(
                 id: "wifi-setup-\(UUID().uuidString)", characteristic: commandCharacteristic,
+                payload: payload, type: .withResponse, continuation: continuation
+            ))
+            drainWrites(peripheral)
+        }
+    }
+    func resetUSBIdentity() async throws {
+        try await waitUntilReady()
+        guard let peripheral, let commandCharacteristic = characteristics[control],
+              commandCharacteristic.properties.contains(.write), let secureChannel else {
+            throw TransportError.failed("Restoring USB defaults requires secure Bluetooth pairing.")
+        }
+        let payload = try secureChannel.sealBinary(Data([0xFE, 0x02]))
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.append(PendingWrite(
+                id: "usb-reset-\(UUID().uuidString)", characteristic: commandCharacteristic,
+                payload: payload, type: .withResponse, continuation: continuation
+            ))
+            drainWrites(peripheral)
+        }
+    }
+    func setUSBIdentity(productName: String, vid: Int, pid: Int, serialNumber: String) async throws {
+        try await waitUntilReady()
+        let product = Data(productName.utf8)
+        let serial = Data(serialNumber.utf8)
+        guard (1 ... 31).contains(product.count), (1 ... 31).contains(serial.count),
+              (1 ... 0xFFFF).contains(vid), (1 ... 0xFFFF).contains(pid) else {
+            throw TransportError.failed("Invalid USB identity values.")
+        }
+        guard let peripheral, let commandCharacteristic = characteristics[control],
+              commandCharacteristic.properties.contains(.write), let secureChannel else {
+            throw TransportError.failed("Changing USB identity requires secure Bluetooth pairing.")
+        }
+        var plaintext = Data([0xFE, 0x03, UInt8(vid & 0xFF), UInt8((vid >> 8) & 0xFF),
+                              UInt8(pid & 0xFF), UInt8((pid >> 8) & 0xFF),
+                              UInt8(product.count), UInt8(serial.count)])
+        plaintext.append(product)
+        plaintext.append(serial)
+        let payload = try secureChannel.sealBinary(plaintext)
+        guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+            throw TransportError.failed("USB identity exceeds the encrypted Bluetooth frame size.")
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.append(PendingWrite(
+                id: "usb-update-\(UUID().uuidString)", characteristic: commandCharacteristic,
                 payload: payload, type: .withResponse, continuation: continuation
             ))
             drainWrites(peripheral)
@@ -1624,11 +1680,10 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         return messages
     }
     var transportReadiness: [(TransportKind, Bool)] { [(.bluetooth, ble.isAvailable), (.tcp, tcp.isAvailable), (.rest, rest.isAvailable)] }
-    var transportStates: [(TransportKind, TransportConnectionState)] { [(.bluetooth, ble.state), (.tcp, tcp.state), (.rest, rest.state)] }
     var connectionSummary: String {
         if protocolVersion > 1 { return "Firmware unsupported" }
-        if let activeTransport, transport(for: activeTransport).state == .ready { return "Active · \(activeTransport.rawValue)" }
-        if let ready = candidateTransports(lowLatency: false).first(where: { $0.state == .ready }) { return "Ready · \(ready.kind.rawValue)" }
+        if let activeTransport, transport(for: activeTransport).state == .ready { return "Active \(activeTransport.rawValue)" }
+        if let ready = candidateTransports(lowLatency: false).first(where: { $0.state == .ready }) { return "Ready \(ready.kind.rawValue)" }
         if let lastError { return lastError }
         if allTransports.contains(where: { $0.state == .authenticationFailed }) { return "Authentication failed" }
         if allTransports.contains(where: { $0.state == .reconnecting }) { return "Reconnecting…" }
@@ -1725,7 +1780,7 @@ struct HIDControlView: View {
     init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 4) { HStack { Circle().fill(manager.connectionSummary.hasPrefix("Active") || manager.connectionSummary.hasPrefix("Ready") ? .green : .orange).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }; TimelineView(.periodic(from: .now, by: 1)) { _ in HStack(spacing: 12) { ForEach(manager.transportStates, id: \.0) { item in Text("\(item.0.rawValue): \(item.1.title)").foregroundStyle(item.1 == .ready ? .green : .secondary) } }.font(.caption2) } }
+            HStack { Circle().fill(manager.connectionSummary.hasPrefix("Active") || manager.connectionSummary.hasPrefix("Ready") ? .green : .orange).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }
                 .padding(.horizontal)
             Picker("Control", selection: $section) { ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
             Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager); case .macros: MacrosView(manager: manager, controller: macros) } }
@@ -1741,12 +1796,14 @@ struct HIDControlView: View {
 struct TrackpadView: View {
     @ObservedObject var manager: HIDConnectionManager; @State private var dragging = false; @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
     private let coalescer: MouseEventCoalescer
+    private let scrollCoalescer: ScrollEventCoalescer
     init(manager: HIDConnectionManager) {
         self.manager = manager
         coalescer = MouseEventCoalescer { [weak manager] x, y in await manager?.send(.mouseMove(x, y)) }
+        scrollCoalescer = ScrollEventCoalescer { [weak manager] value in await manager?.send(.scroll(value)) }
     }
     var body: some View {
-        VStack { TrackpadInputBridge(move: { x, y in guard manager.supports("mouse_move") else { return }; Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; Task { await manager.send(.scroll(Int16(clamping: Int(-value / 5)))) } }, click: { count in guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if active { guard manager.beginOrderedSession(lowLatency: true) else { dragging = false; return } }; let sent = await manager.send(active ? .mouseDown(.left) : .mouseUp(.left)); if !active || !sent { manager.endOrderedSession() }; if !sent { dragging = false; await manager.releaseAllPreservingError() } } }, cancel: { dragging = false; Task { await coalescer.cancel(); manager.endOrderedSession(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
+        VStack { TrackpadInputBridge(move: { x, y in guard manager.supports("mouse_move") else { return }; Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; let lines = Int(-value / 5); if lines != 0 { Task { await scrollCoalescer.add(lines) } } }, click: { count in guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if active { guard manager.beginOrderedSession(lowLatency: true) else { dragging = false; return } }; let sent = await manager.send(active ? .mouseDown(.left) : .mouseUp(.left)); if !active || !sent { manager.endOrderedSession() }; if !sent { dragging = false; await manager.releaseAllPreservingError() } } }, rightClick: { guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { await manager.send(.click(.right)) } }, cancel: { dragging = false; Task { await coalescer.cancel(); await scrollCoalescer.cancel(); manager.endOrderedSession(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
             HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }.buttonStyle(.borderedProminent).disabled(!manager.supports("mouse_click"))
             HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }.padding()
         }.onChange(of: manager.lastError) { _, error in if error != nil && dragging { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } } }
@@ -1771,7 +1828,8 @@ struct LiveKeyboardView: View {
 
 struct PresetsView: View {
     @ObservedObject var manager: HIDConnectionManager; @Environment(\.modelContext) private var context; @Query(sort: \HIDPreset.order) private var presets: [HIDPreset]; @State private var name = ""; @State private var payload = ""; @State private var shortcut = false; @State private var favorite = false; @State private var enterAfter = false; @State private var typingDelayMs = 0; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
-    var body: some View { NavigationStack { List { Section("New preset") { TextField("Name", text: $name); TextField("Text or shortcut", text: $payload, axis: .vertical); Picker("Type", selection: $shortcut) { Text("Text").tag(false); Text("Keyboard Shortcut").tag(true) }; Toggle("Favorite", isOn: $favorite); Toggle("Enter after", isOn: $enterAfter).disabled(shortcut); Picker("Typing speed", selection: $typingDelayMs) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(shortcut); Button("Add Preset") { context.insert(HIDPreset(name: name.isEmpty ? "Preset" : name, payload: payload, shortcut: shortcut, favorite: favorite, order: presets.count, enterAfter: enterAfter, typingDelayMs: typingDelayMs)); name = ""; payload = ""; shortcut = false; favorite = false; enterAfter = false; typingDelayMs = 0 } }; Section("Presets") { ForEach(presets) { preset in HStack { Button { preset.favorite.toggle() } label: { Image(systemName: preset.favorite ? "star.fill" : "star") }; VStack(alignment: .leading) { TextField("Name", text: Binding(get: { preset.name }, set: { preset.name = $0 })); TextField("Content", text: Binding(get: { preset.payload }, set: { preset.payload = $0 }), axis: .vertical).font(.caption); Toggle("Shortcut", isOn: Binding(get: { preset.shortcut }, set: { preset.shortcut = $0 })); Toggle("Enter after", isOn: Binding(get: { preset.enterAfter }, set: { preset.enterAfter = $0 })); Picker("Typing speed", selection: Binding(get: { preset.typingDelayMs }, set: { preset.typingDelayMs = $0 })) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } } }; Spacer(); Button("Run") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); Task { let sent: Bool; if preset.shortcut { sent = await manager.send(.keyCombo(preset.payload)) } else { sent = await manager.sendText(preset.payload, layout: KeyboardLayout(rawValue: layoutName) ?? .german, delayMilliseconds: preset.typingDelayMs) }; if sent && preset.enterAfter { await manager.send(.key("enter")) } } } }.swipeActions { Button(role: .destructive) { context.delete(preset) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDPreset(name: preset.name + " Copy", payload: preset.payload, shortcut: preset.shortcut, favorite: preset.favorite, order: presets.count, enterAfter: preset.enterAfter, typingDelayMs: preset.typingDelayMs)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } }.onMove { source, destination in var ordered = presets; ordered.move(fromOffsets: source, toOffset: destination); for (index, item) in ordered.enumerated() { item.order = index } } } }.toolbar { EditButton() } } }
+    var body: some View { NavigationStack { List { Section("New preset") { TextField("Name", text: $name); TextField("Text or shortcut", text: $payload, axis: .vertical); Picker("Type", selection: $shortcut) { Text("Text").tag(false); Text("Keyboard Shortcut").tag(true) }; Toggle("Favorite", isOn: $favorite); Toggle("Enter after", isOn: $enterAfter).disabled(shortcut); Picker("Typing speed", selection: $typingDelayMs) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(shortcut); Button("Add Preset") { context.insert(HIDPreset(name: name.isEmpty ? "Preset" : name, payload: payload, shortcut: shortcut, favorite: favorite, order: presets.count, enterAfter: enterAfter, typingDelayMs: typingDelayMs)); name = ""; payload = ""; shortcut = false; favorite = false; enterAfter = false; typingDelayMs = 0 } }; Section("Presets") { ForEach(presets) { preset in VStack(alignment: .leading, spacing: 8) { HStack { Button { preset.favorite.toggle() } label: { Image(systemName: preset.favorite ? "star.fill" : "star") }.buttonStyle(.borderless); TextField("Name", text: Binding(get: { preset.name }, set: { preset.name = $0 })); Spacer(); Button("Run") { run(preset) }.buttonStyle(.borderedProminent) }; TextField("Content", text: Binding(get: { preset.payload }, set: { preset.payload = $0 }), axis: .vertical).font(.caption); Toggle("Shortcut", isOn: Binding(get: { preset.shortcut }, set: { preset.shortcut = $0 })); Toggle("Enter after", isOn: Binding(get: { preset.enterAfter }, set: { preset.enterAfter = $0 })); Picker("Typing speed", selection: Binding(get: { preset.typingDelayMs }, set: { preset.typingDelayMs = $0 })) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(preset.shortcut) }.buttonStyle(.borderless).swipeActions { Button(role: .destructive) { context.delete(preset) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDPreset(name: preset.name + " Copy", payload: preset.payload, shortcut: preset.shortcut, favorite: preset.favorite, order: presets.count, enterAfter: preset.enterAfter, typingDelayMs: preset.typingDelayMs)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } }.onMove { source, destination in var ordered = presets; ordered.move(fromOffsets: source, toOffset: destination); for (index, item) in ordered.enumerated() { item.order = index } } } }.toolbar { EditButton() } } }
+    private func run(_ preset: HIDPreset) { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); Task { let sent: Bool; if preset.shortcut { sent = await manager.send(.keyCombo(preset.payload)) } else { sent = await manager.sendText(preset.payload, layout: KeyboardLayout(rawValue: layoutName) ?? .german, delayMilliseconds: preset.typingDelayMs) }; if sent && preset.enterAfter { await manager.send(.key("enter")) } } }
 }
 
 struct MacrosView: View {

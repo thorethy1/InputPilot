@@ -61,6 +61,12 @@ password_length:u8 || ssid_utf8 || password_utf8`. Firmware accepts this marker
 only after decrypting a paired session. The compact length-prefixed form fits a
 maximum 32-byte SSID and 63-byte password in one common iOS ATT write and
 preserves spaces without placing credentials on the legacy text channel.
+Capability `secure_usb_identity_v1` adds two more encrypted management records:
+`0xFE || 0x02` restores USB defaults, while
+`0xFE || 0x03 || vid_le16 || pid_le16 || product_length:u8 ||
+serial_length:u8 || product_ascii || serial_ascii` saves a validated USB
+identity. Both operations schedule a restart so USB re-enumerates; the default
+serial remains the stable 12-character MAC-derived device ID.
 After normal USB enumeration, holding BOOT for two seconds types a fixed-length
 `IPPAIR1` frame through USB HID. The frame carries device ID, a fresh 128-bit
 hexadecimal pairing credential, and a corruption checksum. Firmware omits the

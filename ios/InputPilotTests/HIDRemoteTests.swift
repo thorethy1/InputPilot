@@ -255,6 +255,24 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(values.value.1, 0)
     }
 
+    func testScrollCoalescerAggregatesAndDropsZero() async {
+        let expectation = expectation(description: "scroll flush")
+        let values = LockedScrollValues()
+        let coalescer = ScrollEventCoalescer(interval: .seconds(10)) { value in
+            values.append(value)
+            expectation.fulfill()
+        }
+        await coalescer.add(2)
+        await coalescer.add(-1)
+        await coalescer.flush()
+        await fulfillment(of: [expectation], timeout: 1)
+        XCTAssertEqual(values.values, [1])
+        await coalescer.add(3)
+        await coalescer.add(-3)
+        await coalescer.flush()
+        XCTAssertEqual(values.values, [1])
+    }
+
     @MainActor func testAutomaticTransportFallsBackToReadyREST() async {
         let ble = MockTransport(kind: .bluetooth, available: false)
         let tcp = MockTransport(kind: .tcp, available: false)
@@ -344,7 +362,7 @@ final class HIDRemoteTests: XCTestCase {
         let tcp = MockTransport(kind: .tcp, available: true)
         let rest = MockTransport(kind: .rest, available: false)
         let manager = HIDConnectionManager(ble: ble, tcp: tcp, rest: rest)
-        XCTAssertEqual(manager.connectionSummary, "Ready · Wi-Fi TCP")
+        XCTAssertEqual(manager.connectionSummary, "Ready Wi-Fi TCP")
     }
 
     @MainActor func testMacroCompressionPreservesNonMovementEvents() {
@@ -386,4 +404,11 @@ private final class LockedValues: @unchecked Sendable {
     private var storage: (Int16, Int16) = (0, 0)
     var value: (Int16, Int16) { lock.withLock { storage } }
     func set(_ x: Int16, _ y: Int16) { lock.withLock { storage = (x, y) } }
+}
+
+private final class LockedScrollValues: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Int16] = []
+    var values: [Int16] { lock.withLock { storage } }
+    func append(_ value: Int16) { lock.withLock { storage.append(value) } }
 }

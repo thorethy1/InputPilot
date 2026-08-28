@@ -18,6 +18,7 @@
 bool deviceIdFromMacBytes(const uint8_t mac[6], char outId[13], char outSuffix[5]);
 void formatSoftApSsid(const char *suffix4, char out[24]);
 void formatMdnsHostname(const char *suffix4, char out[24]);
+void formatDeviceName(const char *suffix4, char out[24]);
 
 #ifndef UNIT_TEST
 class DeviceIdentity {
@@ -28,6 +29,7 @@ public:
   static const char *deviceId();      // 12-hex
   static const char *suffix();        // 4-hex lowercase
   static const char *softApSsid();    // InputPilot-XXXX
+  static const char *deviceName();    // InputPilot-XXXX
   static const char *mdnsHostname();  // inputpilot-xxxx
   static const char *mdnsFqdn();      // inputpilot-xxxx.local
 };

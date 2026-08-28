@@ -7,7 +7,7 @@
 
 
 
-**InputPilot 0.8.8** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. New-device setup pairs by USB before configuration, then uses encrypted BLE and Wi-Fi/TCP. Legacy devices remain discoverable through a clearly marked migration path.
+**InputPilot 0.8.9** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. New-device setup pairs by USB before configuration, then uses encrypted BLE and Wi-Fi/TCP. Legacy devices remain discoverable through a clearly marked migration path.
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 

@@ -6,6 +6,7 @@ struct TrackpadInputBridge: UIViewRepresentable {
     let scroll: (CGFloat) -> Void
     let click: (Int) -> Void
     let drag: (Bool) -> Void
+    let rightClick: () -> Void
     let cancel: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(owner: self) }
@@ -38,6 +39,8 @@ struct TrackpadInputBridge: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var owner: TrackpadInputBridge
+        private var lastTapAt = Date.distantPast
+        private var longPressIsDrag = false
         init(owner: TrackpadInputBridge) { self.owner = owner }
 
         @objc func moved(_ recognizer: UIPanGestureRecognizer) {
@@ -56,11 +59,28 @@ struct TrackpadInputBridge: UIViewRepresentable {
             } else if recognizer.state == .cancelled || recognizer.state == .failed { owner.cancel() }
         }
 
-        @objc func tapped(_ recognizer: UITapGestureRecognizer) { if recognizer.state == .ended { owner.click(1) } }
+        @objc func tapped(_ recognizer: UITapGestureRecognizer) {
+            if recognizer.state == .ended {
+                lastTapAt = Date()
+                owner.click(1)
+            }
+        }
         @objc func doubleTapped(_ recognizer: UITapGestureRecognizer) { if recognizer.state == .ended { owner.click(2) } }
         @objc func longPressed(_ recognizer: UILongPressGestureRecognizer) {
-            if recognizer.state == .began { owner.drag(true) }
-            if [.ended, .cancelled, .failed].contains(recognizer.state) { owner.drag(false) }
+            if recognizer.state == .began {
+                longPressIsDrag = Date().timeIntervalSince(lastTapAt) <= 1.0
+                if longPressIsDrag { owner.drag(true) }
+            }
+            if recognizer.state == .ended {
+                if longPressIsDrag { owner.drag(false) } else { owner.rightClick() }
+                longPressIsDrag = false
+            } else if recognizer.state == .cancelled || recognizer.state == .failed {
+                if longPressIsDrag {
+                    owner.drag(false)
+                    owner.cancel()
+                }
+                longPressIsDrag = false
+            }
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {

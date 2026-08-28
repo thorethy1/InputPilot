@@ -219,7 +219,7 @@ document.getElementById('save').onclick=save;
   }
   // STA: compact API index
   String json = "{";
-  json += "\"name\":\"" + String(FW_NAME) + "\",";
+  json += "\"name\":\"" + String(DeviceIdentity::deviceName()) + "\",";
   json += "\"version\":\"" + String(FW_VERSION) + "\",";
   json += "\"endpoints\":[";
   json += "\"GET /api/status\",\"GET /api/diagnostics\",\"GET /api/logs\",\"GET /api/jiggle\",\"POST /api/jiggle\",\"GET /api/keep-awake\",\"POST /api/keep-awake\",";
@@ -311,7 +311,7 @@ void WifiConfigServer::handleGetStatus() {
   DeviceIdentity::begin();
   String json = "{";
   json += "\"ok\":true,";
-  json += "\"name\":\"" + String(FW_NAME) + "\",";
+  json += "\"name\":\"" + String(DeviceIdentity::deviceName()) + "\",";
   json += "\"version\":\"" + String(FW_VERSION) + "\",";
   json += "\"device_id\":\"" + String(DeviceIdentity::deviceId()) + "\",";
   json += "\"uptime_s\":";
@@ -345,13 +345,16 @@ void WifiConfigServer::handleGetStatus() {
   json += ",\"protocol_version\":1,\"ota_schema\":1,";
   json += "\"capabilities\":[\"mouse_move\",\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"ble_control\",";
-  json += "\"tcp_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"secure_pairing\",\"secure_channel_v1\",\"secure_wifi_setup_v1\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
+  json += "\"tcp_control\",\"wifi_control\",\"keep_awake_v2\",\"pairing_input_test\",\"secure_pairing\",\"secure_channel_v1\",\"secure_wifi_setup_v1\",\"secure_usb_identity_v1\",\"ble_ota\",\"wifi_ota\",\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"protocol_v1\"]";
   json += "}";
   s_server->send(200, "application/json", json);
 }
 
 void WifiConfigServer::handleGetUsb() {
-  if (!requireApiAuth()) return;
+  // USB descriptors are already observable by any attached USB host. Keep the
+  // read endpoint available for paired-device UI, while all mutations remain
+  // authenticated and encrypted.
+  if (!PairingSecretStore::hasSecret() && !requireApiAuth()) return;
   handleCors();
   const USBIdentityValues &identity = USBIdentityConfig::get();
   char vid[7], pid[7];

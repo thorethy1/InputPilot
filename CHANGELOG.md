@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.9] - 2026-08-28
+
+### Fixed
+
+- Restore BLE OTA reliability and post-restart verification for securely paired devices.
+- Restore USB defaults through the encrypted Bluetooth management channel after secure migration, while retaining the MAC-derived USB serial number.
+- Advertise `secure_usb_identity_v1` so older paired firmware is never mistaken for supporting the encrypted reset command.
+- Advertise and report the per-device `InputPilot-XXXX` name over Bluetooth and the HTTP API.
+- Coalesce high-frequency scroll traffic to prevent encrypted-control queue growth and app instability.
+- Make Preset Run an independent button instead of activating the typing-speed picker.
+- Show only the selected control transport status at the top of the control screen.
+- Use a long press for right click and tap-then-hold for left-button drag and drop.
+
 ## [0.8.8] - 2026-08-28
 
 ### Security

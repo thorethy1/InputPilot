@@ -367,6 +367,22 @@ struct DeviceDetailView: View {
         usbBusy = true
         defer { usbBusy = false }
         let update = USBIdentityUpdate(productName: product, vid: vid, pid: pid, serialNumber: serial)
+        if hasPairingKey {
+            guard device.capabilities.contains("secure_usb_identity_v1") else {
+                usbMessage = "Install firmware 0.8.9 or newer before changing USB identity on a paired device."
+                return
+            }
+            do {
+                try await bluetooth.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                usbVID = String(format: "0x%04X", vid)
+                usbPID = String(format: "0x%04X", pid)
+                usbMessage = "Saved securely. InputPilot is restarting with the new USB identity."
+                return
+            } catch {
+                usbMessage = error.localizedDescription
+                return
+            }
+        }
         let api = DeviceAPIClient()
         for baseURL in endpointURLs {
             do {
@@ -384,6 +400,24 @@ struct DeviceDetailView: View {
     private func resetUSBIdentity() async {
         usbBusy = true
         defer { usbBusy = false }
+        if hasPairingKey {
+            guard device.capabilities.contains("secure_usb_identity_v1") else {
+                usbMessage = "Install firmware 0.8.9 or newer before restoring USB defaults on a paired device."
+                return
+            }
+            do {
+                try await bluetooth.resetUSBIdentity()
+                usbProductName = "InputPilot"
+                usbVID = "0xCAFE"
+                usbPID = "0x4001"
+                usbSerialNumber = device.deviceId
+                usbMessage = "Defaults restored securely. InputPilot is restarting."
+                return
+            } catch {
+                usbMessage = error.localizedDescription
+                return
+            }
+        }
         let api = DeviceAPIClient()
         for baseURL in endpointURLs {
             do {
