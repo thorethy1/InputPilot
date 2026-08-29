@@ -10,7 +10,6 @@ struct DeviceDetailView: View {
     @ObservedObject private var bluetooth: BLEHIDControlTransport
 
     @State private var displayName: String = ""
-    @State private var apiToken: String = ""
     @State private var showDeleteConfirmation = false
     @State private var usbProductName = "InputPilot"
     @State private var usbVID = "0xCAFE"
@@ -20,10 +19,12 @@ struct DeviceDetailView: View {
     @State private var usbMessage: String?
     @State private var keepAwakeBusy = false
     @State private var keepAwakeMessage: String?
+    @State private var managementBusy = false
+    @State private var managementMessage: String?
 
     init(device: StoredDevice) {
         _device = Bindable(wrappedValue: device)
-        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken))
+        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
     var body: some View {
@@ -82,11 +83,20 @@ struct DeviceDetailView: View {
                 LabeledContent("Protocol", value: String(device.protocolVersion))
                 LabeledContent("OTA Schema", value: String(device.otaSchema))
                 LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
-                let transports = [device.capabilities.contains("wifi_control") ? "Wi-Fi" : nil, (device.capabilities.isEmpty || device.capabilities.contains("ble_control")) ? "Bluetooth" : nil].compactMap { $0 }
+                let transports = [device.capabilities.contains("wifi_transport") ? "Wi-Fi" : nil, device.capabilities.contains("ble_transport") ? "Bluetooth" : nil].compactMap { $0 }
                 LabeledContent("Connection", value: transports.isEmpty ? "Unknown" : transports.joined(separator: " + "))
             }
 
-            if device.capabilities.contains("usb_identity") && !endpointURLs.isEmpty {
+            Section("Management") {
+                Button("Restart InputPilot") { Task { await rebootDevice() } }
+                    .disabled(managementBusy || !hasPairingKey)
+                if managementBusy { ProgressView() }
+                if let managementMessage {
+                    Text(managementMessage).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            if device.capabilities.contains("secure_usb_identity") {
                 Section("USB Identity") {
                     TextField("Product name", text: $usbProductName)
                         .textInputAutocapitalization(.words)
@@ -122,18 +132,13 @@ struct DeviceDetailView: View {
 
             Section("Security") {
                 if hasPairingKey {
-                    Label("Encrypted Bluetooth and Wi-Fi", systemImage: "checkmark.shield.fill")
+                    Label("USB-trusted Secure Protocol v2", systemImage: "checkmark.shield.fill")
                         .foregroundStyle(.green)
                 } else {
-                    Label("Communication may be unencrypted", systemImage: "exclamationmark.triangle.fill")
+                    Label("USB trust is missing", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(AppColors.warning)
-                    Text("This device uses the legacy migration path. Update its firmware before pairing; paired firmware rejects plaintext control.")
+                    Text("Reflash current firmware if needed, then add the device again through secure USB pairing.")
                         .font(.caption).foregroundStyle(.secondary)
-                    NavigationLink("Open Migration Guide") { SecurityMigrationGuideView() }
-                    TextField("Legacy API Token (optional)", text: $apiToken)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .onSubmit { saveApiToken() }
                 }
             }
 
@@ -176,16 +181,13 @@ struct DeviceDetailView: View {
         .task {
             async let bluetoothConnection: Void = bluetooth.connect()
             await viewModel.refreshDevice(device, context: modelContext)
-            if device.capabilities.contains("usb_identity") { await loadUSBIdentity() }
             _ = await bluetoothConnection
         }
         .onAppear {
             displayName = device.displayName
-            apiToken = device.apiToken ?? ""
         }
         .onDisappear {
             saveDisplayName()
-            saveApiToken()
         }
         .alert("Delete this device?", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
@@ -246,13 +248,12 @@ struct DeviceDetailView: View {
                 DeviceRepository(context: modelContext).apply(settings, to: device)
                 try modelContext.save()
             } else if hasPairingKey, let host = wifiControlHost {
-                let tcp = TCPHIDControlTransport(host: host, token: nil, deviceId: device.deviceId)
-                defer { Task { await tcp.disconnect() } }
+                let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
                 try await tcp.setKeepAwake(settings)
                 DeviceRepository(context: modelContext).apply(settings, to: device)
                 try modelContext.save()
             } else {
-                try await DeviceRepository(context: modelContext).setKeepAwake(device, settings: settings, api: DeviceAPIClient())
+                try await DeviceRepository(context: modelContext).setKeepAwake(device, settings: settings)
             }
             keepAwakeMessage = "Saved in InputPilot firmware."
         } catch {
@@ -268,12 +269,8 @@ struct DeviceDetailView: View {
             if bluetooth.state == .ready {
                 try await bluetooth.send(event)
             } else if hasPairingKey, let host = wifiControlHost {
-                let tcp = TCPHIDControlTransport(host: host, token: nil, deviceId: device.deviceId)
-                defer { Task { await tcp.disconnect() } }
+                let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
                 try await tcp.send(event)
-            } else if let url = endpointURLs.first {
-                let rest = RESTHIDControlTransport(baseURL: url, token: device.apiToken)
-                try await rest.send(event)
             } else { throw TransportError.unavailable }
             keepAwakeMessage = "Test action sent."
         } catch { keepAwakeMessage = error.localizedDescription }
@@ -284,19 +281,6 @@ struct DeviceDetailView: View {
         guard !trimmed.isEmpty, trimmed != device.displayName else { return }
         let repository = DeviceRepository(context: modelContext)
         try? repository.rename(device, name: trimmed)
-    }
-
-    private func saveApiToken() {
-        let repository = DeviceRepository(context: modelContext)
-        let trimmed = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        let newToken = trimmed.isEmpty ? nil : trimmed
-        guard newToken != device.apiToken else { return }
-        do {
-            try repository.updateApiToken(device, token: newToken)
-            bluetooth.updateToken(newToken)
-        } catch {
-            viewModel.errorMessage = error.localizedDescription
-        }
     }
 
     private func deleteDevice() {
@@ -338,23 +322,6 @@ struct DeviceDetailView: View {
     }
 
     @MainActor
-    private func loadUSBIdentity() async {
-        usbBusy = true
-        defer { usbBusy = false }
-        let api = DeviceAPIClient()
-        for baseURL in endpointURLs {
-            guard let identity = try? await api.usbIdentity(baseURL: baseURL, token: device.apiToken) else { continue }
-            usbProductName = identity.productName
-            usbVID = identity.vidHex ?? String(format: "0x%04X", identity.vid)
-            usbPID = identity.pidHex ?? String(format: "0x%04X", identity.pid)
-            usbSerialNumber = identity.serialNumber
-            usbMessage = nil
-            return
-        }
-        usbMessage = "Could not load the USB identity over Wi-Fi."
-    }
-
-    @MainActor
     private func saveUSBIdentity() async {
         let product = usbProductName.trimmingCharacters(in: .whitespacesAndNewlines)
         let serial = usbSerialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -366,14 +333,18 @@ struct DeviceDetailView: View {
         }
         usbBusy = true
         defer { usbBusy = false }
-        let update = USBIdentityUpdate(productName: product, vid: vid, pid: pid, serialNumber: serial)
         if hasPairingKey {
-            guard device.capabilities.contains("secure_usb_identity_v1") else {
-                usbMessage = "Install firmware 0.8.9 or newer before changing USB identity on a paired device."
+            guard device.capabilities.contains("secure_usb_identity") else {
+                usbMessage = "Current secure firmware is required before changing USB identity."
                 return
             }
             do {
-                try await bluetooth.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                if bluetooth.state == .ready {
+                    try await bluetooth.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                } else if let host = wifiControlHost {
+                    let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+                    try await tcp.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                } else { throw TransportError.unavailable }
                 usbVID = String(format: "0x%04X", vid)
                 usbPID = String(format: "0x%04X", pid)
                 usbMessage = "Saved securely. InputPilot is restarting with the new USB identity."
@@ -383,17 +354,7 @@ struct DeviceDetailView: View {
                 return
             }
         }
-        let api = DeviceAPIClient()
-        for baseURL in endpointURLs {
-            do {
-                try await api.setUSBIdentity(baseURL: baseURL, identity: update, token: device.apiToken)
-                usbVID = String(format: "0x%04X", vid)
-                usbPID = String(format: "0x%04X", pid)
-                usbMessage = "Saved. InputPilot is restarting; USB reconnects with the new identity."
-                return
-            } catch {}
-        }
-        usbMessage = "Could not save the USB identity over Wi-Fi."
+        usbMessage = "Authenticate the device over Bluetooth before changing USB identity."
     }
 
     @MainActor
@@ -401,12 +362,17 @@ struct DeviceDetailView: View {
         usbBusy = true
         defer { usbBusy = false }
         if hasPairingKey {
-            guard device.capabilities.contains("secure_usb_identity_v1") else {
-                usbMessage = "Install firmware 0.8.9 or newer before restoring USB defaults on a paired device."
+            guard device.capabilities.contains("secure_usb_identity") else {
+                usbMessage = "Current secure firmware is required before restoring USB defaults."
                 return
             }
             do {
-                try await bluetooth.resetUSBIdentity()
+                if bluetooth.state == .ready {
+                    try await bluetooth.resetUSBIdentity()
+                } else if let host = wifiControlHost {
+                    let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+                    try await tcp.resetUSBIdentity()
+                } else { throw TransportError.unavailable }
                 usbProductName = "InputPilot"
                 usbVID = "0xCAFE"
                 usbPID = "0x4001"
@@ -418,18 +384,20 @@ struct DeviceDetailView: View {
                 return
             }
         }
-        let api = DeviceAPIClient()
-        for baseURL in endpointURLs {
-            do {
-                try await api.resetUSBIdentity(baseURL: baseURL, token: device.apiToken)
-                usbProductName = "InputPilot"
-                usbVID = "0xCAFE"
-                usbPID = "0x4001"
-                usbSerialNumber = device.deviceId
-                usbMessage = "Defaults restored. InputPilot is restarting."
-                return
-            } catch {}
-        }
-        usbMessage = "Could not restore the USB defaults over Wi-Fi."
+        usbMessage = "Authenticate the device over Bluetooth before restoring USB defaults."
+    }
+
+    @MainActor
+    private func rebootDevice() async {
+        managementBusy = true
+        defer { managementBusy = false }
+        do {
+            if bluetooth.state == .ready {
+                try await bluetooth.reboot()
+            } else if let host = wifiControlHost {
+                try await InputPilotWiFiManager.session(host: host, deviceId: device.deviceId).reboot()
+            } else { throw TransportError.unavailable }
+            managementMessage = "Authenticated restart requested."
+        } catch { managementMessage = error.localizedDescription }
     }
 }

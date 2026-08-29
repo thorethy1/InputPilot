@@ -44,7 +44,7 @@ enum DevicePresenceStatus: Equatable, Sendable {
         case .connecting: "Establishing a device connection"
         case .reconnecting: "The previous connection was lost"
         case .authenticating: "Verifying device access"
-        case .authenticationFailed: "Pair the device again or check its legacy API token"
+        case .authenticationFailed: "Pair the device again over USB to rotate its trust credential"
         case .readyBluetooth: "Connected securely over Bluetooth and ready for control"
         case .readyWiFi: "Reachable on the local Wi-Fi network"
         }

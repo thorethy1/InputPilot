@@ -1,7 +1,7 @@
-"""mDNS discovery test for per-device hid-helper-xxxx.local.
+"""mDNS discovery test for per-device inputpilot-xxxx.local.
 
-Resolves the STA hostname advertised by the firmware (from /api/status `mdns`
-field or serial logs) and hits REST via http://<mdns>/api/status.
+Resolves the hostname derived from the public device identity and reads public
+discovery metadata at /api/status.
 Gated behind RUN_WIFI=1.
 
 Run:
@@ -19,7 +19,7 @@ import urllib.request
 
 import pytest
 
-MDNS_PATTERN = re.compile(r"^hid-helper-[0-9a-f]{4}\.local$")
+MDNS_PATTERN = re.compile(r"^inputpilot-[0-9a-f]{4}\.local$")
 
 pytestmark = pytest.mark.wifi
 
@@ -49,29 +49,17 @@ def _fetch_status_via_ip(ip: str) -> dict:
         return json.loads(r.read().decode())
 
 
-def _hostname_from_serial(harness) -> str | None:
+def _identity_from_http(harness) -> str | None:
     st = harness.send_and_wait("status", r"radio=wifi:", timeout=8.0)
     if "wifi:ap" in st.line or "radio=none" in st.line:
         return None
-    m = re.search(r"mdns=([^\s]+)", st.line)
-    if m:
-        host = m.group(1)
-        if MDNS_PATTERN.match(host):
-            return host
-    return None
-
-
-def _hostname_from_http(harness) -> str | None:
-    st = harness.send_and_wait("status", r"radio=wifi:", timeout=8.0)
-    if "wifi:ap" in st.line or "radio=none" in st.line:
-        return None
-    m = re.search(r"connected ip=([\d.]+)", st.line)
+    m = re.search(r"(?:connected ip=|radio=wifi:)([\d.]+)", st.line)
     if not m:
         return None
     body = _fetch_status_via_ip(m.group(1))
-    host = body.get("mdns", "")
-    if isinstance(host, str) and MDNS_PATTERN.match(host):
-        return host
+    device_id = body.get("device_id", "")
+    if isinstance(device_id, str) and re.fullmatch(r"[0-9a-f]{12}", device_id):
+        return device_id
     return None
 
 
@@ -82,7 +70,7 @@ def mdns_ready(serial_harness):
     serial_harness.send_command("radio wifi")
     try:
         serial_harness.wait_for_pattern(
-            r"mDNS started as hid-helper-[0-9a-f]{4}\.local|connected ip=",
+            r"mDNS started as inputpilot-[0-9a-f]{4}\.local|connected ip=",
             timeout=25.0,
         )
     except TimeoutError:
@@ -96,13 +84,15 @@ def mdns_ready(serial_harness):
 
 @pytest.fixture(scope="module")
 def mdns_hostname(mdns_ready):
-    host = _hostname_from_serial(mdns_ready) or _hostname_from_http(mdns_ready)
-    if not host:
-        pytest.skip("could not determine per-device mDNS hostname")
+    device_id = _identity_from_http(mdns_ready)
+    if not device_id:
+        pytest.skip("could not determine the public device identity")
+    host = f"inputpilot-{device_id[-4:]}.local"
+    assert MDNS_PATTERN.match(host)
     return host
 
 
-def test_mdns_resolves_hid_helper(mdns_ready, mdns_hostname):
+def test_mdns_resolves_inputpilot(mdns_ready, mdns_hostname):
     ip = _resolve(mdns_hostname, timeout=25.0)
     assert ip.count(".") == 3
     # Cross-check with serial status IP when possible.
@@ -120,9 +110,10 @@ def test_mdns_http_status(mdns_ready, mdns_hostname):
         try:
             with urllib.request.urlopen(url, timeout=5) as r:
                 body = json.loads(r.read().decode())
-            assert body.get("ok") is True
-            assert body.get("name") == "usb-hid-s3"
-            assert body.get("mdns") == mdns_hostname
+            assert body.get("product") == "InputPilot"
+            assert body.get("name", "").startswith("InputPilot-")
+            assert body.get("protocol_version") == 2
+            assert "secure_protocol_v2" in body.get("capabilities", [])
             device_id = body.get("device_id", "")
             assert isinstance(device_id, str) and len(device_id) == 12
             assert all(c in "0123456789abcdef" for c in device_id)

@@ -6,8 +6,8 @@
 //
 // WiFi path:
 //   - STA credentials in NVS (WifiCredentials). If none → Soft-AP setup portal
-//     (DeviceIdentity::softApSsid, e.g. usb-hid-s3-XXXX) + HTTP REST on :80 for
-//     app/browser provisioning. STA mode advertises mDNS via DeviceIdentity::mdnsFqdn.
+//     (DeviceIdentity::softApSsid) + read-only discovery on :80. STA mode
+//     advertises mDNS via DeviceIdentity::mdnsFqdn.
 //   - If credentials exist → STA + TCP line control on WIFI_CONTROL_PORT.
 //
 // WiFi and BLE may operate concurrently in WifiBle mode. USB HID is a separate
@@ -40,7 +40,7 @@ public:
   // Push a line back to the connected control client (BLE notify / TCP write).
   void sendToControl(const char *line);
 
-  // Apply newly saved STA credentials (from serial `wifi set` or Soft-AP REST).
+  // Apply newly saved STA credentials from an authenticated secure session.
   // If currently in Wifi mode, restarts WiFi to Soft-AP or STA as appropriate.
   void applyWifiCredentials();
 
@@ -64,5 +64,12 @@ private:
 };
 
 extern RadioManager g_radio;
+
+// Shared BLE session gate used by OTA and diagnostics. All BLE features belong
+// to the one control connection and its one authenticated secure session.
+bool deviceBleAuthenticated();
+bool decryptBleSecureRecord(const uint8_t *record, size_t recordLength,
+                            uint8_t *plaintext, size_t plaintextCapacity,
+                            size_t &plaintextLength);
 
 #endif // RADIO_MANAGER_H

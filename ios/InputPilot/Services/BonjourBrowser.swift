@@ -27,17 +27,14 @@ struct DiscoveredService: Identifiable, Equatable, Sendable {
 }
 
 enum BonjourDiscoveryFilter {
-    /// Accepts current InputPilot names and legacy hid-helper firmware.
+    /// Accept only current InputPilot advertisements with a stable device ID.
     static func isCandidate(serviceName: String, host: String, txt: [String: String]) -> Bool {
-        if txt["id"] != nil {
-            return true
-        }
+        guard let id = txt["id"], id.count == 12, id.allSatisfy(\.isHexDigit) else { return false }
         let haystack = "\(serviceName) \(host)".lowercased()
-        return haystack.contains("inputpilot-") || haystack.contains("hid-helper")
+        return haystack.contains("inputpilot-")
     }
 
-    /// Collapses duplicate Bonjour hits for one physical board (same TXT `id`, same IP,
-    /// or legacy bare `hid-helper` alongside `hid-helper-xxxx`).
+    /// Collapses duplicate Bonjour hits for one physical board by ID or address.
     static func deduplicate(_ services: [DiscoveredService]) -> [DiscoveredService] {
         guard services.count > 1 else { return services }
 
@@ -80,9 +77,6 @@ enum BonjourDiscoveryFilter {
         if let ipA = ipv4Host(a.host), let ipB = ipv4Host(b.host), ipA == ipB {
             return true
         }
-        // Legacy firmware advertised bare `hid-helper`; 0.4+ uses `hid-helper-xxxx`.
-        if isBareHidHelper(a), isVersionedHidHelper(b) { return true }
-        if isBareHidHelper(b), isVersionedHidHelper(a) { return true }
         return false
     }
 
@@ -110,9 +104,9 @@ enum BonjourDiscoveryFilter {
     private static func score(_ service: DiscoveredService) -> Int {
         var value = 0
         if service.deviceId != nil { value += 100 }
-        if isVersionedHidHelper(service) { value += 50 }
+        if service.name.lowercased().hasPrefix("inputpilot-") { value += 50 }
         if ipv4Host(service.host) != nil { value += 20 }
-        if !isBareHidHelper(service) { value += 10 }
+        value += 10
         value += min(service.name.count, 40)
         return value
     }
@@ -120,8 +114,6 @@ enum BonjourDiscoveryFilter {
     private static func scoreName(_ name: String) -> Int {
         let lower = name.lowercased()
         if lower.range(of: #"^inputpilot-[0-9a-f]+$"#, options: .regularExpression) != nil { return 120 + name.count }
-        if lower.range(of: #"^hid-helper-[0-9a-f]+$"#, options: .regularExpression) != nil { return 100 + name.count }
-        if lower == "hid-helper" { return 1 }
         return name.count
     }
 
@@ -129,10 +121,6 @@ enum BonjourDiscoveryFilter {
         let sanitized = DeviceEndpointResolver.sanitizeHost(host).lowercased()
         if ipv4Host(sanitized) != nil { return 100 }
         if sanitized.range(of: #"^inputpilot-[0-9a-f]+\.local$"#, options: .regularExpression) != nil { return 90 }
-        if sanitized.range(of: #"^hid-helper-[0-9a-f]+\.local$"#, options: .regularExpression) != nil {
-            return 80
-        }
-        if sanitized == "hid-helper.local" { return 1 }
         return 40
     }
 
@@ -154,19 +142,6 @@ enum BonjourDiscoveryFilter {
         return sanitized
     }
 
-    private static func isBareHidHelper(_ service: DiscoveredService) -> Bool {
-        let name = service.name.lowercased()
-        let host = DeviceEndpointResolver.sanitizeHost(service.host).lowercased()
-        return name == "hid-helper" || host == "hid-helper.local"
-    }
-
-    private static func isVersionedHidHelper(_ service: DiscoveredService) -> Bool {
-        let name = service.name.lowercased()
-        let host = DeviceEndpointResolver.sanitizeHost(service.host).lowercased()
-        let pattern = #"^(inputpilot|hid-helper)-[0-9a-f]+(\.local)?$"#
-        return name.range(of: #"^(inputpilot|hid-helper)-[0-9a-f]+$"#, options: .regularExpression) != nil
-            || host.range(of: pattern, options: .regularExpression) != nil
-    }
 }
 
 protocol DiscoverySource: AnyObject {

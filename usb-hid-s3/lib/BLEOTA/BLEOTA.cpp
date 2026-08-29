@@ -9,9 +9,9 @@
 #include "DeviceIdentity.h"
 #include "OTAEngine.h"
 #include "PairingSecretStore.h"
-
 extern bool deviceBleAuthenticated();
-
+extern bool decryptBleSecureRecord(const uint8_t *, size_t, uint8_t *, size_t,
+                                   size_t &);
 namespace {
 
 constexpr size_t BLE_OTA_MAX_PAYLOAD = 500;
@@ -80,10 +80,13 @@ bool BLEOTA::begin(NimBLEServer *server) {
   if (!s_dataQueue || !s_controlQueue) return false;
   auto *service = server->createService(BLE_OTA_SERVICE_UUID);
   if (!service) return false;
-  auto *control = service->createCharacteristic(BLE_OTA_CONTROL_UUID, NIMBLE_PROPERTY::WRITE);
-  auto *data = service->createCharacteristic(BLE_OTA_DATA_UUID, NIMBLE_PROPERTY::WRITE_NR);
+  auto *control = service->createCharacteristic(
+      BLE_OTA_CONTROL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
+  auto *data = service->createCharacteristic(
+      BLE_OTA_DATA_UUID, NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
   status_ = service->createCharacteristic(
-      BLE_OTA_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+      BLE_OTA_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
+                               NIMBLE_PROPERTY::READ_ENC);
   if (!control || !data || !status_) return false;
   control->setCallbacks(new ControlCallbacks(*this));
   data->setCallbacks(new DataCallbacks(*this));
@@ -98,18 +101,17 @@ void BLEOTA::notify(const char *event, const char *error) {
     snprintf(
         json, sizeof(json),
         "{\"product\":\"%s\",\"board\":\"%s\",\"deviceId\":\"%s\",\"deviceName\":\"%s\","
-        "\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"authRequired\":%s,"
-        "\"capabilities\":[\"ble_control\",\"wifi_control\",\"keep_awake_v2\","
-        "\"pairing_input_test\",\"secure_pairing\",\"secure_channel_v1\","
-        "\"secure_wifi_setup_v1\",\"secure_usb_identity_v1\",\"ble_ota\",\"wifi_ota\","
-        "\"ble_diagnostics\",\"wifi_diagnostics\",\"usb_identity\",\"mouse_move\","
+        "\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"trustRequired\":%s,"
+        "\"capabilities\":[\"secure_protocol_v2\",\"ble_transport\",\"wifi_transport\","
+        "\"secure_wifi_setup\",\"secure_usb_identity\",\"secure_ota\","
+        "\"secure_diagnostics\",\"mouse_move\","
         "\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",\"keyboard_type\","
-        "\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"protocol_v1\"],"
+        "\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"protocol_v2\"],"
         "\"state\":\"idle\",\"event\":\"IDLE\",\"offset\":0,\"size\":0,"
         "\"maxChunk\":%u,\"windowSize\":%lu}",
         FW_PRODUCT, FW_BOARD, DeviceIdentity::deviceId(), DeviceIdentity::deviceName(),
         OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION,
-        (PairingSecretStore::hasSecret() || strlen(CONTROL_API_TOKEN)) ? "true" : "false",
+        "true",
         static_cast<unsigned>(BLE_OTA_MAX_PAYLOAD),
         static_cast<unsigned long>(BLE_OTA_ACK_BYTES));
   } else {
@@ -133,13 +135,19 @@ void BLEOTA::notify(const char *event, const char *error) {
 void BLEOTA::fail(const char *error) { notify("ERROR", error); }
 
 void BLEOTA::enqueueControl(const std::string &value) {
-  if (!s_controlQueue || value.empty() || value.size() >= BLE_OTA_CONTROL_BYTES) {
+  uint8_t plaintext[BLE_OTA_CONTROL_BYTES];
+  size_t plaintextLength = 0;
+  if (!s_controlQueue || value.empty() ||
+      !decryptBleSecureRecord(reinterpret_cast<const uint8_t *>(value.data()),
+                              value.size(), plaintext, sizeof(plaintext),
+                              plaintextLength) || plaintextLength == 0 ||
+      plaintextLength >= BLE_OTA_CONTROL_BYTES) {
     fail("invalid_control");
     return;
   }
   BLEOTAControlCommand command;
-  command.length = static_cast<uint16_t>(value.size());
-  memcpy(command.bytes, value.data(), value.size());
+  command.length = static_cast<uint16_t>(plaintextLength);
+  memcpy(command.bytes, plaintext, plaintextLength);
   if (xQueueSend(s_controlQueue, &command, 0) != pdTRUE) fail("control_queue_full");
 }
 
@@ -201,21 +209,25 @@ void BLEOTA::processControl(size_t budget) {
 }
 
 void BLEOTA::enqueueData(const std::string &value) {
-  if (!deviceBleAuthenticated()) {
+  uint8_t plaintext[BLE_OTA_FRAME_BYTES];
+  size_t plaintextLength = 0;
+  if (!decryptBleSecureRecord(reinterpret_cast<const uint8_t *>(value.data()),
+                              value.size(), plaintext, sizeof(plaintext),
+                              plaintextLength)) {
     fail("unauthorized");
     return;
   }
-  if (g_otaEngine.owner() != OTATransportOwner::BLE || value.size() <= 4) {
+  if (g_otaEngine.owner() != OTATransportOwner::BLE || plaintextLength <= 4) {
     fail("not_receiving");
     return;
   }
-  if (!s_dataQueue || value.size() > BLE_OTA_FRAME_BYTES) {
+  if (!s_dataQueue || plaintextLength > BLE_OTA_FRAME_BYTES) {
     s_pendingAbort = PendingAbort::InvalidChunk;
     return;
   }
   BLEOTAFrame frame;
-  frame.length = static_cast<uint16_t>(value.size());
-  memcpy(frame.bytes, value.data(), value.size());
+  frame.length = static_cast<uint16_t>(plaintextLength);
+  memcpy(frame.bytes, plaintext, plaintextLength);
   if (xQueueSend(s_dataQueue, &frame, 0) != pdTRUE) {
     s_pendingAbort = PendingAbort::QueueFull;
     return;

@@ -1,5 +1,7 @@
 #include "RadioManager.h"
 
+#include <cstdlib>
+#include <vector>
 #include <WiFi.h>
 #include <WiFiServer.h>
 #include <WiFiClient.h>
@@ -10,7 +12,6 @@
 #include <freertos/queue.h>
 
 #include "Config.h"
-#include "ControlAuth.h"
 #include "CommandSink.h"
 #include "DeviceIdentity.h"
 #include "Logging.h"
@@ -28,7 +29,7 @@
 RadioManager g_radio;
 
 // ---------------------------------------------------------------------------
-// BLE (Nordic UART Service) control transport
+// Secure Protocol v2 transport state shared by BLE and Wi-Fi/TCP.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -47,10 +48,6 @@ WiFiClient s_tcpClient;
 std::string s_tcpLineBuf;
 SecureSession s_bleSecureSession;
 SecureSession s_tcpSecureSession;
-
-bool pairingSecurityEnabled() {
-  return PairingSecretStore::hasSecret();
-}
 
 struct BLEControlFrame {
   uint16_t length = 0;
@@ -72,47 +69,184 @@ void sendControlReply(const char *source, const char *reply) {
   }
 }
 
+void sendSecureReply(const char *source, SecureSession &session,
+                     const std::string &plaintext) {
+  std::string sealed;
+  if (session.encryptText(plaintext, sealed)) sendControlReply(source, sealed.c_str());
+}
+
+int hexNibble(char value) {
+  if (value >= '0' && value <= '9') return value - '0';
+  if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+  return -1;
+}
+
+bool decodeHex(const std::string &encoded, std::string &decoded) {
+  if (encoded.empty() || (encoded.size() & 1)) return false;
+  decoded.assign(encoded.size() / 2, '\0');
+  for (size_t i = 0; i < decoded.size(); ++i) {
+    const int high = hexNibble(encoded[i * 2]);
+    const int low = hexNibble(encoded[i * 2 + 1]);
+    if (high < 0 || low < 0) return false;
+    decoded[i] = static_cast<char>((high << 4) | low);
+  }
+  return true;
+}
+
+bool dispatchSecureProtocolMessage(const std::string &message, const char *source,
+                                   SecureSession &session) {
+  const OTATransportOwner owner = strcmp(source, "ble") == 0
+                                      ? OTATransportOwner::BLE
+                                      : OTATransportOwner::WiFi;
+  if (message == "DIAGNOSTICS INFO") {
+    sendSecureReply(source, session, g_bleDiagnostics.infoJson());
+    return true;
+  }
+  if (message.rfind("DIAGNOSTICS NEXT ", 0) == 0) {
+    const std::string cursorText = message.substr(17);
+    char *end = nullptr;
+    uint32_t cursor = strtoul(cursorText.c_str(), &end, 10);
+    if (!end || *end) sendSecureReply(source, session, "error invalid_cursor");
+    else sendSecureReply(source, session, g_bleDiagnostics.nextLogJson(cursor));
+    return true;
+  }
+  if (message == "USB RESET") {
+    if (!USBIdentityConfig::reset()) sendSecureReply(source, session, "error invalid_usb_identity");
+    else {
+      requestReleaseAll("usb-identity-reset");
+      sendSecureReply(source, session, "management restarting");
+      s_managementRebootAtMs = millis() + 750;
+    }
+    return true;
+  }
+  if (message.rfind("USB SET ", 0) == 0) {
+    const size_t first = message.find(' ', 8);
+    const size_t second = first == std::string::npos ? first : message.find(' ', first + 1);
+    const size_t third = second == std::string::npos ? second : message.find(' ', second + 1);
+    if (first == std::string::npos || second == std::string::npos || third == std::string::npos) {
+      sendSecureReply(source, session, "error invalid_usb_identity"); return true;
+    }
+    const std::string vidText = message.substr(8, first - 8);
+    const std::string pidText = message.substr(first + 1, second - first - 1);
+    char *vidEnd = nullptr; char *pidEnd = nullptr;
+    const unsigned long vid = strtoul(vidText.c_str(), &vidEnd, 16);
+    const unsigned long pid = strtoul(pidText.c_str(), &pidEnd, 16);
+    std::string product; std::string serial;
+    const bool valid = vidEnd && !*vidEnd && pidEnd && !*pidEnd &&
+        decodeHex(message.substr(second + 1, third - second - 1), product) &&
+        decodeHex(message.substr(third + 1), serial) &&
+        USBIdentityConfig::save(product.c_str(), vid, pid, serial.c_str());
+    if (!valid) sendSecureReply(source, session, "error invalid_usb_identity");
+    else {
+      requestReleaseAll("usb-identity-update");
+      sendSecureReply(source, session, "management restarting");
+      s_managementRebootAtMs = millis() + 750;
+    }
+    return true;
+  }
+  if (message == "REBOOT") {
+    requestReleaseAll("secure-reboot");
+    sendSecureReply(source, session, "management restarting");
+    s_managementRebootAtMs = millis() + 500;
+    return true;
+  }
+  if (message.rfind("START ", 0) == 0) {
+    if (g_otaEngine.active()) {
+      sendSecureReply(source, session, "error update_in_progress");
+      return true;
+    }
+    OTAStartRequest request;
+    std::string error;
+    if (!OTAProtocol::parseStart(message, request, error) ||
+        !g_otaEngine.start(request, owner)) {
+      sendSecureReply(source, session, "error " +
+          (error.empty() ? std::string(g_otaEngine.error()) : error));
+    } else {
+      sendSecureReply(source, session, "ota ready 0");
+    }
+    return true;
+  }
+  if (message.rfind("DATA ", 0) == 0) {
+    const size_t separator = message.find(' ', 5);
+    if (separator == std::string::npos || g_otaEngine.owner() != owner) {
+      sendSecureReply(source, session, "error invalid_data");
+      return true;
+    }
+    const std::string offsetText = message.substr(5, separator - 5);
+    char *end = nullptr;
+    const uint32_t offset = strtoul(offsetText.c_str(), &end, 10);
+    const std::string encoded = message.substr(separator + 1);
+    if (!end || *end || encoded.empty() || (encoded.size() & 1)) {
+      sendSecureReply(source, session, "error invalid_data");
+      return true;
+    }
+    std::string bytes(encoded.size() / 2, '\0');
+    for (size_t i = 0; i < bytes.size(); ++i) {
+      const int high = hexNibble(encoded[i * 2]);
+      const int low = hexNibble(encoded[i * 2 + 1]);
+      if (high < 0 || low < 0) {
+        sendSecureReply(source, session, "error invalid_data");
+        return true;
+      }
+      bytes[i] = static_cast<char>((high << 4) | low);
+    }
+    if (!g_otaEngine.write(offset, reinterpret_cast<const uint8_t *>(bytes.data()),
+                           bytes.size())) {
+      sendSecureReply(source, session, "error " + std::string(g_otaEngine.error()));
+    } else {
+      sendSecureReply(source, session,
+                      "ota ack " + std::to_string(g_otaEngine.received()));
+    }
+    return true;
+  }
+  if (message == "FINISH") {
+    if (g_otaEngine.owner() != owner || !g_otaEngine.finish()) {
+      sendSecureReply(source, session, "error " + std::string(g_otaEngine.error()));
+    } else {
+      sendSecureReply(source, session, "ota success");
+      s_managementRebootAtMs = millis() + 750;
+    }
+    return true;
+  }
+  if (message == "ABORT") {
+    if (g_otaEngine.owner() == owner && g_otaEngine.active())
+      g_otaEngine.abort("user_cancelled", true);
+    sendSecureReply(source, session, "ota cancelled");
+    return true;
+  }
+  return false;
+}
+
 void dispatchControlLine(const std::string &line, const char *source,
                          bool *authed) {
-  if (pairingSecurityEnabled()) {
-    SecureSession &session = strcmp(source, "ble") == 0
-                                 ? s_bleSecureSession : s_tcpSecureSession;
-    std::string reply;
-    if (line == "secure begin") {
-      uint8_t secret[PairingSecretStore::SecretSize];
-      const bool ok = PairingSecretStore::load(secret) &&
-                      session.begin(secret, DeviceIdentity::deviceId(), reply);
-      memset(secret, 0, sizeof(secret));
-      if (ok) sendControlReply(source, reply.c_str());
-      if (authed) *authed = false;
-      return;
-    }
-    if (line.rfind("secure hello ", 0) == 0) {
-      const bool ok = session.acceptHello(line, reply);
-      if (authed) *authed = ok;
-      sendControlReply(source, ok ? reply.c_str() : "secure failed");
-      return;
-    }
-    std::string plaintext;
-    if (session.established() && session.decryptText(line, plaintext)) {
-      if (authed) *authed = true;
+  SecureSession &session = strcmp(source, "ble") == 0
+                               ? s_bleSecureSession : s_tcpSecureSession;
+  std::string reply;
+  if (line == "secure begin") {
+    uint8_t secret[PairingSecretStore::SecretSize];
+    const bool ok = PairingSecretStore::load(secret) &&
+                    session.begin(secret, DeviceIdentity::deviceId(), reply);
+    memset(secret, 0, sizeof(secret));
+    if (ok) sendControlReply(source, reply.c_str());
+    if (authed) *authed = false;
+    return;
+  }
+  if (line.rfind("secure hello ", 0) == 0) {
+    const bool ok = session.acceptHello(line, reply);
+    if (authed) *authed = ok;
+    sendControlReply(source, ok ? reply.c_str() : "secure failed");
+    return;
+  }
+  std::string plaintext;
+  if (session.established() && session.decryptText(line, plaintext)) {
+    if (authed) *authed = true;
+    if (!dispatchSecureProtocolMessage(plaintext, source, session)) {
       handleCommandLine(plaintext, source);
-    } else {
-      LOG_INFO("unencrypted or invalid control rejected src=%s", source);
     }
-    return;
+  } else {
+    LOG_INFO("unauthenticated or invalid secure record rejected src=%s", source);
   }
-  const ControlLineGate gate = controlGateLine(line.c_str(), authed);
-  if (gate == ControlLineGate::Reject) {
-    LOG_INFO("control auth rejected src=%s", source);
-    return;
-  }
-  if (gate == ControlLineGate::Consumed) {
-    LOG_INFO("control auth %s src=%s", *authed ? "ok" : "failed", source);
-    sendControlReply(source, controlAuthReply(gate, *authed));
-    return;
-  }
-  handleCommandLine(line, source);
 }
 
 // Split incoming bytes into lines and dispatch each.
@@ -130,40 +264,28 @@ void feedControlLines(std::string &buf, const std::string &incoming,
 
 std::string s_bleLineBuf;
 
-class RxCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
-    std::string v = c->getValue();
-    if (v.empty()) return;
-    // BLE writes may or may not include a trailing newline; treat a write
-    // without a newline as a complete line too.
-    if (v.find('\n') == std::string::npos) {
-      std::string line = v;
-      if (!line.empty() && line.back() == '\r') line.pop_back();
-      dispatchControlLine(line, "ble", &s_bleAuthed);
-    } else {
-      feedControlLines(s_bleLineBuf, v, "ble", &s_bleAuthed);
-    }
-  }
-};
-
 class BinaryCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
     const std::string &value = c->getValue();
     if (value.empty()) return;
+    if (static_cast<uint8_t>(value[0]) != SecureSession::BinaryVersion) {
+      std::string line = value;
+      if (!line.empty() && line.back() == '\n') line.pop_back();
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      dispatchControlLine(line, "ble", &s_bleAuthed);
+      return;
+    }
     uint8_t decrypted[BLE_CONTROL_FRAME_MAX];
     const uint8_t *frameBytes = reinterpret_cast<const uint8_t *>(value.data());
     size_t frameLength = value.size();
     size_t decryptedLength = 0;
-    const bool secureFrame = pairingSecurityEnabled();
-    if (secureFrame) {
-      if (!s_bleSecureSession.decryptBinary(frameBytes, frameLength, decrypted,
-                                            sizeof(decrypted), decryptedLength)) {
-        LOG_INFO("encrypted binary control rejected");
-        return;
-      }
-      frameBytes = decrypted;
-      frameLength = decryptedLength;
+    if (!s_bleSecureSession.decryptBinary(frameBytes, frameLength, decrypted,
+                                          sizeof(decrypted), decryptedLength)) {
+      LOG_INFO("encrypted binary control rejected");
+      return;
     }
+    frameBytes = decrypted;
+    frameLength = decryptedLength;
     // Authentication is performed through the text control characteristic
     // before binary event characteristics are accepted.
     if (!s_bleAuthed) {
@@ -177,7 +299,7 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
     BLEControlFrame frame;
     frame.length = static_cast<uint16_t>(frameLength);
     memcpy(frame.bytes, frameBytes, frameLength);
-    if (secureFrame && frame.length > 1 && frame.bytes[0] == 0xFE)
+    if (frame.length > 1 && frame.bytes[0] == 0xFE)
       frame.bytes[0] = 0xFD;
     if (xQueueSend(s_bleControlQueue, &frame, 0) != pdTRUE)
       recordHIDDecodeError("ble-binary", frameLength);
@@ -298,7 +420,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *, NimBLEConnInfo &) override {
     s_bleConnected = true;
     s_bleSecureSession.reset();
-    s_bleAuthed = !pairingSecurityEnabled() && !controlAuthRequired();
+    s_bleAuthed = false;
     LOG_BLE("central connected");
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
@@ -336,7 +458,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
 };
 
-RxCallbacks s_rxCallbacks;
 BinaryCallbacks s_binaryCallbacks;
 ServerCallbacks s_serverCallbacks;
 
@@ -344,11 +465,27 @@ ServerCallbacks s_serverCallbacks;
 
 bool deviceBleAuthenticated() { return s_bleConnected && s_bleAuthed; }
 
+bool decryptBleSecureRecord(const uint8_t *record, size_t recordLength,
+                            uint8_t *plaintext, size_t plaintextCapacity,
+                            size_t &plaintextLength) {
+  return deviceBleAuthenticated() &&
+         s_bleSecureSession.decryptBinary(record, recordLength, plaintext,
+                                          plaintextCapacity, plaintextLength);
+}
+
 void RadioManager::pairingCredentialRotated() {
   s_bleAuthed = false;
   s_tcpAuthed = false;
   s_bleSecureSession.reset();
   s_tcpSecureSession.reset();
+  if (s_tcpClient) s_tcpClient.stop();
+  if (s_bleReady) {
+    const std::vector<uint16_t> peers = s_bleServer
+        ? s_bleServer->getPeerDevices() : std::vector<uint16_t>{};
+    for (const uint16_t handle : peers) s_bleServer->disconnect(handle);
+    NimBLEDevice::deleteAllBonds();
+    LOG_BLE("connections and stored bonds cleared after USB trust rotation");
+  }
   requestReleaseAll("pairing-rotated");
 }
 
@@ -399,9 +536,11 @@ void RadioManager::startSoftAp() {
   delay(100);
   IPAddress ip = WiFi.softAPIP();
   snprintf(status_, sizeof(status_), "wifi:ap");
-  LOG_WIFI("soft-ap ssid=\"%s\" ip=%s http=:%d (configure via REST /api/wifi)",
-           apSsid, ip.toString().c_str(), WIFI_HTTP_PORT);
+  LOG_WIFI("soft-ap ssid=\"%s\" ip=%s discovery=:%d secure=:%d",
+           apSsid, ip.toString().c_str(), WIFI_HTTP_PORT, WIFI_CONTROL_PORT);
   g_wifiConfig.begin();
+  s_tcpServer.begin();
+  s_tcpServer.setNoDelay(true);
 }
 
 void RadioManager::startSta(const String &ssid, const String &pass) {
@@ -418,7 +557,7 @@ void RadioManager::startSta(const String &ssid, const String &pass) {
     DeviceIdentity::begin();
     s_tcpServer.begin();
     s_tcpServer.setNoDelay(true);
-    g_wifiConfig.begin();  // STA REST control API on :80
+    g_wifiConfig.begin();  // read-only discovery on :80
     const char *mdnsHost = DeviceIdentity::mdnsHostname();
     if (MDNS.begin(mdnsHost)) {
       MDNS.addService("http", "tcp", WIFI_HTTP_PORT);
@@ -431,11 +570,11 @@ void RadioManager::startSta(const String &ssid, const String &pass) {
       LOG_WIFI("mDNS start failed");
     }
     snprintf(status_, sizeof(status_), "wifi:%s", WiFi.localIP().toString().c_str());
-    LOG_WIFI("connected ip=%s control-port=%d http=:%d mdns=%s",
+    LOG_WIFI("connected ip=%s secure-port=%d discovery=:%d mdns=%s",
              WiFi.localIP().toString().c_str(), WIFI_CONTROL_PORT, WIFI_HTTP_PORT,
              DeviceIdentity::mdnsFqdn());
   } else {
-    LOG_WIFI("connect timeout; falling back to Soft-AP setup");
+    LOG_WIFI("connect timeout; returning to Soft-AP discovery");
     WiFi.disconnect(true);
     startSoftAp();
   }
@@ -509,52 +648,26 @@ void RadioManager::startBle() {
     s_bleServer->setCallbacks(&s_serverCallbacks);
     LOG_BLE("server created");
 
-    NimBLEService *svc = s_bleServer->createService(BLE_NUS_SERVICE_UUID);
-    if (!svc) {
-      snprintf(status_, sizeof(status_), "ble:service-fail");
-      LOG_BLE("NUS service creation failed");
-      return;
-    }
-    NimBLECharacteristic *rx = svc->createCharacteristic(
-        BLE_NUS_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
-                             NIMBLE_PROPERTY::WRITE_ENC);
-    s_bleTx = svc->createCharacteristic(
-        BLE_NUS_TX_UUID, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
-    if (!rx || !s_bleTx) {
-      snprintf(status_, sizeof(status_), "ble:service-fail");
-      LOG_BLE("NUS characteristic creation failed");
-      return;
-    }
-    rx->setCallbacks(&s_rxCallbacks);
-    LOG_BLE("NUS service created");
-
     NimBLEService *hidSvc = s_bleServer->createService(BLE_HID_SERVICE_UUID);
     if (!hidSvc) {
       snprintf(status_, sizeof(status_), "ble:service-fail");
       LOG_BLE("HID service creation failed");
       return;
     }
-    for (const char *uuid : {BLE_HID_CONTROL_UUID, BLE_HID_MOUSE_UUID,
-                             BLE_HID_KEYBOARD_UUID}) {
-      NimBLECharacteristic *characteristic = hidSvc->createCharacteristic(
-          uuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
-                    NIMBLE_PROPERTY::WRITE_ENC);
-      if (!characteristic) {
-        snprintf(status_, sizeof(status_), "ble:service-fail");
-        LOG_BLE("HID characteristic creation failed uuid=%s", uuid);
-        return;
-      }
-      characteristic->setCallbacks(&s_binaryCallbacks);
-    }
-    NimBLECharacteristic *status = hidSvc->createCharacteristic(
-        BLE_HID_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    if (!status) {
+    NimBLECharacteristic *control = hidSvc->createCharacteristic(
+        BLE_HID_CONTROL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
+                                  NIMBLE_PROPERTY::WRITE_ENC);
+    s_bleTx = hidSvc->createCharacteristic(
+        BLE_HID_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
+                                 NIMBLE_PROPERTY::READ_ENC);
+    if (!control || !s_bleTx) {
       snprintf(status_, sizeof(status_), "ble:service-fail");
       LOG_BLE("HID status characteristic creation failed");
       return;
     }
+    control->setCallbacks(&s_binaryCallbacks);
     const uint8_t statusValue[] = {HIDProtocol::Version, 0x00};
-    status->setValue(statusValue, sizeof(statusValue));
+    s_bleTx->setValue(statusValue, sizeof(statusValue));
 
     LOG_BLE("HID service created");
     if (!g_bleOta.begin(s_bleServer)) {
@@ -577,7 +690,7 @@ void RadioManager::startBle() {
       LOG_BLE("GATT server/service start failed");
       return;
     }
-    LOG_BLE("GATT services started (NUS, HID, OTA, Diagnostics)");
+    LOG_BLE("GATT services started (Secure Protocol, OTA, Diagnostics)");
 
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     if (!adv) {
@@ -663,16 +776,9 @@ void RadioManager::loop() {
   }
   if (!wifiEnabled()) return;
 
-  // Soft-AP HTTP portal / REST (also handles reconnect requests from POST).
+  // Plain HTTP is discovery-only. Setup and management use the secure TCP port.
   g_wifiConfig.loop();
-  if (g_wifiConfig.takeReconnectRequest()) {
-    // Defer slightly so the HTTP response can finish flushing.
-    delay(200);
-    applyWifiCredentials();
-    return;
-  }
-
-  if (softAp_ || WiFi.status() != WL_CONNECTED) return;
+  if (!softAp_ && WiFi.status() != WL_CONNECTED) return;
 
   const bool hadTcpClient = s_tcpClient && s_tcpClient.connected();
   if (!hadTcpClient) {
@@ -681,7 +787,7 @@ void RadioManager::loop() {
       s_tcpClient = nc;
       s_tcpLineBuf.clear();
       s_tcpSecureSession.reset();
-      s_tcpAuthed = !pairingSecurityEnabled() && !controlAuthRequired();
+      s_tcpAuthed = false;
       LOG_WIFI("control client connected");
     }
   }

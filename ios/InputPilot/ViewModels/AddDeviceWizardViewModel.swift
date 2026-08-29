@@ -4,131 +4,46 @@ import SwiftData
 enum AddDeviceWizardStep: Equatable {
     case choosePath
     case securePairing
-    case scanning
     case bleScanning
-    case confirm(ProbedDevice)
     case confirmBLE(BLEDeviceMetadata)
-    case softAPInstructions
-    case softAPJoin
-    case softAPHomeWifi
-    case softAPReconnect
-    case softAPDiscover
-}
-
-struct ProbedDevice: Equatable {
-    let candidate: DiscoveredService
-    let status: DeviceStatus
-    let baseURL: URL
 }
 
 @MainActor
 final class AddDeviceWizardViewModel: ObservableObject {
-    static let softAPBaseURL = URL(string: "http://192.168.4.1/")!
-    static let softAPSSIDPrefix = "InputPilot-"
-
     @Published private(set) var step: AddDeviceWizardStep = .choosePath
     @Published private(set) var candidates: [DiscoveredService] = []
-    @Published private(set) var isProbing = false
     @Published private(set) var isSaving = false
-    @Published private(set) var isJoining = false
-    @Published private(set) var isProvisioning = false
     @Published var errorMessage: String?
     @Published var displayName = ""
-    @Published var apiToken = ""
-
-    @Published var softAPSSID = softAPSSIDPrefix
-    @Published var softAPPassword = ""
     @Published var homeWifiSSID = ""
     @Published var homeWifiPassword = ""
-    @Published var softAPManualHost = ""
-    @Published private(set) var expectedDeviceId: String?
-    @Published private(set) var probedWifiStatus: WifiStatus?
     @Published private(set) var mergeMessage: String?
     @Published private(set) var securelyPairedDeviceId: String?
-
-    /// Saved devices used to hide duplicates from scan results and reject re-adds.
     @Published private(set) var knownDevices = SavedDeviceIndex.empty
 
     private let browser: any BonjourBrowserProtocol
     private let apiClient: any DeviceAPIClientProtocol
-    private let softAPJoiner: any SoftAPJoinerProtocol
 
-    init(
-        browser: any BonjourBrowserProtocol = BonjourBrowser(),
-        apiClient: any DeviceAPIClientProtocol = DeviceAPIClient(),
-        softAPJoiner: any SoftAPJoinerProtocol = SoftAPJoiner()
-    ) {
+    init(browser: any BonjourBrowserProtocol = BonjourBrowser(), apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()) {
         self.browser = browser
         self.apiClient = apiClient
-        self.softAPJoiner = softAPJoiner
     }
 
-    func updateKnownDevices(_ devices: [StoredDevice]) {
-        knownDevices = SavedDeviceIndex(devices: devices)
+    var bleMetadata: BLEDeviceMetadata? {
+        if case let .confirmBLE(metadata) = step { metadata } else { nil }
     }
 
-    var probedDevice: ProbedDevice? {
-        if case let .confirm(device) = step {
-            return device
-        }
-        return nil
-    }
-
-    var bleMetadata: BLEDeviceMetadata? { if case let .confirmBLE(metadata) = step { metadata } else { nil } }
-
-    var showsAuthTokenField: Bool {
-        let id = probedDevice?.status.deviceId ?? bleMetadata?.deviceId
-        let paired = id.map { PairingKeyStore.load(deviceId: $0) != nil } ?? false
-        return !paired && (probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true)
-    }
-
-    /// Candidates for Soft-AP rediscovery (optionally filtered to expected device id).
-    var filteredCandidates: [DiscoveredService] {
-        let base: [DiscoveredService]
-        if let expectedDeviceId {
-            let matches = candidates.filter { $0.deviceId == expectedDeviceId }
-            base = matches.isEmpty ? candidates : matches
-        } else {
-            base = candidates
-        }
-        return base.filter { candidate in
-            guard let existing = knownDevices.match(candidate: candidate) else { return true }
-            return existing.hosts.isEmpty
-        }
-    }
-
-    /// Scan-network list excludes devices already saved.
-    var newCandidates: [DiscoveredService] {
-        candidates.filter { candidate in
-            guard let existing = knownDevices.match(candidate: candidate) else { return true }
-            return existing.hosts.isEmpty
-        }
-    }
-
-    var hasHiddenKnownCandidates: Bool {
-        !candidates.isEmpty && newCandidates.count < candidates.count
-    }
-
-    func chooseScan() {
-        resetSoftAPState()
-        mergeMessage = nil
-        errorMessage = nil
-        step = .scanning
-        startBrowsing()
-    }
+    func updateKnownDevices(_ devices: [StoredDevice]) { knownDevices = SavedDeviceIndex(devices: devices) }
 
     func chooseSecureSetup() {
         browser.stopBrowsing()
-        resetSoftAPState()
-        mergeMessage = nil
         errorMessage = nil
+        mergeMessage = nil
         securelyPairedDeviceId = nil
         step = .securePairing
     }
 
-    func didPairSecurely(deviceId: String) {
-        securelyPairedDeviceId = deviceId.lowercased()
-    }
+    func didPairSecurely(deviceId: String) { securelyPairedDeviceId = deviceId.lowercased() }
 
     func continueSecureSetup() {
         guard securelyPairedDeviceId != nil else {
@@ -138,297 +53,105 @@ final class AddDeviceWizardViewModel: ObservableObject {
         step = .bleScanning
     }
 
-    func chooseBluetooth() { browser.stopBrowsing(); resetSoftAPState(); mergeMessage = nil; errorMessage = nil; step = .bleScanning }
-
     func selectBluetooth(_ metadata: BLEDeviceMetadata) {
-        if let expected = securelyPairedDeviceId, metadata.deviceId.lowercased() != expected {
+        guard let expected = securelyPairedDeviceId, metadata.deviceId.lowercased() == expected else {
             errorMessage = "This is not the InputPilot that was paired by USB."
             return
         }
+        guard metadata.protocolVersion == 2,
+              metadata.capabilities.contains("secure_protocol_v2"),
+              metadata.capabilities.contains("secure_wifi_setup") else {
+            errorMessage = "This firmware is incompatible. Reflash current InputPilot firmware over USB."
+            return
+        }
         if let existing = knownDevices.match(deviceId: metadata.deviceId) {
-            if existing.hasBluetooth {
-                errorMessage = "This device is already configured for Bluetooth."; return
-            }
             displayName = existing.displayName
-            mergeMessage = "Bluetooth will be added to this existing InputPilot."
+            mergeMessage = "The secure transports will be merged with this InputPilot."
         } else {
             displayName = metadata.deviceName.isEmpty ? "InputPilot" : metadata.deviceName
             mergeMessage = nil
         }
-        apiToken = ""; step = .confirmBLE(metadata)
-    }
-
-    func chooseSoftAP() {
-        browser.stopBrowsing()
-        resetSoftAPState()
-        errorMessage = nil
-        step = .softAPInstructions
-    }
-
-    func continueFromSoftAPInstructions() {
-        errorMessage = nil
-        step = .softAPJoin
-    }
-
-    func joinSoftAP() async {
-        isJoining = true
-        errorMessage = nil
-        defer { isJoining = false }
-
-        let trimmedSSID = softAPSSID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSSID.isEmpty else {
-            errorMessage = SoftAPJoinError.invalidSSID.localizedDescription
-            return
-        }
-
-        let password = softAPPassword.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            try await softAPJoiner.join(
-                ssid: trimmedSSID,
-                password: password.isEmpty ? nil : password
-            )
-            await probeDeviceOnSoftAP()
-        } catch let error as SoftAPJoinError where error == .notSupported {
-            errorMessage = error.localizedDescription
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func continueWithoutJoiningSoftAP() async {
-        await probeDeviceOnSoftAP()
-    }
-
-    func probeDeviceOnSoftAP() async {
-        isProbing = true
-        errorMessage = nil
-        defer { isProbing = false }
-
-        do {
-            let wifi = try await apiClient.getWifi(baseURL: Self.softAPBaseURL, token: nil)
-            probedWifiStatus = wifi
-            expectedDeviceId = wifi.deviceId
-            if let apSSID = wifi.apSsid, !apSSID.isEmpty, softAPSSID == Self.softAPSSIDPrefix {
-                softAPSSID = apSSID
-            }
-            step = .softAPHomeWifi
-        } catch {
-            errorMessage = "Could not reach the device at 192.168.4.1. Join the setup Wi‑Fi network and try again."
-        }
-    }
-
-    func provisionHomeWifi() async {
-        let trimmedSSID = homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSSID.isEmpty else {
-            errorMessage = "Home Wi‑Fi network name is required."
-            return
-        }
-
-        isProvisioning = true
-        errorMessage = nil
-        defer { isProvisioning = false }
-
-        do {
-            try await apiClient.provisionWifi(
-                baseURL: Self.softAPBaseURL,
-                ssid: trimmedSSID,
-                password: homeWifiPassword,
-                token: nil
-            )
-            step = .softAPReconnect
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func continueAfterHomeWifiReconnect() {
-        errorMessage = nil
-        step = .softAPDiscover
-        startBrowsing()
-    }
-
-    func probeManualAddress() async {
-        let trimmedHost = softAPManualHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else {
-            errorMessage = "Enter a host or IP address."
-            return
-        }
-
-        let candidate = DiscoveredService(
-            id: "manual-\(trimmedHost)",
-            deviceId: expectedDeviceId,
-            name: trimmedHost,
-            host: trimmedHost,
-            port: 80
-        )
-        await selectCandidate(candidate)
+        step = .confirmBLE(metadata)
     }
 
     func backToChoosePath() {
         browser.stopBrowsing()
-        step = .choosePath
         candidates = []
         errorMessage = nil
-        resetSoftAPState()
+        mergeMessage = nil
         securelyPairedDeviceId = nil
+        step = .choosePath
     }
 
     func backFromConfirm() {
+        browser.stopBrowsing()
+        candidates = []
         errorMessage = nil
         mergeMessage = nil
-        if case .confirmBLE = step { step = .bleScanning; return }
-        if expectedDeviceId != nil {
-            step = .softAPDiscover
-            startBrowsing()
-        } else {
-            step = .scanning
-            startBrowsing()
-        }
-    }
-
-    func backFromSoftAPJoin() {
-        errorMessage = nil
-        step = .softAPInstructions
-    }
-
-    func backFromSoftAPHomeWifi() {
-        errorMessage = nil
-        step = .softAPJoin
-    }
-
-    func backFromSoftAPReconnect() {
-        errorMessage = nil
-        step = .softAPHomeWifi
-    }
-
-    func backFromSoftAPDiscover() {
-        browser.stopBrowsing()
-        errorMessage = nil
-        step = .softAPReconnect
-        candidates = []
+        step = .bleScanning
     }
 
     func cancelWizard() {
         browser.stopBrowsing()
-        step = .choosePath
         candidates = []
         errorMessage = nil
         displayName = ""
-        apiToken = ""
+        homeWifiSSID = ""
+        homeWifiPassword = ""
         mergeMessage = nil
         securelyPairedDeviceId = nil
-        resetSoftAPState()
-    }
-
-    func selectCandidate(_ candidate: DiscoveredService) async {
-        isProbing = true
-        errorMessage = nil
-        defer { isProbing = false }
-
-        if let existing = knownDevices.match(candidate: candidate), !existing.hosts.isEmpty {
-            errorMessage = SavedDeviceIndex.alreadyExistsMessage(displayName: existing.displayName)
-            return
-        }
-
-        guard let baseURL = Self.baseURL(for: candidate) else {
-            errorMessage = "Could not build a URL for this device."
-            return
-        }
-
-        do {
-            let status = try await apiClient.status(baseURL: baseURL, token: nil)
-            if let expectedDeviceId, let deviceId = status.deviceId, deviceId != expectedDeviceId {
-                errorMessage = "This device does not match the one you provisioned."
-                return
-            }
-            if let existing = knownDevices.match(status: status, host: candidate.host) {
-                displayName = existing.displayName
-                mergeMessage = "Wi-Fi will be added to this existing InputPilot."
-            } else {
-                displayName = Self.defaultDisplayName(for: status)
-                mergeMessage = nil
-            }
-            apiToken = ""
-            step = .confirm(ProbedDevice(candidate: candidate, status: status, baseURL: baseURL))
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        step = .choosePath
     }
 
     func saveDevice(context: ModelContext) async throws {
+        guard case let .confirmBLE(metadata) = step else { return }
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
 
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else {
-            errorMessage = "Display name is required."
-            return
-        }
-
-        let trimmedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        let token = trimmedToken.isEmpty ? nil : trimmedToken
-
-        let requiresAuth = probedDevice?.status.authRequired == true || bleMetadata?.authRequired == true
-        let deviceId = probedDevice?.status.deviceId ?? bleMetadata?.deviceId
-        let hasPairingKey = deviceId.map { PairingKeyStore.load(deviceId: $0) != nil } ?? false
-        if securelyPairedDeviceId != nil && !hasPairingKey {
+        let ssid = homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { errorMessage = "Display name is required."; return }
+        guard !ssid.isEmpty else { errorMessage = "Home Wi-Fi network name is required."; return }
+        guard PairingKeyStore.load(deviceId: metadata.deviceId) != nil else {
             errorMessage = "Secure setup requires a valid USB pairing code."
             return
         }
-        if requiresAuth && token == nil && !hasPairingKey {
-            errorMessage = "This device requires an API token."
-            return
+
+        let bluetooth = InputPilotBluetoothManager.session(deviceId: metadata.deviceId)
+        try await bluetooth.setWiFi(ssid: ssid, password: homeWifiPassword)
+        startBrowsing()
+
+        let deadline = Date().addingTimeInterval(45)
+        var verified: (DeviceStatus, DiscoveredService)?
+        while Date() < deadline, verified == nil {
+            for candidate in candidates where candidate.deviceId?.lowercased() == metadata.deviceId.lowercased() {
+                guard let baseURL = DeviceEndpointResolver.baseURL(host: candidate.host, port: candidate.port),
+                      let status = try? await apiClient.status(baseURL: baseURL),
+                      status.deviceId?.lowercased() == metadata.deviceId.lowercased(),
+                      status.protocolVersion == 2,
+                      status.capabilities.contains("secure_protocol_v2") else { continue }
+                let tcp = InputPilotWiFiManager.session(host: candidate.host, deviceId: metadata.deviceId)
+                do {
+                    try await tcp.waitUntilReady(timeout: 5)
+                    verified = (status, candidate)
+                } catch {}
+            }
+            if verified == nil { try? await Task.sleep(for: .milliseconds(500)) }
         }
 
-        if case let .confirm(probed) = step {
-            let repository = DeviceRepository(context: context)
-            _ = try await repository.addFromDiscovery(status: probed.status, fallbackHost: probed.candidate.host, displayName: trimmedName, token: token, api: apiClient)
-        } else if case let .confirmBLE(metadata) = step {
-            if securelyPairedDeviceId != nil && metadata.capabilities.contains("secure_wifi_setup_v1") {
-                let ssid = homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !ssid.isEmpty {
-                    let bluetooth = InputPilotBluetoothManager.session(deviceId: metadata.deviceId, token: nil)
-                    try await bluetooth.setWiFi(ssid: ssid, password: homeWifiPassword)
-                }
-            }
-            let repository = DeviceRepository(context: context)
-            _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName, token: token)
-        } else { return }
-
+        guard let (status, candidate) = verified else {
+            errorMessage = "Wi-Fi was saved, but the same device could not be authenticated on the home network. Check the credentials and retry."
+            return
+        }
+        let repository = DeviceRepository(context: context)
+        _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
+        _ = try await repository.addFromDiscovery(status: status, fallbackHost: candidate.host, displayName: trimmedName)
         browser.stopBrowsing()
     }
 
-    static func baseURL(for candidate: DiscoveredService) -> URL? {
-        DeviceEndpointResolver.baseURL(host: candidate.host, port: candidate.port)
-    }
-
-    static func defaultDisplayName(for status: DeviceStatus) -> String {
-        if let deviceId = status.deviceId, deviceId.count >= 4 {
-            return String(deviceId.suffix(4))
-        }
-        if !status.name.isEmpty {
-            return status.name
-        }
-        return "InputPilot"
-    }
-
     private func startBrowsing() {
-        browser.onUpdate = { [weak self] services in
-            Task { @MainActor in
-                self?.candidates = services
-            }
-        }
+        browser.onUpdate = { [weak self] services in Task { @MainActor in self?.candidates = services } }
         browser.startBrowsing()
-    }
-
-    private func resetSoftAPState() {
-        softAPSSID = Self.softAPSSIDPrefix
-        softAPPassword = ""
-        homeWifiSSID = ""
-        homeWifiPassword = ""
-        softAPManualHost = ""
-        expectedDeviceId = nil
-        probedWifiStatus = nil
     }
 }

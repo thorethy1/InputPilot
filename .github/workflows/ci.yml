@@ -84,59 +84,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  openapi:
-    name: OpenAPI lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: usb-hid-s3
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install OpenAPI validator
-        run: pip install "openapi-spec-validator==0.7.2" "pyyaml==6.0.2"
-
-      - name: Validate OpenAPI document and required paths
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import yaml
-          from openapi_spec_validator import validate
-
-          path = Path("docs/openapi.yaml")
-          doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-          validate(doc)
-          assert isinstance(doc, dict), "root must be a mapping"
-          assert str(doc.get("openapi", "")).startswith("3."), f"expected OpenAPI 3.x, got {doc.get('openapi')!r}"
-          assert "paths" in doc and doc["paths"], "paths must be non-empty"
-          assert "info" in doc and doc["info"].get("title"), "info.title required"
-          required = [
-              "/api/status",
-              "/api/jiggle",
-              "/api/move",
-              "/api/type",
-              "/api/key",
-              "/api/report",
-              "/api/click",
-              "/api/button",
-              "/api/release-all",
-              "/api/wifi",
-              "/api/wifi/clear",
-              "/api/usb",
-          ]
-          missing = [p for p in required if p not in doc["paths"]]
-          assert not missing, f"missing paths: {missing}"
-          print(f"OK: {path} openapi={doc['openapi']} paths={len(doc['paths'])}")
-          PY
-
   ios:
     name: iOS unit tests
     runs-on: macos-26

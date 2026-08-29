@@ -3,12 +3,15 @@
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#include <string>
 
 class BLEDiagnostics {
  public:
   bool begin(NimBLEServer *server);
   void loop(bool otaActive);
   void disconnected();
+  std::string infoJson() const;
+  std::string nextLogJson(uint32_t &cursor) const;
 
  private:
   class InfoCallbacks;

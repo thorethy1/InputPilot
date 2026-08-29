@@ -7,7 +7,6 @@ final class StoredDevice {
     var displayName: String
     var mdnsHost: String
     var staIP: String?
-    var apiToken: String?
     var jiggleEnabled: Bool
     var moveIntervalMs: Int = 30_000
     var clickEnabled: Bool = false
@@ -27,7 +26,6 @@ final class StoredDevice {
         displayName: String,
         mdnsHost: String,
         staIP: String? = nil,
-        apiToken: String? = nil,
         jiggleEnabled: Bool = false,
         moveIntervalMs: Int = 30_000,
         clickEnabled: Bool = false,
@@ -44,7 +42,6 @@ final class StoredDevice {
         self.displayName = displayName
         self.mdnsHost = mdnsHost
         self.staIP = staIP
-        self.apiToken = apiToken
         self.jiggleEnabled = jiggleEnabled
         self.moveIntervalMs = moveIntervalMs
         self.clickEnabled = clickEnabled
@@ -66,7 +63,6 @@ final class StoredDevice {
             displayName: device.displayName,
             mdnsHost: device.mdnsHost,
             staIP: device.staIP,
-            apiToken: device.apiToken,
             jiggleEnabled: device.jiggleEnabled,
             moveIntervalMs: device.moveIntervalMs,
             clickEnabled: device.clickEnabled,
@@ -86,7 +82,6 @@ final class StoredDevice {
             displayName: displayName,
             mdnsHost: mdnsHost,
             staIP: staIP,
-            apiToken: apiToken,
             jiggleEnabled: jiggleEnabled,
             moveIntervalMs: moveIntervalMs,
             clickEnabled: clickEnabled,
@@ -111,7 +106,6 @@ enum DeviceStore {
         if let existing = try context.fetch(descriptor).first {
             if !device.mdnsHost.isEmpty { existing.mdnsHost = device.mdnsHost }
             if let staIP = device.staIP { existing.staIP = staIP }
-            if let apiToken = device.apiToken { existing.apiToken = apiToken }
             existing.jiggleEnabled = device.jiggleEnabled
             existing.moveIntervalMs = device.moveIntervalMs
             existing.clickEnabled = device.clickEnabled
@@ -130,7 +124,7 @@ enum DeviceStore {
 }
 
 enum DeviceMerge {
-    static func wifi(_ status: DeviceStatus, fallbackHost: String, token: String?, into stored: StoredDevice) {
+    static func wifi(_ status: DeviceStatus, fallbackHost: String, into stored: StoredDevice) {
         if let discoveredId = status.deviceId,
            stored.deviceId.caseInsensitiveCompare(discoveredId) != .orderedSame { return }
         if let mdns = status.mdns?.trimmingCharacters(in: .whitespacesAndNewlines), !mdns.isEmpty {
@@ -141,7 +135,6 @@ enum DeviceMerge {
         if let address = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost) {
             stored.staIP = address
         }
-        if let token, !token.isEmpty { stored.apiToken = token }
         stored.jiggleEnabled = status.jiggle
         stored.moveIntervalMs = status.jiggleIntervalMs
         stored.clickEnabled = status.clickEnabled
@@ -154,9 +147,8 @@ enum DeviceMerge {
         stored.lastCapabilitiesUpdate = Date()
     }
 
-    static func bluetooth(_ metadata: BLEDeviceMetadata, token: String?, into stored: StoredDevice) {
+    static func bluetooth(_ metadata: BLEDeviceMetadata, into stored: StoredDevice) {
         guard stored.deviceId.caseInsensitiveCompare(metadata.deviceId) == .orderedSame else { return }
-        if let token, !token.isEmpty { stored.apiToken = token }
         stored.lastSeen = Date()
         stored.firmwareVersion = metadata.firmware
         stored.protocolVersion = metadata.protocolVersion

@@ -31,9 +31,9 @@ bool OTAEngine::start(const OTAStartRequest &request, OTATransportOwner owner) {
   if (active()) return false;
   if (owner_ != OTATransportOwner::None) reset();
   if (owner == OTATransportOwner::None) return fail("invalid_transport");
-  if (!schemaAvailable()) return fail("migration_required");
+  if (!schemaAvailable()) return fail("reflash_required");
   partition_ = esp_ota_get_next_update_partition(nullptr);
-  if (!partition_) return fail("migration_required");
+  if (!partition_) return fail("reflash_required");
   std::string validationError;
   if (!OTAEngineValidation::start(false, request, partition_->size, validationError)) return fail(validationError.c_str());
 

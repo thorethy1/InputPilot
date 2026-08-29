@@ -35,7 +35,7 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned firmware and iOS assets to published GitHub Releases:
 
 - Published releases with a `vMAJOR.MINOR.PATCH` tag trigger it automatically.
-- It validates source version consistency (iOS `MARKETING_VERSION`, OpenAPI doc, CHANGELOG, RELEASE_NOTES, README).
+- It validates source version consistency (iOS `MARKETING_VERSION`, CHANGELOG, RELEASE_NOTES, README).
 - It waits for a successful CI run on the exact tag commit.
 - Assets downloaded from that CI run are validated, renamed, and uploaded as Release assets.
 - The iOS asset is the **unsigned** IPA from CI — identical to `InputPilot-unsigned-${{ github.sha }}` with no provisioning profile or signature. The signed IPA from the `ios-build.yml` workflow is never included in release assets, even if it exists on a previous CI run.

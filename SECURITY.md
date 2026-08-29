@@ -1,61 +1,37 @@
-# Security policy
+# InputPilot security model
 
-## BLE firmware updates
+InputPilot 0.8.11 uses one device identity, one USB-established trust secret and
+one authenticated Secure Protocol v2 across Bluetooth and Wi-Fi/TCP.
 
-BLE OTA uses the same optional `CONTROL_API_TOKEN` session authentication as BLE control; no separate or weaker credential path exists. Tokens are never included in OTA metadata or logs. The device validates declared size, contiguous offsets, target OTA slot, complete byte count, and SHA-256 before selecting a boot partition. Abort, timeout, disconnect, or verification failure leaves the running firmware selected. SHA-256 detects corruption but is not a cryptographic firmware signature.
+## Trust and sessions
 
-## v0.8.6 security development
+- Initial trust is created only through the physical USB HID pairing exchange.
+- The pairing secret is stored in firmware NVS and the iOS Keychain.
+- BLE and Wi-Fi/TCP perform a mutual challenge/response handshake before any
+  sensitive command is accepted.
+- Direction-specific AES-256-GCM keys and monotonic counters protect every
+  application record. Replayed, modified or unauthenticated records are rejected.
+- A failed handshake never selects another protocol or an unencrypted endpoint.
 
-The USB-authenticated, key-based replacement for the compile-time token is
-specified in [`docs/SECURE_PAIRING_DESIGN_0.8.6.md`](docs/SECURE_PAIRING_DESIGN_0.8.6.md).
-The first v0.8.6 development slice is intentionally a non-enforcing hardware
-input test. Until its rollout gates are complete, the default posture below is
-still authoritative.
+HTTP and Bonjour expose only the minimum metadata required to discover and
+identify a device. They cannot provision Wi-Fi, control HID, change settings,
+read diagnostics, manage the device or install firmware.
 
-## What this project does
+## OTA
 
-`usb-hid-s3` presents itself to a host PC as a **USB mouse and keyboard**, and
-can also accept control commands over **USB-CDC serial**, **WiFi HTTP/TCP**, and
-**BLE UART**. Anyone who can reach those surfaces can move the cursor and inject
-keystrokes on the attached computer.
+BLE and Wi-Fi OTA use the established Secure Protocol session. The firmware
+also validates product, board, protocol/schema, declared size, contiguous
+offsets and SHA-256 before selecting the new boot partition. Abort, timeout,
+disconnect or validation failure leaves the running image selected.
 
-Treat the device like a physical keyboard you left plugged in.
+SHA-256 detects transfer corruption; the current release format does not yet
+provide publisher signatures. Only install firmware obtained from the official
+InputPilot release channel.
 
-## Default network posture (important)
+## Recovery
 
-Out of the box:
+Clearing trust, changing hardware or using pre-v2 firmware requires USB pairing
+or a full USB reflash. There is intentionally no compatibility or insecure mode.
 
-| Surface | Default |
-|---------|---------|
-| Soft-AP `usb-hid-s3-XXXX` (per-device) | **Open** (no password) while provisioning |
-| HTTP REST (`:80`) | **No authentication** |
-| TCP line control (`:3333`) | **No authentication** |
-| BLE NUS control | Pairing/bonding not required by default |
-| USB HID / CDC | Available to the host that enumerates the device |
-
-Anyone on the Soft-AP or the same LAN can call the REST/TCP APIs and type or
-move the mouse on the host PC. Use only on trusted networks, or harden before
-exposing the device beyond a lab.
-
-`CONTROL_API_TOKEN = ""` is the intentional default and means that REST, TCP,
-and BLE control are unauthenticated. For normal use, prefer a trusted LAN, set
-`CONTROL_API_TOKEN`, and configure `WIFI_AP_PASS` when an open provisioning AP
-is not acceptable. TCP and BLE require an explicit `auth ok` response before
-the iOS app enables HID control. The token is an application-level gate; BLE is
-not cryptographically paired or bonded by this project.
-
-## USB identity
-
-The firmware uses hobbyist USB IDs (`VID 0xCAFE`, `PID 0x4001`). These are **not**
-USB-IF assigned IDs. Do not ship commercial products with them; collisions are
-possible in unusual environments.
-
-## Reporting a vulnerability
-
-Please open a **private** security advisory on GitHub (Security → Advisories →
-New draft advisory), or contact the repository owner. Do not file a public issue
-for exploitable flaws that expand remote HID injection beyond the documented
-defaults.
-
-Include: firmware version (`version` command / `/api/status`), board model, and
-steps to reproduce.
+Report vulnerabilities privately to the maintainers and do not include pairing
+secrets, Wi-Fi credentials, typed content or diagnostic exports in public issues.

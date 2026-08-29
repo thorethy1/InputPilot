@@ -7,11 +7,11 @@ void tearDown() {}
 void test_start_metadata_parses() {
   OTAStartRequest request; std::string error;
   TEST_ASSERT_TRUE(OTAProtocol::parseStart(
-      "START protocol=1 version=0.8.1 size=1271270 sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "START protocol=2 version=0.8.11 size=1271270 sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       request, error));
-  TEST_ASSERT_EQUAL_UINT32(1, request.protocol);
+  TEST_ASSERT_EQUAL_UINT32(2, request.protocol);
   TEST_ASSERT_EQUAL_UINT32(1271270, request.size);
-  TEST_ASSERT_EQUAL_STRING("0.8.1", request.version.c_str());
+  TEST_ASSERT_EQUAL_STRING("0.8.11", request.version.c_str());
 }
 
 void test_invalid_start_is_rejected() {

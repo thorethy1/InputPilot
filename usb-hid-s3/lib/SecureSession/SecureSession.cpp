@@ -9,7 +9,8 @@
 namespace {
 constexpr char ClientProofLabel[] = "IPSEC1-C";
 constexpr char ServerProofLabel[] = "IPSEC1-S";
-constexpr char KdfInfo[] = "InputPilot secure channel v1";
+constexpr char ClientKdfInfo[] = "InputPilot secure protocol v2 client";
+constexpr char ServerKdfInfo[] = "InputPilot secure protocol v2 server";
 
 std::string hex(const uint8_t *data, size_t length) {
   static constexpr char digits[] = "0123456789ABCDEF";
@@ -59,9 +60,11 @@ void append(std::string &target, const void *bytes, size_t length) {
 void SecureSession::reset() {
   memset(secret_, 0, sizeof(secret_));
   memset(serverNonce_, 0, sizeof(serverNonce_));
-  memset(key_, 0, sizeof(key_));
+  memset(receiveKey_, 0, sizeof(receiveKey_));
+  memset(sendKey_, 0, sizeof(sendKey_));
   memset(deviceId_, 0, sizeof(deviceId_));
   receiveCounter_ = 0;
+  sendCounter_ = 0;
   started_ = false;
   established_ = false;
 }
@@ -109,9 +112,13 @@ bool SecureSession::acceptHello(const std::string &line, std::string &serverRepl
   memcpy(salt, serverNonce_, NonceSize);
   memcpy(salt + NonceSize, clientNonce, NonceSize);
   const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  if (!info || mbedtls_hkdf(info, salt, sizeof(salt), secret_, sizeof(secret_),
-                            reinterpret_cast<const uint8_t *>(KdfInfo),
-                            strlen(KdfInfo), key_, sizeof(key_)) != 0) return false;
+  if (!info ||
+      mbedtls_hkdf(info, salt, sizeof(salt), secret_, sizeof(secret_),
+                   reinterpret_cast<const uint8_t *>(ClientKdfInfo),
+                   strlen(ClientKdfInfo), receiveKey_, sizeof(receiveKey_)) != 0 ||
+      mbedtls_hkdf(info, salt, sizeof(salt), secret_, sizeof(secret_),
+                   reinterpret_cast<const uint8_t *>(ServerKdfInfo),
+                   strlen(ServerKdfInfo), sendKey_, sizeof(sendKey_)) != 0) return false;
 
   transcript.replace(0, strlen(ClientProofLabel), ServerProofLabel);
   uint8_t serverProof[32];
@@ -120,6 +127,7 @@ bool SecureSession::acceptHello(const std::string &line, std::string &serverRepl
             serverProof)) return false;
   serverReply = "secure ready " + hex(serverProof, sizeof(serverProof));
   receiveCounter_ = 0;
+  sendCounter_ = 0;
   established_ = true;
   memset(clientNonce, 0, sizeof(clientNonce));
   memset(expectedProof, 0, sizeof(expectedProof));
@@ -131,12 +139,12 @@ bool SecureSession::decrypt(uint64_t counter, const uint8_t *ciphertext,
                             uint8_t *plaintext) {
   if (!established_ || counter <= receiveCounter_ || !ciphertext || !tag || !plaintext)
     return false;
-  uint8_t nonce[12] = {'I', 'P', 'C', 1};
+  uint8_t nonce[12] = {'I', 'P', 'C', 2};
   for (size_t i = 0; i < 8; ++i)
     nonce[4 + i] = static_cast<uint8_t>(counter >> ((7 - i) * 8));
   mbedtls_gcm_context context;
   mbedtls_gcm_init(&context);
-  int result = mbedtls_gcm_setkey(&context, MBEDTLS_CIPHER_ID_AES, key_, 256);
+  int result = mbedtls_gcm_setkey(&context, MBEDTLS_CIPHER_ID_AES, receiveKey_, 256);
   if (result == 0) {
     result = mbedtls_gcm_auth_decrypt(
         &context, length, nonce, sizeof(nonce),
@@ -146,6 +154,46 @@ bool SecureSession::decrypt(uint64_t counter, const uint8_t *ciphertext,
   mbedtls_gcm_free(&context);
   if (result != 0) return false;
   receiveCounter_ = counter;
+  return true;
+}
+
+bool SecureSession::encryptBinary(const uint8_t *plaintext, size_t plaintextLength,
+                                  uint8_t *record, size_t recordCapacity,
+                                  size_t &recordLength) {
+  recordLength = 0;
+  if (!established_ || !plaintext || !record ||
+      recordCapacity < 1 + 8 + plaintextLength + TagSize ||
+      sendCounter_ == UINT64_MAX) return false;
+  const uint64_t counter = ++sendCounter_;
+  record[0] = BinaryVersion;
+  for (size_t i = 0; i < 8; ++i)
+    record[1 + i] = static_cast<uint8_t>(counter >> ((7 - i) * 8));
+  uint8_t nonce[12] = {'I', 'P', 'S', 2};
+  memcpy(nonce + 4, record + 1, 8);
+  mbedtls_gcm_context context;
+  mbedtls_gcm_init(&context);
+  int result = mbedtls_gcm_setkey(&context, MBEDTLS_CIPHER_ID_AES, sendKey_, 256);
+  if (result == 0) {
+    result = mbedtls_gcm_crypt_and_tag(
+        &context, MBEDTLS_GCM_ENCRYPT, plaintextLength, nonce, sizeof(nonce),
+        reinterpret_cast<const uint8_t *>(deviceId_), 12, plaintext,
+        record + 9, TagSize, record + 9 + plaintextLength);
+  }
+  mbedtls_gcm_free(&context);
+  if (result != 0) return false;
+  recordLength = 1 + 8 + plaintextLength + TagSize;
+  return true;
+}
+
+bool SecureSession::encryptText(const std::string &plaintext, std::string &line) {
+  std::string record(1 + 8 + plaintext.size() + TagSize, '\0');
+  size_t recordLength = 0;
+  if (!encryptBinary(reinterpret_cast<const uint8_t *>(plaintext.data()),
+                     plaintext.size(), reinterpret_cast<uint8_t *>(record.data()),
+                     record.size(), recordLength)) return false;
+  line = "secure data " + hex(reinterpret_cast<const uint8_t *>(record.data() + 1), 8) +
+         " " + hex(reinterpret_cast<const uint8_t *>(record.data() + 9), plaintext.size()) +
+         " " + hex(reinterpret_cast<const uint8_t *>(record.data() + 9 + plaintext.size()), TagSize);
   return true;
 }
 

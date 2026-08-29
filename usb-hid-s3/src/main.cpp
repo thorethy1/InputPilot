@@ -42,7 +42,7 @@
 // valid ESP32 image built for another product or board before activation.
 extern "C" const char inputPilotFirmwareMetadata[] __attribute__((used)) =
     FW_METADATA_PREFIX "product=" FW_PRODUCT ";board=" FW_BOARD ";version=" FW_VERSION
-    ";protocol=1;otaSchema=1;commit=" FW_GIT_COMMIT ";";
+    ";protocol=2;otaSchema=1;commit=" FW_GIT_COMMIT ";";
 
 // ---------------------------------------------------------------------------
 // USB devices (core stack). ARDUINO_USB_CDC_ON_BOOT=0, so the core does NOT
@@ -517,7 +517,6 @@ void recordHIDInput(const char *source, uint8_t type, size_t length) {
   portENTER_CRITICAL(&g_hidStatsMux);
   if (source && strncmp(source, "ble", 3) == 0) { ++g_hidStats.rxBle; g_hidStats.lastBleRxLength = length; g_hidStats.lastBleRxType = type; }
   else if (source && strcmp(source, "wifi") == 0) ++g_hidStats.rxTcp;
-  else if (source && strcmp(source, "http") == 0) ++g_hidStats.rxRest;
   else if (source && strcmp(source, "serial") == 0) ++g_hidStats.rxSerial;
   ++g_hidStats.decoded;
   portEXIT_CRITICAL(&g_hidStatsMux);
@@ -595,7 +594,7 @@ void handleCommandLine(const std::string &line, const char *source) {
   }
   if (c.type != CmdType::None)
     // Never mirror raw commands into diagnostics: they may contain typed text,
-    // Wi-Fi passwords, or authentication tokens.
+    // Wi-Fi passwords, or pairing secrets.
     LOG_CMD_DEBUG("src=%s type=%u", source ? source : "?",
                   static_cast<unsigned>(c.type));
   switch (c.type) {

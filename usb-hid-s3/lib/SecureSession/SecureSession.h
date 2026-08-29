@@ -18,6 +18,10 @@ public:
              std::string &challengeReply);
   bool acceptHello(const std::string &line, std::string &serverReply);
   bool decryptText(const std::string &line, std::string &plaintext);
+  bool encryptText(const std::string &plaintext, std::string &line);
+  bool encryptBinary(const uint8_t *plaintext, size_t plaintextLength,
+                     uint8_t *record, size_t recordCapacity,
+                     size_t &recordLength);
   bool decryptBinary(const uint8_t *record, size_t recordLength,
                      uint8_t *plaintext, size_t plaintextCapacity,
                      size_t &plaintextLength);
@@ -29,9 +33,11 @@ private:
 
   uint8_t secret_[SecretSize]{};
   uint8_t serverNonce_[NonceSize]{};
-  uint8_t key_[KeySize]{};
+  uint8_t receiveKey_[KeySize]{};
+  uint8_t sendKey_[KeySize]{};
   char deviceId_[13]{};
   uint64_t receiveCounter_ = 0;
+  uint64_t sendCounter_ = 0;
   bool started_ = false;
   bool established_ = false;
 };

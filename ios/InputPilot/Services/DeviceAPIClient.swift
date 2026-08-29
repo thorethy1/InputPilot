@@ -1,172 +1,37 @@
 import Foundation
 
 enum DeviceAPIError: Error, Equatable, LocalizedError {
-    case invalidURL
     case invalidResponse
     case httpStatus(Int)
     case decodingFailed(String?)
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL:
-            return "Could not build a URL for this device."
-        case .invalidResponse:
-            return "The device returned an invalid response."
-        case let .httpStatus(code):
-            return "Device HTTP error (\(code))."
-        case let .decodingFailed(detail):
-            if let detail, !detail.isEmpty {
-                return "Could not read device status: \(detail)"
-            }
-            return "Could not read device status JSON."
+        case .invalidResponse: "Invalid response from InputPilot."
+        case let .httpStatus(code): "InputPilot discovery failed (HTTP \(code))."
+        case let .decodingFailed(snippet): "Invalid InputPilot discovery response\(snippet.map { ": \($0)" } ?? ".")"
         }
     }
 }
 
+// Plain HTTP is intentionally limited to public discovery metadata. Feature
+// clients must use the authenticated Secure Protocol v2 transports.
 protocol DeviceAPIClientProtocol: Sendable {
-    func status(baseURL: URL, token: String?) async throws -> DeviceStatus
-    func setJiggle(baseURL: URL, enabled: Bool, token: String?) async throws
-    func keepAwake(baseURL: URL, token: String?) async throws -> KeepAwakeSettings
-    func setKeepAwake(baseURL: URL, settings: KeepAwakeSettings, token: String?) async throws
-    func getWifi(baseURL: URL, token: String?) async throws -> WifiStatus
-    func provisionWifi(baseURL: URL, ssid: String, password: String, token: String?) async throws
-    func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity
-    func setUSBIdentity(baseURL: URL, identity: USBIdentityUpdate, token: String?) async throws
-    func resetUSBIdentity(baseURL: URL, token: String?) async throws
+    func status(baseURL: URL) async throws -> DeviceStatus
 }
 
 struct DeviceAPIClient: DeviceAPIClientProtocol {
     private let session: URLSession
-    private let decoder: JSONDecoder
-    private let encoder: JSONEncoder
+    init(session: URLSession = .shared) { self.session = session }
 
-    init(session: URLSession = .shared) {
-        self.session = session
-        self.decoder = JSONDecoder()
-        self.encoder = JSONEncoder()
-    }
-
-    func status(baseURL: URL, token: String?) async throws -> DeviceStatus {
-        let url = baseURL.appendingPathComponent("api/status")
-        let request = authorizedRequest(url: url, method: "GET", token: token)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response)
-        do {
-            return try decoder.decode(DeviceStatus.self, from: data)
-        } catch {
-            let snippet = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let clipped = snippet.map { String($0.prefix(180)) }
-            throw DeviceAPIError.decodingFailed(clipped)
-        }
-    }
-
-    func setJiggle(baseURL: URL, enabled: Bool, token: String?) async throws {
-        let url = baseURL.appendingPathComponent("api/jiggle")
-        var request = authorizedRequest(url: url, method: "POST", token: token)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(JiggleRequest(enabled: enabled))
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response)
-    }
-
-    func getWifi(baseURL: URL, token: String?) async throws -> WifiStatus {
-        let url = baseURL.appendingPathComponent("api/wifi")
-        let request = authorizedRequest(url: url, method: "GET", token: token)
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response)
-        do {
-            return try decoder.decode(WifiStatus.self, from: data)
-        } catch {
-            let snippet = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let clipped = snippet.map { String($0.prefix(180)) }
-            throw DeviceAPIError.decodingFailed(clipped)
-        }
-    }
-
-    func provisionWifi(baseURL: URL, ssid: String, password: String, token: String?) async throws {
-        let url = baseURL.appendingPathComponent("api/wifi")
-        var request = authorizedRequest(url: url, method: "POST", token: token)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(WifiProvisionRequest(ssid: ssid, password: password))
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response)
-    }
-
-    func keepAwake(baseURL: URL, token: String?) async throws -> KeepAwakeSettings {
-        let request = authorizedRequest(
-            url: baseURL.appendingPathComponent("api/keep-awake"),
-            method: "GET",
-            token: token
-        )
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response)
-        return try decoder.decode(KeepAwakeSettings.self, from: data)
-    }
-
-    func setKeepAwake(baseURL: URL, settings: KeepAwakeSettings, token: String?) async throws {
-        var request = authorizedRequest(
-            url: baseURL.appendingPathComponent("api/keep-awake"),
-            method: "POST",
-            token: token
-        )
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(settings)
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response)
-    }
-
-    func usbIdentity(baseURL: URL, token: String?) async throws -> USBIdentity {
-        let request = authorizedRequest(
-            url: baseURL.appendingPathComponent("api/usb"),
-            method: "GET",
-            token: token
-        )
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response)
-        return try decoder.decode(USBIdentity.self, from: data)
-    }
-
-    func setUSBIdentity(baseURL: URL, identity: USBIdentityUpdate, token: String?) async throws {
-        var request = authorizedRequest(
-            url: baseURL.appendingPathComponent("api/usb"),
-            method: "POST",
-            token: token
-        )
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(identity)
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response)
-    }
-
-    func resetUSBIdentity(baseURL: URL, token: String?) async throws {
-        var request = authorizedRequest(
-            url: baseURL.appendingPathComponent("api/usb"),
-            method: "POST",
-            token: token
-        )
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(USBIdentityReset())
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response)
-    }
-
-    private func authorizedRequest(url: URL, method: String, token: String?) -> URLRequest {
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        if let token, !token.isEmpty {
-            request.setValue(token, forHTTPHeaderField: "X-API-Token")
-        }
-        return request
-    }
-
-    private func validate(response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse else {
-            throw DeviceAPIError.invalidResponse
-        }
-        guard (200 ... 299).contains(http.statusCode) else {
-            throw DeviceAPIError.httpStatus(http.statusCode)
+    func status(baseURL: URL) async throws -> DeviceStatus {
+        let (data, response) = try await session.data(from: baseURL.appendingPathComponent("api/status"))
+        guard let http = response as? HTTPURLResponse else { throw DeviceAPIError.invalidResponse }
+        guard (200 ... 299).contains(http.statusCode) else { throw DeviceAPIError.httpStatus(http.statusCode) }
+        do { return try JSONDecoder().decode(DeviceStatus.self, from: data) }
+        catch {
+            let snippet = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw DeviceAPIError.decodingFailed(snippet.map { String($0.prefix(180)) })
         }
     }
 }

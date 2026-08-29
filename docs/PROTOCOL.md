@@ -1,133 +1,85 @@
-# InputPilot HID Control Protocol v1
+# InputPilot Secure Protocol v2
 
-This protocol carries semantic HID events from a trusted phone to the ESP32-S3. The firmware turns them into USB HID reports; it never captures input from the attached computer. BLE and persistent TCP share the encrypted command sink. REST remains available only to unpaired legacy installations and for minimal paired-device discovery.
+InputPilot has one device identity, one USB-established trust secret and one
+application protocol. BLE and Wi-Fi are transports for that protocol; neither
+transport grants access merely because a link or socket is connected.
 
-## Security and discovery
+## Lifecycle
 
-Paired v0.8.7 devices use the secure channel described below and reject legacy plaintext control. `CONTROL_API_TOKEN` remains an upgrade-only option for devices that have not yet been paired. It authenticates but does not encrypt legacy traffic.
+1. Public BLE manufacturer data and mDNS/HTTP discovery expose only product,
+   firmware/protocol versions, the 12-hex device ID and secure TCP port.
+2. Holding BOOT while connected over USB HID rotates a random 128-bit secret
+   and types an `IPPAIR1` frame. Firmware invalidates every active session.
+3. A transport starts `secure begin`; the device returns an authenticated
+   nonce challenge; the client proves the USB secret and device ID.
+4. HKDF-SHA-256 derives separate client-to-device and device-to-client
+   AES-256-GCM keys. Every record has a strictly increasing 64-bit counter.
+5. Setup, HID control, settings, diagnostics, management and OTA are accepted
+   only while that concrete transport session is established.
 
-The firmware advertises `_http._tcp` over mDNS and the BLE services below. `GET /api/status` and BLE OTA Status both report protocol and capabilities, so BLE-only clients do not depend on REST.
+There is no token authentication, plaintext control, open provisioning write,
+or compatibility negotiation. Protocol versions other than 2 require a manual
+firmware reflash.
 
-## Semantic events
+## Handshake and records
 
-| Event | Text/TCP command | REST |
-|---|---|---|
-| Mouse move | `move <dx> <dy>` | `POST /api/move` |
-| Scroll | `move 0 0 <delta>` | `POST /api/move` |
-| Button down/up | `button <left/right/middle> <down/up>` | `POST /api/button` |
-| Click | `click <button>` | `POST /api/click` |
-| Text | `type <UTF-8 text>` | `POST /api/type` |
-| Key/combo | `key <name[+name...]>` | `POST /api/key` |
-| Layout-resolved key | `report <modifiers:u8> <usage:u8>` | `POST /api/report` |
-| Release all | `release all` | `POST /api/release-all` |
+The handshake is line framed on TCP and UTF-8 framed on the BLE Control
+characteristic:
 
-## Keep Awake v2
+- client: `secure begin`
+- device: `secure challenge 1 <device-id> <server-nonce-hex>`
+- client: `secure hello <client-nonce-hex> <client-proof-hex>`
+- device: `secure ready <server-proof-hex>`
 
-Firmware capability `keep_awake_v2` means movement and clicking are independent,
-persistent schedules. Both continue without a connected client and restore from
-NVS after restart. Valid intervals are 5,000 through 3,600,000 milliseconds.
+Proofs are HMAC-SHA-256 over the direction label (`IPSEC1-C` or `IPSEC1-S`),
+device ID and both nonces. The version-1 handshake spelling is retained only as
+the trust bootstrap grammar; it does not indicate protocol compatibility.
 
-| Setting | BLE/TCP text command | REST |
-|---|---|---|
-| Movement enabled | `jiggle on\|off` | `POST /api/keep-awake` |
-| Movement interval | `jiggle interval <ms>` | `POST /api/keep-awake` |
-| Click enabled | `autoclick on\|off` | `POST /api/keep-awake` |
-| Click interval | `autoclick interval <ms>` | `POST /api/keep-awake` |
+HKDF salt is `server_nonce || client_nonce`. Info is
+`InputPilot secure protocol v2 client` for client-to-device and
+`InputPilot secure protocol v2 server` for device-to-client.
 
-`GET /api/keep-awake` returns `move_enabled`, `move_interval_ms`,
-`click_enabled`, and `click_interval_ms`. `/api/jiggle` remains compatible with
-older clients and changes only movement enablement.
+Binary records are `0xA1 || counter_be64 || ciphertext || tag_128`. TCP renders
+the same fields as `secure data <counter> <ciphertext> <tag>`. Client nonces are
+`IPC || 0x02 || counter`; server nonces are `IPS || 0x02 || counter`. The
+lowercase device ID is AES-GCM additional authenticated data. Replay, invalid
+tag, wrong identity and out-of-order records are rejected.
 
-## Secure pairing and encrypted control
+## BLE mapping
 
-Capability `secure_channel_v1` indicates v0.8.7-or-newer pairing and encrypted control.
-The `IPPAIR1` USB frame carries a 128-bit credential associated with the
-12-character device ID. iOS stores it in Keychain; firmware stores it in NVS.
+The Secure Protocol service is `7d9f0001-4f4d-4f56-4552-484944000001`:
 
-BLE and TCP start with `secure begin`. Firmware returns
-`secure challenge 1 <device-id> <server-nonce>`. The app replies with
-`secure hello <client-nonce> <hmac>`, and firmware confirms with
-`secure ready <hmac>`. HMAC-SHA-256 covers the protocol direction, device ID,
-and both nonces. HKDF-SHA-256 with both nonces as salt and
-`InputPilot secure channel v1` as info derives the AES-256-GCM key.
-
-Binary BLE records are `0xA1 || counter_be64 || ciphertext || tag_128`. TCP uses
-the equivalent hexadecimal `secure data` line. The AES-GCM nonce is
-`IPC || 0x01 || counter_be64`, and the lowercase device ID is authenticated
-additional data. Counters must increase strictly within a session.
-Capability `secure_wifi_setup_v1` adds an authenticated BLE management payload.
-Inside an encrypted binary record it is `0xFE || 0x01 || ssid_length:u8 ||
-password_length:u8 || ssid_utf8 || password_utf8`. Firmware accepts this marker
-only after decrypting a paired session. The compact length-prefixed form fits a
-maximum 32-byte SSID and 63-byte password in one common iOS ATT write and
-preserves spaces without placing credentials on the legacy text channel.
-Capability `secure_usb_identity_v1` adds two more encrypted management records:
-`0xFE || 0x02` restores USB defaults, while
-`0xFE || 0x03 || vid_le16 || pid_le16 || product_length:u8 ||
-serial_length:u8 || product_ascii || serial_ascii` saves a validated USB
-identity. Both operations schedule a restart so USB re-enumerates; the default
-serial remains the stable 12-character MAC-derived device ID.
-After normal USB enumeration, holding BOOT for two seconds types a fixed-length
-`IPPAIR1` frame through USB HID. The frame carries device ID, a fresh 128-bit
-hexadecimal pairing credential, and a corruption checksum. Firmware omits the
-credential from logs. See `docs/SECURE_PAIRING_DESIGN_0.8.6.md` for the staged
-enforcement design.
-
-TCP listens on port 3333 and is persistent. Handshake and encrypted records are UTF-8 lines ending in LF. A disconnect clears the session key and releases all held keys, modifiers, and mouse buttons.
-
-BLE OTA control and data writes are copied into bounded FreeRTOS queues by the
-NimBLE callbacks. Partition erase, flash writes, hashing, validation, and boot
-selection run from the firmware loop instead of the Bluetooth host task. The
-receiver advertises a 4 KiB acknowledgement window; clients must stop sending
-when unacknowledged bytes reach that window. iOS uses a paced 128-byte bootstrap
-mode when the installed receiver is older than 0.8.10.
-
-`report` is the v0.6 layout boundary. The client maps each Unicode character for the selected host layout to a USB HID usage and modifier byte (including right Alt/AltGr bit `0x40`), then sends one report. The firmware presses and releases that report; it does not interpret UTF-8 as HID key codes. Legacy `type` and `key` remain supported. Multiline and long input is emitted as ordered per-character reports (newline becomes Enter), so neither TCP line framing nor BLE MTU splits UTF-8.
-
-## BLE GATT
-
-The primary service UUID is `7d9f0001-4f4d-4f56-4552-484944000001`.
-
-| Characteristic | UUID suffix | Properties | Use |
-|---|---:|---|---|
-| Control | `0002` | Write / Write Without Response | release-all, ping |
-| Mouse | `0003` | Write / Write Without Response | move, scroll, buttons |
-| Keyboard | `0004` | Write / Write Without Response | text, keys, combos |
-| Status | `0005` | Read / Notify | protocol status |
-
-The Nordic UART Service remains available for 0.4.x-compatible text commands and authentication. Authentication is written to NUS RX only after NUS TX notifications are enabled; its confirmation arrives on NUS TX. Integer fields are little-endian. Every binary frame begins with protocol version `0x01`, followed by type and payload:
-
-| Type | Value | Payload |
+| Characteristic | Suffix | Purpose |
 |---|---:|---|
-| MouseMove | `01` | `dx:i16, dy:i16` |
-| MouseScroll | `02` | `delta:i16` |
-| MouseButtonDown | `03` | `button:u8` |
-| MouseButtonUp | `04` | `button:u8` |
-| MouseClick | `05` | `button:u8` |
-| KeyboardText | `10` | UTF-8 bytes |
-| KeyboardKey | `11` | UTF-8 key name |
-| KeyboardCombo | `12` | UTF-8 `+`-separated names |
-| KeyboardReport | `13` | `modifiers:u8, usage:u8` |
-| ReleaseAll | `20` | none |
-| Ping | `7f` | none |
+| Control | `0002` | handshake and encrypted protocol records |
+| Status | `0005` | handshake replies and encrypted-link status |
 
-Buttons are `0=left`, `1=right`, `2=middle`. Frames exceeding the negotiated BLE MTU must be split at the semantic-event layer; long text and large macro streams should use TCP. Invalid versions, lengths, types, buttons, or unauthenticated binary events are rejected.
+Both require BLE link encryption for access. Application authentication is
+still mandatory. Separate OTA data/status characteristics remain for BLE flow
+control, but every OTA control/data write is a record from the same session.
+Diagnostics characteristics require the same authenticated connection.
 
-The manufacturer-data payload is UTF-8 `IP<device_id>`. Clients compare the complete normalized ID and must not connect to the first device merely sharing the service UUID. Repeated advertisements are deduplicated by device ID. Older firmware without this identity is still usable over TCP/REST, but cannot be selected safely by BLE when multiple devices are present.
+## Wi-Fi mapping
 
-## Capabilities
+TCP port 3333 carries the handshake and encrypted records on both SoftAP and
+station networks. HTTP port 80 is read-only discovery. The app recognizes a
+device after provisioning by device ID, then must successfully authenticate on
+TCP before saving setup.
 
-Protocol v1 firmware reports only implemented features: `mouse_move`, `mouse_click`, `mouse_button_state`, `mouse_scroll`, `keyboard_type`, `keyboard_key`, `keyboard_layout`, `release_all`, `ble_control`, `tcp_control`, `rest_control`, and `protocol_v1`. Clients treat an absent/empty list as legacy capability information; when a non-empty list is present they disable unsupported controls rather than sending them blindly.
+Wi-Fi OTA uses encrypted commands `START`, `DATA`, `FINISH`, and `ABORT`.
+Firmware bytes therefore never pass through an HTTP upload endpoint. BLE uses
+the same OTA engine, metadata validation, SHA-256 verification and exclusive
+transport ownership.
 
-## Transport selection
+## Session ownership and recovery
 
-Automatic mode prefers BLE for latency-sensitive events and TCP for long text or macro streams; REST is the management/fallback path. `Prefer Bluetooth`, `Prefer Wi-Fi`, `Bluetooth Only`, and `Wi-Fi Only` constrain this order. A drag, keyboard sequence, text send, preset, or macro leases one ready transport for its ordered lifetime. Loss of that transport aborts the sequence and attempts release-all; failover is allowed only for a later independent sequence.
-# BLE OTA protocol v1
-
-InputPilot extends its existing NimBLE server with service `7d9f1001-4f4d-4f56-4552-484944000001` and Control (`...1002`, write-with-response), Data (`...1003`, write-without-response), and Status (`...1004`, read/notify) characteristics. Status is readable before authentication for onboarding and contains `product`, `board`, `deviceId`, `deviceName`, `firmware`, `protocol`, `otaSchema`, `capabilities`, and `authRequired`, plus OTA state/progress fields. The existing NUS authentication command must succeed before Control or Data is accepted.
-
-The client writes `START protocol=1 version=<semver> size=<bytes> sha256=<64 lowercase hex>` to Control. The device validates OTA schema, target slot, protocol, size, and authentication, calls `esp_ota_begin`, then notifies `READY` with `maxChunk` and `windowSize`. Each Data value begins with a four-byte little-endian absolute offset followed by image bytes. Offsets must be contiguous; Status emits ACKs containing the durable received offset. End-of-file is determined only by the declared size and explicit `FINISH`, never by a short BLE packet.
-
-On FINISH the device verifies byte count and streaming SHA-256, parses embedded InputPilot firmware metadata, and rejects a wrong product, board, protocol, schema, or target version. It then calls `esp_ota_end`, and only after every validation succeeds calls `esp_ota_set_boot_partition`. Status transitions through `VERIFYING`, `INSTALLING`, `SUCCESS`, and `REBOOTING`. `ABORT`, disconnect, timeout, write error, invalid offset, metadata mismatch, or checksum mismatch calls `esp_ota_abort` and leaves the installed partition active. Partial-transfer resume is not part of protocol v1.
-
-SHA-256 supplies transport/file integrity, not cryptographic signing or publisher authenticity.
+- One BLE manager owns the CoreBluetooth connection per device ID.
+- Metadata, controls, diagnostics and OTA lease that shared connection.
+- Disconnect, credential rotation or authentication failure clears keys,
+  counters, queued writes and held HID state.
+- USB trust rotation also clears stored BLE bonds; reconnect creates a fresh
+  encrypted link before the new application session authenticates.
+- A feature is ready only after application authentication, not GATT discovery,
+  BLE bonding or TCP connection.
+- Automatic transport selection considers only authenticated ready sessions.
+  It never introduces a less secure transport.

@@ -39,7 +39,7 @@ struct HIDEvent {
 };
 
 struct HIDDiagnosticsSnapshot {
-  uint32_t rxBle = 0, rxTcp = 0, rxRest = 0, rxSerial = 0;
+  uint32_t rxBle = 0, rxTcp = 0, rxSerial = 0;
   uint32_t decoded = 0, decodeErrors = 0, queued = 0, queueRejected = 0;
   uint32_t executed = 0, executeFailed = 0, mouseExecuted = 0, keyboardExecuted = 0;
   uint32_t usbReportsAttempted = 0, usbReportsSucceeded = 0, usbReportsFailed = 0;

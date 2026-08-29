@@ -6,15 +6,15 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.10"
+#define FW_VERSION      "0.8.11"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0810
+#define FW_VERSION_BCD  0x0811
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
 #define OTA_SCHEMA_VERSION 1
-#define OTA_PROTOCOL_VERSION 1
+#define OTA_PROTOCOL_VERSION 2
 #define FW_PRODUCT      "InputPilot"
 #define FW_BOARD        "esp32-s3-zero-4mb"
 #define FW_METADATA_PREFIX "INPUTPILOT-META:"
@@ -71,9 +71,6 @@
 #ifndef WIFI_AP_PASS
 #define WIFI_AP_PASS ""  // empty = open Soft-AP (easiest phone setup)
 #endif
-#ifndef CONTROL_API_TOKEN
-#define CONTROL_API_TOKEN ""  // empty = no HTTP/TCP/BLE auth
-#endif
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
 
 // Soft-AP / mDNS prefixes. Runtime SSIDs/hostnames append a MAC suffix via
@@ -87,22 +84,14 @@
 #define STATUS_LED_PIN         21
 #define STATUS_LED_BRIGHTNESS  48   // 0..255 peak channel value (keep modest)
 
-// BLE identity + Nordic UART Service (NUS) UUIDs for remote control (Phase 4).
-#define BLE_DEVICE_NAME  "InputPilot"  // legacy compile-time fallback only
-#define BLE_NUS_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
-#define BLE_NUS_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // host -> device (write)
-#define BLE_NUS_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // device -> host (notify)
-#define SECURE_CHANNEL_VERSION 1
-
-// InputPilot Control Service v1. NUS remains for backwards compatibility.
+// InputPilot Secure Protocol v2. Discovery metadata is public; every write and
+// every sensitive response uses the USB-provisioned device secret.
 #define BLE_HID_SERVICE_UUID  "7d9f0001-4f4d-4f56-4552-484944000001"
 #define BLE_HID_CONTROL_UUID  "7d9f0002-4f4d-4f56-4552-484944000001"
-#define BLE_HID_MOUSE_UUID    "7d9f0003-4f4d-4f56-4552-484944000001"
-#define BLE_HID_KEYBOARD_UUID "7d9f0004-4f4d-4f56-4552-484944000001"
 #define BLE_HID_STATUS_UUID   "7d9f0005-4f4d-4f56-4552-484944000001"
 
-// InputPilot authenticated BLE OTA service v1. These UUIDs are stable public
-// protocol identifiers and must match BLEFirmwareUpdater.swift.
+// InputPilot Secure Protocol v2 BLE OTA flow-control characteristics. OTA
+// writes are AES-GCM records from the active control session.
 #define BLE_OTA_SERVICE_UUID "7d9f1001-4f4d-4f56-4552-484944000001"
 #define BLE_OTA_CONTROL_UUID "7d9f1002-4f4d-4f56-4552-484944000001"
 #define BLE_OTA_DATA_UUID    "7d9f1003-4f4d-4f56-4552-484944000001"
@@ -115,7 +104,7 @@
 #define BLE_DIAGNOSTICS_INFO_UUID    "7d9f2002-4f4d-4f56-4552-484944000001"
 #define BLE_DIAGNOSTICS_LOG_UUID     "7d9f2003-4f4d-4f56-4552-484944000001"
 
-// WiFi STA control: TCP line server (same command grammar as serial).
+// Secure Protocol v2 TCP transport on both Soft-AP and station networks.
 #define WIFI_CONTROL_PORT 3333
 
 #endif // CONFIG_H

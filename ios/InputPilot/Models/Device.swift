@@ -5,7 +5,6 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
     var displayName: String
     var mdnsHost: String
     var staIP: String?
-    var apiToken: String?
     var jiggleEnabled: Bool
     var moveIntervalMs: Int
     var clickEnabled: Bool
@@ -21,7 +20,6 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         displayName: String,
         mdnsHost: String,
         staIP: String? = nil,
-        apiToken: String? = nil,
         jiggleEnabled: Bool = false,
         moveIntervalMs: Int = 30_000,
         clickEnabled: Bool = false,
@@ -36,7 +34,6 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         self.displayName = displayName
         self.mdnsHost = mdnsHost
         self.staIP = staIP
-        self.apiToken = apiToken
         self.jiggleEnabled = jiggleEnabled
         self.moveIntervalMs = moveIntervalMs
         self.clickEnabled = clickEnabled
@@ -48,12 +45,11 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
         self.otaSchema = otaSchema
     }
 
-    init(status: DeviceStatus, fallbackHost: String) {
-        id = status.deviceId ?? fallbackHost
+    init(status: DeviceStatus, deviceId: String, endpointHost: String) {
+        id = deviceId
         displayName = status.name
-        mdnsHost = status.mdns ?? fallbackHost
-        staIP = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost)
-        apiToken = nil
+        mdnsHost = status.mdns ?? endpointHost
+        staIP = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: endpointHost)
         jiggleEnabled = status.jiggle
         moveIntervalMs = status.jiggleIntervalMs
         clickEnabled = status.clickEnabled
@@ -77,7 +73,6 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let clickIntervalMs: Int
     let staIp: String?
     let mdns: String?
-    let authRequired: Bool
     let protocolVersion: Int
     let capabilities: [String]
     let otaSchema: Int
@@ -93,7 +88,6 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case clickIntervalMs = "click_interval_ms"
         case staIp = "sta_ip"
         case mdns
-        case authRequired = "auth_required"
         case protocolVersion = "protocol_version"
         case capabilities
         case otaSchema = "ota_schema"
@@ -110,7 +104,6 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         clickIntervalMs: Int = 60_000,
         staIp: String? = nil,
         mdns: String? = nil,
-        authRequired: Bool = false,
         protocolVersion: Int = 0,
         capabilities: [String] = [],
         otaSchema: Int = 0
@@ -125,7 +118,6 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.clickIntervalMs = clickIntervalMs
         self.staIp = staIp
         self.mdns = mdns
-        self.authRequired = authRequired
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
         self.otaSchema = otaSchema
@@ -143,47 +135,9 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         clickIntervalMs = try container.decodeIfPresent(Int.self, forKey: .clickIntervalMs) ?? 60_000
         staIp = try container.decodeIfPresent(String.self, forKey: .staIp)
         mdns = try container.decodeIfPresent(String.self, forKey: .mdns)
-        // Older firmware (e.g. 0.3.3) omits auth_required.
-        authRequired = try container.decodeIfPresent(Bool.self, forKey: .authRequired) ?? false
         protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
         otaSchema = try container.decodeIfPresent(Int.self, forKey: .otaSchema) ?? 0
-    }
-}
-
-struct JiggleRequest: Encodable, Sendable {
-    let enabled: Bool
-}
-
-struct WifiProvisionRequest: Encodable, Sendable {
-    let ssid: String
-    let password: String
-
-    enum CodingKeys: String, CodingKey {
-        case ssid
-        case password
-    }
-}
-
-struct WifiStatus: Codable, Equatable, Sendable {
-    let ok: Bool?
-    let mode: String?
-    let configured: Bool?
-    let ssid: String?
-    let staIp: String?
-    let deviceId: String?
-    let apSsid: String?
-    let apIp: String?
-
-    enum CodingKeys: String, CodingKey {
-        case ok
-        case mode
-        case configured
-        case ssid
-        case staIp = "sta_ip"
-        case deviceId = "device_id"
-        case apSsid = "ap_ssid"
-        case apIp = "ap_ip"
     }
 }
 
@@ -199,42 +153,4 @@ struct KeepAwakeSettings: Codable, Equatable, Sendable {
         case clickEnabled = "click_enabled"
         case clickIntervalMs = "click_interval_ms"
     }
-}
-
-struct USBIdentity: Codable, Equatable, Sendable {
-    let productName: String
-    let vid: Int
-    let pid: Int
-    let vidHex: String?
-    let pidHex: String?
-    let serialNumber: String
-    let requiresRestart: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case productName = "product_name"
-        case vid
-        case pid
-        case vidHex = "vid_hex"
-        case pidHex = "pid_hex"
-        case serialNumber = "serial_number"
-        case requiresRestart = "requires_restart"
-    }
-}
-
-struct USBIdentityUpdate: Encodable, Sendable {
-    let productName: String
-    let vid: Int
-    let pid: Int
-    let serialNumber: String
-
-    enum CodingKeys: String, CodingKey {
-        case productName = "product_name"
-        case vid
-        case pid
-        case serialNumber = "serial_number"
-    }
-}
-
-struct USBIdentityReset: Encodable, Sendable {
-    let reset = true
 }

@@ -9,7 +9,6 @@ struct ContentView: View {
     @Query(sort: \StoredDevice.displayName) private var storedDevices: [StoredDevice]
     @StateObject private var viewModel = HomeViewModel()
 
-    @State private var showAddByAddress = false
     @State private var showAddWizard = false
 
     var body: some View {
@@ -31,9 +30,6 @@ struct ContentView: View {
                 Button("OK") { viewModel.errorMessage = nil }
             } message: {
                 Text(viewModel.errorMessage ?? "")
-            }
-            .sheet(isPresented: $showAddByAddress) {
-                AddByAddressSheet()
             }
             .sheet(isPresented: $showAddWizard) {
                 AddDeviceWizardView()
@@ -80,11 +76,6 @@ struct ContentView: View {
                 showAddWizard = true
             }
             .buttonStyle(.borderedProminent)
-
-            Button("Add by Address") {
-                showAddByAddress = true
-            }
-            .buttonStyle(.bordered)
         }
     }
 
@@ -96,11 +87,6 @@ struct ContentView: View {
                     showAddWizard = true
                 } label: {
                     Label("Add Device", systemImage: "plus")
-                }
-                Button {
-                    showAddByAddress = true
-                } label: {
-                    Label("Add by Address", systemImage: "network")
                 }
             } label: {
                 Image(systemName: "plus")
@@ -124,7 +110,7 @@ private struct DeviceRowView: View {
     init(device: StoredDevice, wifiState: WiFiReachabilityState) {
         self.device = device
         self.wifiState = wifiState
-        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken))
+        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
     var body: some View {
@@ -168,7 +154,7 @@ private struct LiveDeviceStatusView: View {
 
     init(device: StoredDevice) {
         self.device = device
-        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken))
+        _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
     private var presence: DevicePresenceStatus {
@@ -235,10 +221,10 @@ private struct FirmwareDeviceView: View {
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
-        let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId, token: device.apiToken)
+        let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId)
         transport.metadataHandler = { [weak device] metadata in
             guard let device, metadata.deviceId.lowercased() == device.deviceId.lowercased() else { return }
-            DeviceMerge.bluetooth(metadata, token: nil, into: device)
+            DeviceMerge.bluetooth(metadata, into: device)
         }
         self.transport = transport; _updater = StateObject(wrappedValue: transport.firmwareUpdater)
     }
@@ -253,11 +239,11 @@ private struct FirmwareDeviceView: View {
                 if let detail = releaseSource.status.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
             }
             Section("Firmware Update") {
-                if device.protocolVersion > FirmwareReleaseEvaluator.supportedProtocol {
-                    Label("This device firmware requires a newer version of InputPilot.", systemImage: "app.badge").foregroundStyle(AppColors.warning)
+                if device.protocolVersion != FirmwareReleaseEvaluator.supportedProtocol {
+                    Label("This device must be reflashed with current Secure Protocol v2 firmware.", systemImage: "externaldrive.badge.exclamationmark").foregroundStyle(AppColors.warning)
                 } else if device.otaSchema < 1 {
-                    Label("This device needs a one-time USB migration before firmware updates can be installed.", systemImage: "cable.connector").foregroundStyle(.secondary)
-                } else if !device.capabilities.isEmpty && !device.capabilities.contains("ble_ota") && !device.capabilities.contains("wifi_ota") {
+                    Label("This device must be reflashed over USB before firmware updates can be installed.", systemImage: "cable.connector").foregroundStyle(.secondary)
+                } else if !device.capabilities.contains("secure_ota") {
                     Label("The installed firmware does not provide a supported update transport.", systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning)
                 } else {
                     Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion) } }
@@ -361,14 +347,14 @@ private struct ConnectionSettingsView: View {
             }
             if let selected, PairingKeyStore.load(deviceId: selected.deviceId) == nil {
                 Section("Security") {
-                    Label("Communication with \(selected.displayName) may be unencrypted.", systemImage: "exclamationmark.triangle.fill")
+                    Label("\(selected.displayName) cannot be used until USB trust is restored.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(AppColors.warning)
-                    NavigationLink("Migrate to encrypted connections") { SecurityMigrationGuideView() }
+                    NavigationLink("Secure lifecycle") { SecureLifecycleGuideView() }
                 }
             }
             Section("Diagnostics") {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
-                NavigationLink("Security Migration Guide") { SecurityMigrationGuideView() }
+                NavigationLink("Secure Lifecycle Guide") { SecureLifecycleGuideView() }
                 if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
                 else { LabeledContent("Firmware Logs", value: "Add a device first") }
                 NavigationLink("App Logs") { AppLogsView() }
@@ -389,7 +375,7 @@ private struct ConnectionSettingsView: View {
             Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") }
         }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
     }
-    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses Bluetooth first for interactive controls and Wi-Fi first for bulk work, then falls back to another ready transport."; case .preferBluetooth: "Uses ready Bluetooth first, then falls back to Wi-Fi."; case .preferWiFi: "Uses ready Wi-Fi first, then falls back to Bluetooth."; case .bluetoothOnly: "Uses only an authenticated, ready Bluetooth connection."; case .wifiOnly: "Uses encrypted TCP for paired devices. REST is retained only for unpaired legacy devices." } }
+    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
 }
 
 struct USBPairingInputTestView: View {
@@ -470,24 +456,22 @@ struct USBPairingInputTestView: View {
     }
 }
 
-struct SecurityMigrationGuideView: View {
+struct SecureLifecycleGuideView: View {
     var body: some View {
         List {
-            Section("Before pairing") {
-                Label("Install firmware with secure_channel_v1 before creating the pairing code.", systemImage: "1.circle")
-                Label("Legacy BLE, Wi-Fi TCP, REST, and API-token connections may transmit control data without encryption.", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(AppColors.warning)
+            Section("Requirements") {
+                Label("Install current Secure Protocol v2 firmware by USB flash.", systemImage: "1.circle")
+                Label("Older firmware is intentionally not compatible with this app.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(AppColors.warning)
             }
-            Section("Migrate") {
-                Label("Update InputPilot to the current firmware.", systemImage: "2.circle")
-                Label("Connect it directly to this iPhone or to a computer by USB.", systemImage: "3.circle")
-                Label("Open Secure Pairing, focus the input field, then hold BOOT for two seconds. The complete frame can also be typed manually.", systemImage: "4.circle")
-                Label("The 128-bit secret is stored only in this iPhone's Keychain. Creating another code invalidates the previous one.", systemImage: "5.circle")
+            Section("Trust") {
+                Label("Connect InputPilot directly to the iPhone by USB.", systemImage: "2.circle")
+                Label("Focus Secure Pairing, then hold BOOT for two seconds.", systemImage: "3.circle")
+                Label("The 128-bit secret is stored in Keychain. A new code invalidates every previous session.", systemImage: "4.circle")
             }
             Section("After pairing") {
-                Label("Bluetooth uses BLE link encryption and the authenticated InputPilot secure channel.", systemImage: "checkmark.shield.fill")
+                Label("Bluetooth and Wi-Fi carry the same authenticated encrypted protocol.", systemImage: "checkmark.shield.fill")
                     .foregroundStyle(.green)
-                Label("Wi-Fi control uses the authenticated encrypted channel. Paired firmware rejects plaintext REST control.", systemImage: "checkmark.shield.fill")
+                Label("Setup, controls, diagnostics, management, and OTA never use plaintext endpoints.", systemImage: "checkmark.shield.fill")
                     .foregroundStyle(.green)
                 Text("If the key is lost, create a new pairing code over USB. Pair every iPhone again because the old code becomes invalid.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -496,7 +480,7 @@ struct SecurityMigrationGuideView: View {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
             }
         }
-        .navigationTitle("Security Migration")
+        .navigationTitle("Secure Lifecycle")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -530,7 +514,7 @@ private struct DiagnosticsExportView: View {
         let hid = metadata?.hid
         return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
     }
-    var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes API tokens, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
+    var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
 }
 
 private struct FirmwareLogDocument: FileDocument {

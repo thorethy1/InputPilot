@@ -74,7 +74,7 @@ final class HomeViewModel: ObservableObject {
 
         let repository = DeviceRepository(context: context)
         do {
-            try await repository.setJiggle(device, enabled: enabled, api: apiClient)
+            try await repository.setJiggle(device, enabled: enabled)
             wifiStates[device.deviceId] = .reachable
         } catch {
             device.jiggleEnabled = previous

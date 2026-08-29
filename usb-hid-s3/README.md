@@ -25,7 +25,7 @@ usb-hid-s3/
   test/               # PlatformIO native unit tests (pio test -e native)
   tests/              # pytest integration + on-Mac E2E
   scripts/            # deploy.sh, serial_monitor.sh, e2e.sh, install_test_deps.sh
-  docs/openapi.yaml          # HTTP REST OpenAPI 3 spec
+  ../docs/PROTOCOL.md        # Secure Protocol v2 specification
   docs/HARDWARE.md           # BOM + flash notes
   docs/KNOWN_LIMITATIONS.md  # auth, VID, platform caveats
 ```
@@ -48,15 +48,15 @@ cp config.env.example config.env      # set ESP_PORT
 
 WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts Soft-AP
 `InputPilot-XXXX` (last 4 hex of MAC, uppercase; open by default; set
-`WIFI_AP_PASS` in `wifi_secrets.h` for WPA) with a setup page + REST at
-`http://192.168.4.1/api/wifi`.
+`WIFI_AP_PASS` in `wifi_secrets.h` for WPA) with read-only discovery at
+`http://192.168.4.1/api/status`.
 With creds, STA joins and exposes:
 
-- **HTTP REST** on `:80` — status/diagnostics/logs, control, and authenticated streaming Wi-Fi OTA via `/api/ota/*`.
-  `POST /api/move|type|key|click`, plus `/api/wifi`
-- **TCP line control** on `:3333` (same grammar as serial)
+- **Discovery HTTP** on `:80` — public product, protocol and device identity only.
+- **Secure Protocol v2** on TCP `:3333` and BLE — authenticated encrypted
+  setup, control, diagnostics, management and OTA after USB trust.
 
-BLE, TCP, REST, serial, jiggle, disconnect, and OTA safety paths enqueue into a
+BLE, TCP, serial, jiggle, disconnect, and OTA safety paths enqueue into a
 fixed 32-entry HID event queue. A dedicated executor task is the only runtime
 context that calls the USB mouse/keyboard report APIs; adjacent mouse moves are
 coalesced and six queue slots are reserved for release-critical events.
@@ -66,16 +66,14 @@ suffix; HTTP service on port 80 with TXT `path`, `id`, `fw`), so apps can
 discover it without a hard-coded IP. `GET /api/status` returns `mdns` and
 `device_id` (12 lowercase hex).
 
-Optional LAN hardening (compile-time, via `wifi_secrets.h`):
+Optional Soft-AP WPA protection (compile-time, via `wifi_secrets.h`):
 
 ```c
 #define WIFI_AP_PASS "setup-secret"       // Soft-AP WPA (8+ chars)
-#define CONTROL_API_TOKEN "change-me"     // HTTP / TCP / BLE
 ```
 
-When `CONTROL_API_TOKEN` is set, send `X-API-Token: change-me` (or
-`Authorization: Bearer change-me`) on STA `/api/*`. Soft-AP WiFi provisioning
-stays open. TCP/BLE: send `auth change-me` once per session before commands.
+The Soft-AP is a bootstrap network only. Wi-Fi credentials and all other
+sensitive data are accepted exclusively through Secure Protocol v2.
 
 ### Status LED (onboard WS2812, GPIO21)
 
@@ -86,19 +84,17 @@ stays open. TCP/BLE: send `auth change-me` once per session before commands.
 | Dim solid green | STA connected, jiggle **off** |
 | Cyan breathing | STA connected, jiggle **on** |
 
-OpenAPI / Swagger: [`docs/openapi.yaml`](docs/openapi.yaml)  
-(Paste into [Swagger Editor](https://editor.swagger.io/) or generate clients from it.)
+Protocol and hardware validation: [`../docs/SECURE_PROTOCOL_V2.md`](../docs/SECURE_PROTOCOL_V2.md)
 
-Example:
+Public discovery example:
 
 ```bash
 # Replace XXXX with your device suffix (from serial `status` or /api/status mdns field)
 curl http://inputpilot-XXXX.local/api/status
-curl -X POST http://inputpilot-XXXX.local/api/jiggle -H 'Content-Type: application/json' -d '{"enabled":true}'
-curl -X POST http://inputpilot-XXXX.local/api/keep-awake -H 'Content-Type: application/json' -d '{"move_enabled":true,"move_interval_ms":30000,"click_enabled":false,"click_interval_ms":60000}'
-curl -X POST http://inputpilot-XXXX.local/api/move -H 'Content-Type: application/json' -d '{"dx":40,"dy":0}'
-curl -X POST http://inputpilot-XXXX.local/api/type -H 'Content-Type: application/json' -d '{"text":"hello"}'
 ```
+
+All writes require an authenticated Secure Protocol v2 client; HTTP has no
+write endpoints.
 
 ## Testing
 

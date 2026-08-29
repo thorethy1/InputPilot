@@ -1,11 +1,9 @@
 # Known limitations
 
-- **No auth by default** on Soft-AP, HTTP, TCP, or BLE control (open Soft-AP,
-  unauthenticated REST/TCP). See root `SECURITY.md` when present.
 - Soft-AP `InputPilot-XXXX` (per-device suffix) is **open** unless you set
   `WIFI_AP_PASS`. Multiple boards on the same LAN get distinct SSIDs and mDNS
-  names (`inputpilot-xxxx.local`); use `device_id` from `/api/status` or
-  `/api/wifi` to tell them apart.
+  names (`inputpilot-xxxx.local`). The network grants no control access:
+  sensitive operations still require Secure Protocol v2.
 - USB VID/PID (`0xCAFE` / `0x4001`) are hobbyist IDs, not USB-IF assigned.
 - Flashing requires manual **BOOT+RESET**, then a **power-cycle** for HID
   enumeration (OTG auto-reset is unreliable).
@@ -14,5 +12,4 @@
   `wifi+ble` mode; throughput and latency still depend on local radio conditions.
 - BLE teardown deliberately avoids `NimBLEDevice::deinit()` (upstream crash on
   Arduino-ESP32 3.2.x / IDF 5.4).
-- BLE control uses application-token confirmation but does not implement BLE
-  cryptographic pairing or bonding.
+- BLE uses iOS link encryption/bonding plus the USB-trusted application session.

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.11] - 2026-08-29
+
+- Replace split authentication and feature-specific transports with Secure Protocol v2 over BLE and Wi-Fi/TCP.
+- Require USB-established trust for setup, control, management, diagnostics and OTA.
+- Provision Wi-Fi only through the authenticated Bluetooth session and verify the same identity over secure Wi-Fi before saving.
+- Remove token authentication, writable REST endpoints, NUS control, manual device add and all compatibility fallbacks.
+- Add directional AES-GCM records, unified session ownership and authenticated OTA on both transports.
+
 ## [0.8.10] - 2026-08-29
 
 ### Fixed

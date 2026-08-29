@@ -5,6 +5,7 @@ enum DeviceRepositoryError: Error, LocalizedError {
     case deviceUnreachable
     case notFound
     case alreadyExists(displayName: String)
+    case secureProtocolRequired
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ enum DeviceRepositoryError: Error, LocalizedError {
             "Device not found."
         case let .alreadyExists(displayName):
             SavedDeviceIndex.alreadyExistsMessage(displayName: displayName)
+        case .secureProtocolRequired:
+            "This device must be reflashed with Secure Protocol v2 firmware."
         }
     }
 }
@@ -31,8 +34,7 @@ final class DeviceRepository {
             (
                 deviceId: device.deviceId,
                 mdnsHost: device.mdnsHost,
-                staIP: device.staIP,
-                token: device.apiToken
+                staIP: device.staIP
             )
         }
 
@@ -44,7 +46,7 @@ final class DeviceRepository {
                         staIP: snapshot.staIP
                     )
                     for url in urls {
-                        if let status = try? await api.status(baseURL: url, token: snapshot.token) {
+                        if let status = try? await api.status(baseURL: url) {
                             return (snapshot.deviceId, status, url.host ?? snapshot.mdnsHost)
                         }
                     }
@@ -62,7 +64,10 @@ final class DeviceRepository {
         var failed = Set<String>()
         for (deviceId, status, fallbackHost) in results {
             guard let device = devices.first(where: { $0.deviceId == deviceId }) else { continue }
-            if let status {
+            if let status,
+               status.deviceId?.caseInsensitiveCompare(deviceId) == .orderedSame,
+               status.protocolVersion == 2,
+               status.capabilities.contains("secure_protocol_v2") {
                 applyStatus(status, to: device, fallbackHost: fallbackHost)
             } else {
                 failed.insert(deviceId)
@@ -81,20 +86,21 @@ final class DeviceRepository {
     func addFromDiscovery(
         status: DeviceStatus,
         fallbackHost: String,
-        displayName: String,
-        token: String?,
-        api: any DeviceAPIClientProtocol
+        displayName: String
     ) async throws -> StoredDevice {
-        let deviceId = status.deviceId ?? fallbackHost
+        guard let deviceId = status.deviceId?.lowercased(),
+              deviceId.count == 12, deviceId.allSatisfy(\.isHexDigit),
+              status.protocolVersion == 2,
+              status.capabilities.contains("secure_protocol_v2") else {
+            throw DeviceRepositoryError.secureProtocolRequired
+        }
         if let existing = try fetchStored(deviceId: deviceId) {
-            DeviceMerge.wifi(status, fallbackHost: fallbackHost, token: token, into: existing)
+            DeviceMerge.wifi(status, fallbackHost: fallbackHost, into: existing)
             try context.save()
             return existing
         }
-        var device = Device(status: status, fallbackHost: fallbackHost)
+        var device = Device(status: status, deviceId: deviceId, endpointHost: fallbackHost)
         device.displayName = displayName
-        device.apiToken = token
-
         try DeviceStore.upsert(device, in: context)
         guard let stored = try fetchStored(deviceId: deviceId) else {
             throw DeviceRepositoryError.notFound
@@ -102,88 +108,45 @@ final class DeviceRepository {
         return stored
     }
 
-    func addOrMergeBluetooth(metadata: BLEDeviceMetadata, displayName: String, token: String?) throws -> StoredDevice {
+    func addOrMergeBluetooth(metadata: BLEDeviceMetadata, displayName: String) throws -> StoredDevice {
+        guard metadata.deviceId.count == 12,
+              metadata.deviceId.allSatisfy(\.isHexDigit),
+              metadata.protocolVersion == 2,
+              metadata.capabilities.contains("secure_protocol_v2") else {
+            throw DeviceRepositoryError.secureProtocolRequired
+        }
         if let existing = try fetchStored(deviceId: metadata.deviceId) {
-            DeviceMerge.bluetooth(metadata, token: token, into: existing)
+            DeviceMerge.bluetooth(metadata, into: existing)
             try context.save()
             return existing
         }
         let stored = StoredDevice(deviceId: metadata.deviceId, displayName: displayName, mdnsHost: "", staIP: nil,
-            apiToken: token, lastSeen: Date(), firmwareVersion: metadata.firmware,
+            lastSeen: Date(), firmwareVersion: metadata.firmware,
             protocolVersion: metadata.protocolVersion, capabilities: metadata.capabilities,
             lastCapabilitiesUpdate: Date(), otaSchema: metadata.otaSchema, bluetoothDiscovered: true)
         context.insert(stored)
         try context.save()
         return stored
     }
-    /// Probes a host without saving. A matching device ID is returned so the
-    /// caller can enrich the existing physical device with this Wi-Fi endpoint.
-    func probeByAddress(
-        host: String,
-        token: String?,
-        api: any DeviceAPIClientProtocol
-    ) async throws -> ProbedDevice {
-        let urls = DeviceEndpointResolver.endpointURLs(mdnsHost: host, staIP: nil)
-        guard !urls.isEmpty else { throw DeviceRepositoryError.deviceUnreachable }
-
-        var lastError: Error = DeviceRepositoryError.deviceUnreachable
-
-        for url in urls {
-            do {
-                let status = try await api.status(baseURL: url, token: token)
-                let fallbackHost = url.host ?? host
-                let candidate = DiscoveredService(
-                    id: "manual-\(fallbackHost)",
-                    deviceId: status.deviceId,
-                    name: status.name,
-                    host: fallbackHost,
-                    port: url.port ?? 80
-                )
-                return ProbedDevice(candidate: candidate, status: status, baseURL: url)
-            } catch let error as DeviceRepositoryError {
-                throw error
-            } catch {
-                lastError = error
-            }
-        }
-        throw lastError
-    }
-
-    func setJiggle(_ device: StoredDevice, enabled: Bool, api: any DeviceAPIClientProtocol) async throws {
-        let urls = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
-        guard !urls.isEmpty else { throw DeviceRepositoryError.deviceUnreachable }
-
-        var lastError: Error = DeviceRepositoryError.deviceUnreachable
-        for url in urls {
-            do {
-                try await api.setJiggle(baseURL: url, enabled: enabled, token: device.apiToken)
-                device.jiggleEnabled = enabled
-                try context.save()
-                return
-            } catch {
-                lastError = error
-            }
-        }
-        throw lastError
+    func setJiggle(_ device: StoredDevice, enabled: Bool) async throws {
+        let settings = KeepAwakeSettings(moveEnabled: enabled, moveIntervalMs: device.moveIntervalMs,
+            clickEnabled: device.clickEnabled, clickIntervalMs: device.clickIntervalMs)
+        try await setKeepAwake(device, settings: settings)
     }
 
     func setKeepAwake(
         _ device: StoredDevice,
-        settings: KeepAwakeSettings,
-        api: any DeviceAPIClientProtocol
+        settings: KeepAwakeSettings
     ) async throws {
-        let urls = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
-        guard !urls.isEmpty else { throw DeviceRepositoryError.deviceUnreachable }
-        var lastError: Error = DeviceRepositoryError.deviceUnreachable
-        for url in urls {
-            do {
-                try await api.setKeepAwake(baseURL: url, settings: settings, token: device.apiToken)
-                apply(settings, to: device)
-                try context.save()
-                return
-            } catch { lastError = error }
+        let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId)
+        do { try await bluetooth.setKeepAwake(settings) }
+        catch {
+            let host = device.staIP ?? device.mdnsHost
+            guard !host.isEmpty else { throw error }
+            let wifi = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+            try await wifi.setKeepAwake(settings)
         }
-        throw lastError
+        apply(settings, to: device); try context.save()
     }
 
     func apply(_ settings: KeepAwakeSettings, to device: StoredDevice) {
@@ -200,18 +163,13 @@ final class DeviceRepository {
 
     func delete(_ device: StoredDevice) throws {
         PairingKeyStore.remove(deviceId: device.deviceId)
+        Task { await InputPilotWiFiManager.removeSessions(deviceId: device.deviceId) }
         context.delete(device)
         try context.save()
     }
 
-    func updateApiToken(_ device: StoredDevice, token: String?) throws {
-        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
-        device.apiToken = trimmed?.isEmpty == true ? nil : trimmed
-        try context.save()
-    }
-
     private func applyStatus(_ status: DeviceStatus, to stored: StoredDevice, fallbackHost: String) {
-        DeviceMerge.wifi(status, fallbackHost: fallbackHost, token: nil, into: stored)
+        DeviceMerge.wifi(status, fallbackHost: fallbackHost, into: stored)
     }
 
     private func fetchAll() throws -> [StoredDevice] {

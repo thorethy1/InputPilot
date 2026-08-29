@@ -19,7 +19,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "integration: on-device serial command tests")
     config.addinivalue_line("markers", "enumeration: USB/HID enumeration checks (macOS)")
     config.addinivalue_line("markers", "e2e: end-to-end HID action tests (macOS, moves cursor)")
-    config.addinivalue_line("markers", "ble: BLE (NUS) control transport tests (needs bleak + RUN_BLE=1)")
+    config.addinivalue_line("markers", "ble: Secure Protocol BLE hardware tests")
     config.addinivalue_line("markers", "wifi: WiFi TCP control transport tests (needs creds + RUN_WIFI=1)")
 
 

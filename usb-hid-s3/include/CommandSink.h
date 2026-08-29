@@ -6,7 +6,7 @@
 #include "../lib/HIDExecutor/HIDEventQueue.h"
 
 // Single entry point for a command line, regardless of transport
-// (USB-CDC serial, BLE NUS, WiFi TCP, or HTTP REST). Defined in main.cpp.
+// (USB-CDC serial or an authenticated Secure Protocol transport). Defined in main.cpp.
 // `source` is a short tag for logs, e.g. "serial", "ble", "wifi", "http".
 void handleCommandLine(const std::string &line, const char *source);
 bool enqueueHIDEvent(const HIDEvent &event, const char *source);

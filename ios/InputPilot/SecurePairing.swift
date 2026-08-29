@@ -83,9 +83,11 @@ final class SecureChannel {
     static let binaryVersion: UInt8 = 0xA1
     private let deviceId: String
     private let secret: SymmetricKey
-    private var key: SymmetricKey?
+    private var sendKey: SymmetricKey?
+    private var receiveKey: SymmetricKey?
     private var transcript: Data?
     private var sendCounter: UInt64 = 0
+    private var receiveCounter: UInt64 = 0
 
     init(deviceId: String, secret: Data) throws {
         guard secret.count == 16 else { throw SecureChannelError.invalidSecret }
@@ -114,13 +116,20 @@ final class SecureChannel {
         transcript = serverTranscript
         var salt = serverNonce
         salt.append(clientNonce)
-        key = HKDF<SHA256>.deriveKey(
+        sendKey = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: secret,
             salt: salt,
-            info: Data("InputPilot secure channel v1".utf8),
+            info: Data("InputPilot secure protocol v2 client".utf8),
+            outputByteCount: 32
+        )
+        receiveKey = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: secret,
+            salt: salt,
+            info: Data("InputPilot secure protocol v2 server".utf8),
             outputByteCount: 32
         )
         sendCounter = 0
+        receiveCounter = 0
         return "secure hello \(clientNonce.hex) \(proof.hex)"
     }
 
@@ -135,14 +144,14 @@ final class SecureChannel {
     }
 
     func sealBinary(_ plaintext: Data) throws -> Data {
-        guard let key else { throw SecureChannelError.notReady }
+        guard let sendKey else { throw SecureChannelError.notReady }
         sendCounter &+= 1
         let counter = sendCounter.bigEndianData
-        var nonceData = Data([0x49, 0x50, 0x43, 0x01])
+        var nonceData = Data([0x49, 0x50, 0x43, 0x02])
         nonceData.append(counter)
         let box = try AES.GCM.seal(
             plaintext,
-            using: key,
+            using: sendKey,
             nonce: AES.GCM.Nonce(data: nonceData),
             authenticating: Data(deviceId.utf8)
         )
@@ -159,6 +168,42 @@ final class SecureChannel {
         let cipher = record[9 ..< record.count - 16]
         let tag = record.suffix(16)
         return "secure data \(Data(counter).hex) \(Data(cipher).hex) \(Data(tag).hex)"
+    }
+
+    func openBinary(_ record: Data) throws -> Data {
+        guard let receiveKey, record.count >= 25, record.first == Self.binaryVersion else {
+            throw SecureChannelError.notReady
+        }
+        let counterData = Data(record[1 ..< 9])
+        let counter = counterData.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        guard counter > receiveCounter else { throw SecureChannelError.invalidServerProof }
+        var nonceData = Data([0x49, 0x50, 0x53, 0x02])
+        nonceData.append(counterData)
+        let box = try AES.GCM.SealedBox(
+            nonce: AES.GCM.Nonce(data: nonceData),
+            ciphertext: Data(record[9 ..< record.count - 16]),
+            tag: Data(record.suffix(16))
+        )
+        let plaintext = try AES.GCM.open(box, using: receiveKey,
+                                        authenticating: Data(deviceId.utf8))
+        receiveCounter = counter
+        return plaintext
+    }
+
+    func openText(_ line: String) throws -> String {
+        let fields = line.split(separator: " ")
+        guard fields.count == 5, fields[0] == "secure", fields[1] == "data",
+              let counter = Data(hex: String(fields[2])), counter.count == 8,
+              let cipher = Data(hex: String(fields[3])),
+              let tag = Data(hex: String(fields[4])), tag.count == 16 else {
+            throw SecureChannelError.invalidServerProof
+        }
+        var record = Data([Self.binaryVersion]); record.append(counter)
+        record.append(cipher); record.append(tag)
+        guard let plaintext = String(data: try openBinary(record), encoding: .utf8) else {
+            throw SecureChannelError.invalidServerProof
+        }
+        return plaintext
     }
 }
 

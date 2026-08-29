@@ -25,7 +25,7 @@ Official Waveshare wiki / product page is also fine if you buy elsewhere — mat
 | ESP32-S3-Zero/Mini board | Above |
 | USB-C data cable | Charge-only cables will not enumerate |
 | Host PC | USB HID target (mouse/keyboard appear here) |
-| Optional: phone/PC on WiFi | Soft-AP setup or STA REST control |
+| iPhone on Wi-Fi/Bluetooth | Secure setup and control after USB trust |
 
 ## Developer build (USB-OTG)
 
@@ -49,10 +49,10 @@ The preferred single-image method is:
 
 ```bash
 esptool --chip esp32s3 erase-flash
-esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.2-initial-flash.bin
+esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.11-initial-flash.bin
 ```
 
-Alternatively, extract `InputPilot-v0.8.2-initial-flash.zip` and flash the individual images. These offsets are exported from the actual pinned PlatformIO/pioarduino build and recorded in `initial-flash-manifest.json` and `flash_args`:
+Alternatively, extract the v0.8.11 initial-flash archive and flash the individual images. These offsets are exported from the pinned build and recorded in `initial-flash-manifest.json` and `flash_args`:
 
 ```bash
 esptool --chip esp32s3 write-flash \
@@ -62,13 +62,11 @@ esptool --chip esp32s3 write-flash \
   0x10000 firmware.bin
 ```
 
-Power-cycle after flashing. Future releases use only `firmware.bin` in the iOS Firmware tab; never use the merged image or the other three `.bin` files for BLE OTA.
+Power-cycle after flashing. Future releases use only `firmware.bin` in the iOS Firmware tab; never use the merged image or the other three `.bin` files for OTA.
 
 ### Panic core dump
 
-For an automated REST/TCP-to-USB test on a headless Ubuntu host, see
-[`../../docs/UBUNTU_HARDWARE_TEST.md`](../../docs/UBUNTU_HARDWARE_TEST.md).
-It verifies raw Linux input events rather than transport delivery alone.
+Use the release gate in [`../../docs/HARDWARE_E2E.md`](../../docs/HARDWARE_E2E.md).
 
 The pinned Arduino-ESP32/IDF build already enables ELF core dumps to the
 `coredump` partition at `0x3d0000` (size `0x10000`). Build the exact source

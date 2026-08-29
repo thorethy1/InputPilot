@@ -2,12 +2,11 @@
 
 [![CI](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![Firmware + unit tests](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Native%20unit%20tests%20%2B%20firmware%20build&label=firmware%20%2B%20unit%20tests)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
-[![OpenAPI](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=OpenAPI%20lint&label=OpenAPI)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![iOS](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=iOS%20build%20%2B%20unit%20tests&label=iOS)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 
 
 
-**InputPilot 0.8.10** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. New-device setup pairs by USB before configuration, then uses encrypted BLE and Wi-Fi/TCP. Legacy devices remain discoverable through a clearly marked migration path.
+**InputPilot 0.8.11** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. Setup establishes trust by USB, then uses the same authenticated Secure Protocol v2 over Bluetooth and Wi-Fi. Older firmware is intentionally unsupported and must be reflashed over USB.
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 
@@ -43,13 +42,12 @@ pio run -e esp32s3 -t upload
 curl http://inputpilot-XXXX.local/api/status   # XXXX = device suffix from /api/status
 ```
 
-Full commands, LED legend, and REST examples:
-[`usb-hid-s3/README.md`](usb-hid-s3/README.md)  
-OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
+Full commands and the LED legend: [`usb-hid-s3/README.md`](usb-hid-s3/README.md).
+Secure protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 ### 3. Companions (optional)
 
-- **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; discovery, trackpad, keyboard, presets and macros. Firmware **0.5.0+** for all transports; older firmware is capability-detected.
+- **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; secure setup, trackpad, keyboard, presets, macros, diagnostics and OTA. Secure Protocol v2 firmware is required.
 
 <p align="center">
   <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two ready devices" width="240">
@@ -70,7 +68,7 @@ OpenAPI: [`usb-hid-s3/docs/openapi.yaml`](usb-hid-s3/docs/openapi.yaml)
 
 | Folder | Purpose |
 |--------|---------|
-| [`usb-hid-s3/`](usb-hid-s3/) | ESP32-S3 firmware (USB HID + WiFi REST + Soft-AP + mDNS) |
+| [`usb-hid-s3/`](usb-hid-s3/) | ESP32-S3 firmware (USB HID + Secure Protocol v2 + discovery) |
 | [`ios/`](ios/) | **InputPilot** iOS companion (SwiftUI) |
 
 ## CI
@@ -80,18 +78,16 @@ Badges above track the latest `main` workflow run
 
 - PlatformIO **native unit tests**
 - **esp32s3 firmware compile**
-- OpenAPI 3 schema validation and required-path audit
 - **InputPilot iOS** build + unit tests (`macos-26`, Xcode 26+ Simulator)
 
 ## Using the iOS remote
 
-Flash firmware, then choose **Add Device → Bluetooth → Scan Nearby** to onboard directly from the InputPilot manufacturer identity. The app reads device ID, name, firmware, protocol, OTA schema, capabilities, and authentication requirement over BLE and can save the device with no IP address or mDNS hostname. Bonjour, Soft-AP setup, and manual Wi-Fi addresses remain available. **Wi-Fi is optional; Bluetooth alone supports onboarding, control, status, and firmware updates.** The native tab bar keeps Devices, Control, Firmware, and Settings available without a custom bottom bar.
-
-Bonjour is optional and used only for nearby discovery/fallback. Add a device by
-IP address or a VPN-resolvable hostname to use status, REST/TCP control,
-diagnostics, and Wi-Fi firmware updates without `.local` name resolution. The
-address that answers the direct probe is retained even when the device reports a
-different LAN address.
+Flash firmware, then choose **Add Device → Set Up Securely**. The app establishes
+trust through USB HID, authenticates the matching BLE identity, provisions Wi-Fi
+inside that encrypted session, rediscovers the same device ID and verifies its
+secure TCP session before saving it. There is no manual address or unencrypted
+setup path. Bluetooth and Wi-Fi then provide the same controls;
+the selected connection mode only changes transport preference.
 
 - **Trackpad:** coalesced relative one-finger movement, two-finger scrolling, tap/double-tap click, long-press drag, mouse buttons, sensitivity and safety release.
 - **Keyboard:** native event input (including Backspace, Enter, Tab and paste), navigation/editing keys, one-shot modifiers, shortcuts, and actual German QWERTZ or US QWERTY USB-HID mapping.
@@ -106,7 +102,7 @@ Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+b
 
 InputPilot ships one application firmware with two installation paths. `firmware.bin` is the same InputPilot application image included in the initial USB flash and used for later BLE OTA updates. Initial installation additionally needs the bootloader, partition table, and OTA bootstrap image.
 
-### First installation / migration
+### First installation / required reflash
 
 Use `InitialFirmware.bin` over USB, or flash the individual files from `InputPilot-Firmware-vX.Y.Z.zip` according to its manifest. This replaces the bootloader, partition table, OTA bootstrap data, and application. It also works after `esptool erase-flash`; no data from an older installation is assumed. See [the hardware guide](usb-hid-s3/docs/HARDWARE.md) for commands.
 
@@ -136,7 +132,7 @@ Firmware v0.8.7 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and O
 
 The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
-Devices flashed with the earlier factory-only partition table cannot migrate through a normal app OTA. Perform the one-time USB migration described above. This full USB flash replaces the partition table, so back up/re-enter Wi-Fi credentials if needed.
+Devices flashed with an earlier partition table cannot update through the app. Perform the full USB reflash described above. It replaces the partition table, so Wi-Fi must be configured again.
 
 Contributors should use `AppColors` and the `AccentColor` asset for the red brand accent. Success, warning, error, and informational states retain semantic system colors and always include text or symbols.
 
@@ -155,7 +151,7 @@ Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) wi
 | Asset | Content |
 |-------|---------|
 | `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
-| `InitialFirmware.bin` | Single merged image for initial USB installation or migration; never OTA |
+| `InitialFirmware.bin` | Single merged image for initial installation or required USB reflash; never OTA |
 | `InputPilot-Firmware-vX.Y.Z.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |
 | `firmware.bin` | App-only image for normal BLE OTA |
 | `firmware-manifest.json` | Permanent automatic-update contract containing version, compatibility, size, and SHA-256 |
@@ -174,7 +170,7 @@ pio test -e native
 pio run -e esp32s3
 ```
 
-iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. OpenAPI validation and all three platform jobs run on pull requests and pushes to `main`.
+iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. Firmware and iOS jobs run on pull requests and pushes to `main`.
 
 The manual hardware and Liquid Glass release-candidate checklist is in [the hardware E2E test plan](docs/HARDWARE_E2E.md).
 

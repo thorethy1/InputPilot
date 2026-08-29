@@ -61,7 +61,6 @@ jobs:
           version = sys.argv[1]
           checks = {
               "ios/InputPilot.xcodeproj/project.pbxproj": rf'MARKETING_VERSION\s*=\s*{re.escape(version)};',
-              "usb-hid-s3/docs/openapi.yaml": rf'(?m)^\s*version:\s*{re.escape(version)}\s*$',
               "CHANGELOG.md": rf'(?m)^## \[{re.escape(version)}\]',
               "README.md": rf'\*\*InputPilot {re.escape(version)}\*\*',
           }
