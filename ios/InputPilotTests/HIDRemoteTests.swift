@@ -127,6 +127,21 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(FirmwareUpdateManager.transportOrder(mode: .automatic, wifiAvailable: true, bluetoothAvailable: false), [.wifi])
     }
 
+    func testPairedDevicesDoNotAttemptPlaintextWiFiOTA() {
+        let capabilities: Set<String> = ["wifi_ota", "ble_ota"]
+        XCTAssertFalse(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: true, capabilities: capabilities, hasEndpoints: true))
+        XCTAssertTrue(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: false, capabilities: capabilities, hasEndpoints: true))
+        XCTAssertFalse(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: false, capabilities: capabilities, hasEndpoints: false))
+    }
+
+    func testLegacyBLEOTAVersionsUseConservativePacing() {
+        XCTAssertTrue(FirmwareUpdateManager.requiresLegacyBLEPacing(installedVersion: nil))
+        XCTAssertTrue(FirmwareUpdateManager.requiresLegacyBLEPacing(installedVersion: "0.8.8"))
+        XCTAssertTrue(FirmwareUpdateManager.requiresLegacyBLEPacing(installedVersion: "0.8.9"))
+        XCTAssertFalse(FirmwareUpdateManager.requiresLegacyBLEPacing(installedVersion: "0.8.10"))
+        XCTAssertFalse(FirmwareUpdateManager.requiresLegacyBLEPacing(installedVersion: "0.9.0"))
+    }
+
     func testManualFirmwareVersionComesFromImageMetadata() throws {
         XCTAssertEqual(try FirmwareImageMetadata.parseAndValidate(firmwareImage()).version, "0.8.2")
     }

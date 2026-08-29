@@ -882,6 +882,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
     private var wifiToken: String?
     private var connectionMode: ConnectionMode = .automatic
     private var capabilities: Set<String> = []
+    private var hasSecurePairing = false
     var metadataHandler: ((BLEDeviceMetadata) -> Void)?
 
     static func transportOrder(mode: ConnectionMode, wifiAvailable: Bool, bluetoothAvailable: Bool) -> [FirmwareUpdateTransportKind] {
@@ -895,10 +896,21 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         }
     }
 
+    static func wifiOTAAvailable(hasSecurePairing: Bool, capabilities: Set<String>, hasEndpoints: Bool) -> Bool {
+        !hasSecurePairing && capabilities.contains("wifi_ota") && hasEndpoints
+    }
+
+    static func requiresLegacyBLEPacing(installedVersion: String?) -> Bool {
+        guard let installedVersion, let installed = SemanticVersion(installedVersion),
+              let safe = SemanticVersion("0.8.10") else { return true }
+        return installed < safe
+    }
+
     func configure(device: StoredDevice, mode: ConnectionMode) {
         wifiEndpoints = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
         activeWiFiEndpoint = nil
         wifiToken = device.apiToken; connectionMode = mode; capabilities = Set(device.capabilities)
+        hasSecurePairing = PairingKeyStore.load(deviceId: device.deviceId) != nil
         preUpdateDeviceId = device.deviceId
     }
 
@@ -946,7 +958,11 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
     }
 
     func install(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
-        let wifiCapable = capabilities.contains("wifi_ota") && !wifiEndpoints.isEmpty
+        let wifiCapable = Self.wifiOTAAvailable(
+            hasSecurePairing: hasSecurePairing,
+            capabilities: capabilities,
+            hasEndpoints: !wifiEndpoints.isEmpty
+        )
         let bleCapable = (capabilities.isEmpty || capabilities.contains("ble_ota")) &&
                          peripheral != nil && control != nil && data != nil
         let order = Self.transportOrder(mode: connectionMode, wifiAvailable: wifiCapable, bluetoothAvailable: bleCapable)
@@ -982,7 +998,9 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
         peripheral.writeValue(Data(command.utf8), for: control, type: .withResponse)
         guard await wait(for: "READY", timeout: 10) else { if case .failed = state { return }; state = .failed("InputPilot did not become ready for the update."); return }
         let started = Date()
-        let maximum = max(5, min(maximumChunkSize, peripheral.maximumWriteValueLength(for: .withoutResponse) - 4))
+        let legacyPacing = Self.requiresLegacyBLEPacing(installedVersion: installedVersion)
+        let negotiatedMaximum = min(maximumChunkSize, peripheral.maximumWriteValueLength(for: .withoutResponse) - 4)
+        let maximum = max(5, legacyPacing ? min(128, negotiatedMaximum) : negotiatedMaximum)
         var offset = 0
         while offset < firmware.count && !cancelled {
             while (!peripheral.canSendWriteWithoutResponse || offset - acknowledged >= windowSize) && !cancelled {
@@ -997,6 +1015,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject, URLSessionTaskDel
             peripheral.writeValue(frame, for: data, type: .withoutResponse)
             offset += count; bytesSent = offset; if peripheral.canSendWriteWithoutResponse { lastProgress = Date() }
             bytesPerSecond = Double(offset) / max(0.1, Date().timeIntervalSince(started))
+            if legacyPacing { try? await Task.sleep(for: .milliseconds(3)) }
         }
         guard !cancelled else { return }
         state = .waitingForFinalAck

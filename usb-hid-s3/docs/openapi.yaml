@@ -22,7 +22,7 @@ info:
     descriptor metadata remain readable. Paired BLE and TCP use
     `secure_channel_v1` (HMAC-SHA-256, HKDF,
     and AES-256-GCM) and never transmit the pairing credential.
-  version: 0.8.9
+  version: 0.8.10
   contact:
     name: InputPilot
     url: https://github.com/thorethy1/InputPilot
@@ -85,7 +85,7 @@ paths:
               example:
                 ok: true
                 name: InputPilot-EEFF
-                version: "0.8.9"
+                version: "0.8.10"
                 device_id: aabbccddeeff
                 uptime_s: 120
                 heap: 192000

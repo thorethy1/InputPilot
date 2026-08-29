@@ -75,6 +75,13 @@ enforcement design.
 
 TCP listens on port 3333 and is persistent. Handshake and encrypted records are UTF-8 lines ending in LF. A disconnect clears the session key and releases all held keys, modifiers, and mouse buttons.
 
+BLE OTA control and data writes are copied into bounded FreeRTOS queues by the
+NimBLE callbacks. Partition erase, flash writes, hashing, validation, and boot
+selection run from the firmware loop instead of the Bluetooth host task. The
+receiver advertises a 4 KiB acknowledgement window; clients must stop sending
+when unacknowledged bytes reach that window. iOS uses a paced 128-byte bootstrap
+mode when the installed receiver is older than 0.8.10.
+
 `report` is the v0.6 layout boundary. The client maps each Unicode character for the selected host layout to a USB HID usage and modifier byte (including right Alt/AltGr bit `0x40`), then sends one report. The firmware presses and releases that report; it does not interpret UTF-8 as HID key codes. Legacy `type` and `key` remain supported. Multiline and long input is emitted as ordered per-character reports (newline becomes Enter), so neither TCP line framing nor BLE MTU splits UTF-8.
 
 ## BLE GATT

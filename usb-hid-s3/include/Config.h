@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.9"
+#define FW_VERSION      "0.8.10"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0809
+#define FW_VERSION_BCD  0x0810
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -108,7 +108,7 @@
 #define BLE_OTA_DATA_UUID    "7d9f1003-4f4d-4f56-4552-484944000001"
 #define BLE_OTA_STATUS_UUID  "7d9f1004-4f4d-4f56-4552-484944000001"
 #define BLE_OTA_TIMEOUT_MS 15000UL
-#define BLE_OTA_ACK_BYTES (32UL * 1024UL)
+#define BLE_OTA_ACK_BYTES (4UL * 1024UL)
 
 // InputPilot read-only diagnostics. Not included in the compact advertisement.
 #define BLE_DIAGNOSTICS_SERVICE_UUID "7d9f2001-4f4d-4f56-4552-484944000001"

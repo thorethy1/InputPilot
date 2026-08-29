@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.10] - 2026-08-29
+
+### Fixed
+
+- Skip plaintext Wi-Fi REST OTA when a device has secure pairing, avoiding the expected HTTP 426 rejection.
+- Use 128-byte paced BLE chunks when updating firmware 0.8.8 or 0.8.9 so those legacy receivers are not flooded.
+- Move BLE OTA START, data writes, FINISH, ABORT, and disconnect cleanup out of NimBLE callbacks and into bounded FreeRTOS queues serviced by the firmware loop.
+- Reduce the advertised BLE OTA acknowledgement window from 32 KiB to 4 KiB so sender backpressure matches the bounded firmware queue.
+
+### Release
+
+- Bump firmware and iOS to 0.8.10 (build 13) and add regressions for paired transport selection and legacy pacing.
+
 ## [0.8.9] - 2026-08-28
 
 ### Fixed
