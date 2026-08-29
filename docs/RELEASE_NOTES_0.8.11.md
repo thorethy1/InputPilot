@@ -13,6 +13,8 @@ compatibility with older firmware.
   and compatibility fallbacks have been removed.
 - OTA uses the active secure session on both Bluetooth and Wi-Fi and retains
   board, protocol, size, offset and SHA-256 validation.
+- A stale iOS BLE bond after a fresh flash or USB trust rotation is recovered
+  once through CoreBluetooth before secure authentication continues.
 
 Devices running older firmware must be reflashed over USB before they can be
 added to this app.

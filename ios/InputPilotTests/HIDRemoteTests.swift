@@ -49,6 +49,20 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(BLEHIDControlTransport.writeType(for: .releaseAll, properties: properties), .withResponse)
     }
 
+    func testRecognizesOnlyPeerRemovedPairingForStaleBondRecovery() {
+        let staleBond = NSError(
+            domain: CBErrorDomain,
+            code: CBError.Code.peerRemovedPairingInformation.rawValue
+        )
+        let ordinaryFailure = NSError(
+            domain: CBErrorDomain,
+            code: CBError.Code.connectionFailed.rawValue
+        )
+        XCTAssertTrue(BLEPairingRecovery.isPeerRemovedPairingInformation(staleBond))
+        XCTAssertFalse(BLEPairingRecovery.isPeerRemovedPairingInformation(ordinaryFailure))
+        XCTAssertFalse(BLEPairingRecovery.isPeerRemovedPairingInformation(nil))
+    }
+
     @MainActor func testProtocolV1IsRejectedBeforeSending() async {
         let transport = MockTransport(kind: .bluetooth, available: true)
         let manager = HIDConnectionManager(ble: transport, tcp: transport, protocolVersion: 1)

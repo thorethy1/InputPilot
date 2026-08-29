@@ -32,8 +32,10 @@ replace this gate.
   credentials must fail immediately, with no plaintext retry.
 - Cancel iOS pairing, deny Bluetooth permission, toggle Bluetooth, remove the
   system bond, reconnect after backgrounding and power-cycle during discovery.
-- Attempt connection with a stale bond but current app secret, and current bond
-  but stale app secret; show actionable re-pair guidance.
+- Attempt connection with a stale iOS bond but current app secret. The app must
+  consume `peerRemovedPairingInformation`, reconnect once and let iOS create a
+  new bond without repeating USB trust. With a stale app secret, show
+  actionable USB re-pair guidance instead.
 - Supply wrong Wi-Fi password, unavailable SSID, captive portal, DHCP failure,
   mDNS failure and changed IP. Recovery must return to secure BLE provisioning
   and must never offer manual or unauthenticated device addition.
