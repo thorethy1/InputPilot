@@ -52,12 +52,14 @@ The Secure Protocol service is `7d9f0001-4f4d-4f56-4552-484944000001`:
 | Characteristic | Suffix | Purpose |
 |---|---:|---|
 | Control | `0002` | handshake and encrypted protocol records |
-| Status | `0005` | handshake replies and encrypted-link status |
+| Status | `0005` | handshake replies and encrypted protocol responses |
 
-Both require BLE link encryption for access. Application authentication is
-still mandatory. Separate OTA data/status characteristics remain for BLE flow
-control, but every OTA control/data write is a record from the same session.
-Diagnostics characteristics require the same authenticated connection.
+The GATT layer intentionally does not create a second iOS/NimBLE bond database.
+Confidentiality, integrity, peer authentication and replay protection come from
+the USB-trusted Secure Protocol session. Separate OTA data/status
+characteristics remain for BLE flow control, but every OTA control/data write
+is an encrypted record from that same session. Diagnostics are encrypted
+commands and responses on Control/Status rather than separate characteristics.
 
 ## Wi-Fi mapping
 
@@ -77,9 +79,9 @@ transport ownership.
 - Metadata, controls, diagnostics and OTA lease that shared connection.
 - Disconnect, credential rotation or authentication failure clears keys,
   counters, queued writes and held HID state.
-- USB trust rotation also clears stored BLE bonds; reconnect creates a fresh
-  encrypted link before the new application session authenticates.
+- USB trust rotation disconnects active transports and invalidates every
+  application session immediately.
 - A feature is ready only after application authentication, not GATT discovery,
-  BLE bonding or TCP connection.
+  BLE connection or TCP connection.
 - Automatic transport selection considers only authenticated ready sessions.
   It never introduces a less secure transport.

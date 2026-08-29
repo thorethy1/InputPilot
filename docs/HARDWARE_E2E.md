@@ -11,9 +11,9 @@ replace this gate.
    protocol 2 without exposing settings, logs or credentials.
 3. Connect USB HID, hold BOOT for two seconds, capture `IPPAIR1`, and verify the
    Keychain identity equals discovery identity.
-4. Complete BLE connection, GATT discovery, iOS BLE encryption/bonding and the
-   Secure Protocol handshake. The UI must remain “Authenticating” until the
-   server proof verifies.
+4. Complete BLE connection, GATT discovery and the Secure Protocol handshake.
+   Confirm iOS creates no system bond and the UI remains “Authenticating” until
+   the server proof verifies.
 5. Send home SSID/password over the encrypted BLE management record. Confirm
    neither value appears in app, serial or firmware logs.
 6. Wait for mDNS rediscovery on the home LAN. Verify exact device-ID match and a
@@ -30,12 +30,11 @@ replace this gate.
 - Cancel USB capture, malformed frame and pairing-secret storage failure.
 - Rotate the credential while BLE/TCP is connected; old sessions and old phone
   credentials must fail immediately, with no plaintext retry.
-- Cancel iOS pairing, deny Bluetooth permission, toggle Bluetooth, remove the
-  system bond, reconnect after backgrounding and power-cycle during discovery.
-- Attempt connection with a stale iOS bond but current app secret. The app must
-  consume `peerRemovedPairingInformation`, reconnect once and let iOS create a
-  new bond without repeating USB trust. With a stale app secret, show
-  actionable USB re-pair guidance instead.
+- Deny Bluetooth permission, toggle Bluetooth, reconnect after backgrounding
+  and power-cycle during discovery. No iOS pairing prompt may appear.
+- Upgrade a phone that still has a bond from an older build; forgetting that
+  obsolete system bond must be a one-time transition only. A stale application
+  secret must show actionable USB re-pair guidance.
 - Supply wrong Wi-Fi password, unavailable SSID, captive portal, DHCP failure,
   mDNS failure and changed IP. Recovery must return to secure BLE provisioning
   and must never offer manual or unauthenticated device addition.

@@ -520,14 +520,6 @@ struct BLEDiscoveredDevice: Identifiable, Equatable {
     let id: UUID; let deviceId: String; let name: String; let rssi: Int
 }
 
-enum BLEPairingRecovery {
-    static func isPeerRemovedPairingInformation(_ error: Error?) -> Bool {
-        guard let error = error as NSError? else { return false }
-        return error.domain == CBErrorDomain &&
-            error.code == CBError.Code.peerRemovedPairingInformation.rawValue
-    }
-}
-
 final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var devices: [BLEDiscoveredDevice] = []
     @Published private(set) var isScanning = false
@@ -536,8 +528,6 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var selected: CBPeripheral?
     private var completion: ((Result<BLEDeviceMetadata, Error>) -> Void)?
-    private var staleBondRetriesRemaining = 0
-    private var reconnectingAfterStaleBond = false
     private var metadataTimeoutWork: DispatchWorkItem?
     private let otaService = CBUUID(string: "7D9F1001-4F4D-4F56-4552-484944000001")
     private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
@@ -559,8 +549,7 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     func stop() { central.stopScan(); isScanning = false }
     func metadata(for device: BLEDiscoveredDevice) async throws -> BLEDeviceMetadata {
         guard let peripheral = peripherals[device.id] else { throw TransportError.unavailable }
-        stop(); selected = peripheral; staleBondRetriesRemaining = 1
-        reconnectingAfterStaleBond = false
+        stop(); selected = peripheral
         return try await withCheckedThrowingContinuation { continuation in
             completion = { continuation.resume(with: $0) }
             central.connect(peripheral)
@@ -581,17 +570,10 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        if let error, recoverStaleBond(error, peripheral: peripheral) { return }
         finish(.failure(error ?? TransportError.unavailable))
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard completion != nil else { return }
-        if reconnectingAfterStaleBond {
-            reconnectingAfterStaleBond = false
-            central.connect(peripheral)
-            return
-        }
-        if let error, recoverStaleBond(error, peripheral: peripheral) { return }
         finish(.failure(error ?? TransportError.failed("Bluetooth disconnected during metadata setup.")))
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
@@ -604,32 +586,11 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == otaStatus else { return }
-        if let error {
-            if recoverStaleBond(error, peripheral: peripheral) { return }
-            finish(.failure(error)); return
-        }
+        if let error { finish(.failure(error)); return }
         guard let value = characteristic.value, let metadata = try? JSONDecoder().decode(BLEDeviceMetadata.self, from: value), metadata.product == "InputPilot", metadata.board == "esp32-s3-zero-4mb" else {
             finish(.failure(TransportError.failed("Invalid InputPilot Bluetooth metadata."))); return
         }
         finish(.success(metadata))
-    }
-    private func recoverStaleBond(_ error: Error, peripheral: CBPeripheral) -> Bool {
-        guard BLEPairingRecovery.isPeerRemovedPairingInformation(error),
-              staleBondRetriesRemaining > 0 else { return false }
-        staleBondRetriesRemaining -= 1
-        reconnectingAfterStaleBond = true
-        appLog(.bluetooth, "stale BLE bond detected during setup; reconnecting once to renew pairing")
-        startMetadataTimeout(peripheral)
-        central.cancelPeripheralConnection(peripheral)
-        let retry = DispatchWorkItem { [weak self, weak peripheral] in
-            guard let self, let peripheral, self.completion != nil,
-                  self.reconnectingAfterStaleBond,
-                  peripheral.state == .disconnected else { return }
-            self.reconnectingAfterStaleBond = false
-            self.central.connect(peripheral)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: retry)
-        return true
     }
     private func startMetadataTimeout(_ peripheral: CBPeripheral) {
         metadataTimeoutWork?.cancel()
@@ -643,7 +604,7 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     private func finish(_ result: Result<BLEDeviceMetadata, Error>) {
         metadataTimeoutWork?.cancel(); metadataTimeoutWork = nil
-        let callback = completion; completion = nil; reconnectingAfterStaleBond = false
+        let callback = completion; completion = nil
         callback?(result)
         if let selected { central.cancelPeripheralConnection(selected) }; selected = nil
     }
@@ -768,9 +729,7 @@ private struct FirmwareLogsResponse: Decodable {
     private let sharedBLE: BLEHIDControlTransport
     private let wifi: TCPHIDControlTransport?
     private var wifiTask: Task<Void, Never>?
-    private var usesSharedBLE = false
-    private let info = CBUUID(string: "7D9F2002-4F4D-4F56-4552-484944000001")
-    private let log = CBUUID(string: "7D9F2003-4F4D-4F56-4552-484944000001")
+    private var bleTask: Task<Void, Never>?
     init(device: StoredDevice, mode: ConnectionMode = .automatic) {
         self.mode = mode
         sharedBLE = InputPilotBluetoothManager.session(deviceId: device.deviceId)
@@ -784,30 +743,33 @@ private struct FirmwareLogsResponse: Decodable {
             wifiTask = Task { [weak self] in await self?.pollWiFi() }
             return
         }
-        usesSharedBLE = true; status = "Authenticating shared Bluetooth session…"
-        sharedBLE.startDiagnostics { [weak self] uuid, data in self?.receiveSharedDiagnostics(uuid: uuid, data: data) }
-        Task { await sharedBLE.connect() }
+        status = "Authenticating shared Bluetooth session…"
+        bleTask = Task { [weak self] in await self?.pollBluetooth() }
     }
     func stop() {
-        if usesSharedBLE { sharedBLE.stopDiagnostics(); usesSharedBLE = false }
+        bleTask?.cancel(); bleTask = nil
         wifiTask?.cancel(); wifiTask = nil
     }
     func clear() { history.clear(); sequenceHistory.clear(); pending.removeAll(); lines = [] }
     func setPaused(_ value: Bool) { paused = value; if !value, !pending.isEmpty { history.append(sequenceHistory.append(pending)); pending.removeAll(); lines = history.lines } }
-    private func receiveSharedDiagnostics(uuid: CBUUID, data: Data) {
-        status = "Live via shared Bluetooth session"
-        if uuid == info {
-            metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: data)
-            if metadata == nil { appLog(.errors, "BLE diagnostics JSON decode failed") }
-        } else if uuid == log {
-            if let record = try? JSONDecoder().decode(FirmwareLogRecord.self, from: data) { receive([record]) }
-            else if let line = String(data: data, encoding: .utf8), !line.isEmpty {
-                let sequence = (sequenceHistory.records.last?.sequence ?? 0) &+ 1
-                receive([FirmwareLogRecord(sequence: sequence, line: line)])
-            } else { appLog(.errors, "BLE diagnostics log decode failed") }
+    private func receive(_ incoming: [FirmwareLogRecord]) { if paused { pending.append(contentsOf: incoming); if pending.count > FirmwareLogSequenceHistory.capacity { pending.removeFirst(pending.count - FirmwareLogSequenceHistory.capacity) } } else { history.append(sequenceHistory.append(incoming)); lines = history.lines } }
+    private func pollBluetooth() async {
+        do {
+            try await sharedBLE.waitUntilReady()
+            metadata = try JSONDecoder().decode(DiagnosticsMetadata.self,
+                                                from: try await sharedBLE.diagnosticsInfo())
+            status = "Live via secure Bluetooth session"
+            var cursor: UInt32 = 0
+            while !Task.isCancelled {
+                if let record = try await sharedBLE.nextDiagnostic(after: cursor) {
+                    cursor = record.sequence
+                    receive([record])
+                } else { try await Task.sleep(for: .milliseconds(250)) }
+            }
+        } catch {
+            if !Task.isCancelled { status = "Secure Bluetooth diagnostics failed: \(error.localizedDescription)" }
         }
     }
-    private func receive(_ incoming: [FirmwareLogRecord]) { if paused { pending.append(contentsOf: incoming); if pending.count > FirmwareLogSequenceHistory.capacity { pending.removeFirst(pending.count - FirmwareLogSequenceHistory.capacity) } } else { history.append(sequenceHistory.append(incoming)); lines = history.lines } }
     private func pollWiFi() async {
         guard let wifi else { return }
         do {
@@ -1178,9 +1140,6 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     private let otaControl = CBUUID(string: "7D9F1002-4F4D-4F56-4552-484944000001")
     private let otaData = CBUUID(string: "7D9F1003-4F4D-4F56-4552-484944000001")
     private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
-    private let diagnosticsService = CBUUID(string: "7D9F2001-4F4D-4F56-4552-484944000001")
-    private let diagnosticsInfo = CBUUID(string: "7D9F2002-4F4D-4F56-4552-484944000001")
-    private let diagnosticsLog = CBUUID(string: "7D9F2003-4F4D-4F56-4552-484944000001")
     let firmwareUpdater = FirmwareUpdateManager()
     var metadataHandler: ((BLEDeviceMetadata) -> Void)? {
         didSet { firmwareUpdater.metadataHandler = metadataHandler }
@@ -1190,7 +1149,6 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     private var shouldReconnect = false
     private var pendingServices = 0
     private var authTimeoutWork: DispatchWorkItem?
-    private var staleBondRecoveryAttempts = 0
     private let authTimeout: TimeInterval
     private struct PendingWrite {
         let id: String
@@ -1202,7 +1160,12 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     private var writeQueue: [PendingWrite] = []
     private var responseWrite: PendingWrite?
     private var responseTimeoutWork: DispatchWorkItem?
-    private var diagnosticsHandler: ((CBUUID, Data) -> Void)?
+    private struct PendingSecureReply {
+        let id: UUID
+        let continuation: CheckedContinuation<String, Error>
+        let timeout: DispatchWorkItem
+    }
+    private var pendingSecureReplies: [PendingSecureReply] = []
     static func writeType(for event: HIDEvent, properties: CBCharacteristicProperties) -> CBCharacteristicWriteType? {
         let highFrequency: Bool = {
             if case .mouseMove = event { return true }
@@ -1260,7 +1223,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         central.connect(peripheral)
         state = .connecting
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService, diagnosticsService]) }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         appLog(.errors, "BLE connection failed error=\(error?.localizedDescription ?? "unknown")")
         self.peripheral = nil; isAvailable = false; state = shouldReconnect ? .reconnecting : .offline
@@ -1277,6 +1240,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         self.peripheral = nil
         secureChannel = nil
         failPendingWrites(TransportError.failed("Bluetooth disconnected before HID delivery was confirmed."))
+        failPendingSecureReplies(TransportError.failed("Bluetooth disconnected before the secure response arrived."))
         authTimeoutWork?.cancel(); authTimeoutWork = nil
         if firmwareUpdater.activeTransport != .wifi { firmwareUpdater.disconnected(expected: firmwareUpdater.expectsReboot) }
         characteristics.removeAll(); pendingServices = 0; reconnectWork?.cancel()
@@ -1302,17 +1266,11 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == secureStatus, state == .authenticating else { return }
-        if let error, recoverStaleBond(error, peripheral: peripheral) { return }
         guard error == nil, characteristic.isNotifying, let rx = characteristics[control] else { failAuthentication(peripheral); return }
         startAuthTimeout(peripheral)
         peripheral.writeValue(Data("secure begin".utf8), for: rx, type: .withResponse)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        if characteristic.uuid == diagnosticsInfo || characteristic.uuid == diagnosticsLog {
-            if error == nil, let value = characteristic.value { diagnosticsHandler?(characteristic.uuid, value) }
-            else { appLog(.errors, "BLE diagnostics read error=\(error?.localizedDescription ?? "empty value")") }
-            return
-        }
         if characteristic.uuid == otaStatus { firmwareUpdater.receive(characteristic.value, error: error); return }
         guard characteristic.uuid == secureStatus, error == nil, let data = characteristic.value,
               let reply = String(data: data, encoding: .utf8) else { return }
@@ -1325,7 +1283,6 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
                 if reply.hasPrefix("secure ready ") {
                     try secureChannel.acceptReady(reply)
                     authTimeoutWork?.cancel(); authTimeoutWork = nil
-                    staleBondRecoveryAttempts = 0
                     isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral)
                     return
                 }
@@ -1334,6 +1291,13 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
                 failAuthentication(peripheral)
                 return
             }
+        }
+        if state == .ready, let secureChannel,
+           let plaintext = try? secureChannel.openText(reply),
+           !pendingSecureReplies.isEmpty {
+            let pending = pendingSecureReplies.removeFirst()
+            pending.timeout.cancel()
+            pending.continuation.resume(returning: plaintext)
         }
     }
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -1351,36 +1315,50 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         firmwareUpdater.attach(peripheral: peripheral, control: control, data: data,
                                status: status, seal: { try secureChannel.sealBinary($0) })
         peripheral.setNotifyValue(true, for: status)
-        prepareDiagnostics(peripheral)
-    }
-    private func prepareDiagnostics(_ peripheral: CBPeripheral) {
-        guard diagnosticsHandler != nil else { return }
-        if let info = characteristics[diagnosticsInfo] { peripheral.readValue(for: info) }
-        if let log = characteristics[diagnosticsLog], !log.isNotifying { peripheral.setNotifyValue(true, for: log) }
-    }
-    func startDiagnostics(_ handler: @escaping (CBUUID, Data) -> Void) {
-        diagnosticsHandler = handler
-        if let peripheral { prepareDiagnostics(peripheral) }
-    }
-    func stopDiagnostics() {
-        if let peripheral, let log = characteristics[diagnosticsLog], log.isNotifying { peripheral.setNotifyValue(false, for: log) }
-        diagnosticsHandler = nil
     }
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) { firmwareUpdater.writerReady(); drainWrites(peripheral) }
     private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.failAuthentication(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
-    private func recoverStaleBond(_ error: Error, peripheral: CBPeripheral) -> Bool {
-        guard BLEPairingRecovery.isPeerRemovedPairingInformation(error),
-              staleBondRecoveryAttempts == 0 else { return false }
-        staleBondRecoveryAttempts += 1
-        authTimeoutWork?.cancel(); authTimeoutWork = nil
-        isAvailable = false
-        state = .reconnecting
-        secureChannel = nil
-        appLog(.bluetooth, "stale BLE bond detected during secure connect; reconnecting once to renew pairing")
-        central.cancelPeripheralConnection(peripheral)
-        return true
-    }
     private func failAuthentication(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; central.cancelPeripheralConnection(peripheral) }
+    private func writeConfirmed(_ payload: Data, id: String) async throws {
+        guard let peripheral, let characteristic = characteristics[control],
+              characteristic.properties.contains(.write) else { throw TransportError.unavailable }
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.append(PendingWrite(id: id, characteristic: characteristic,
+                                           payload: payload, type: .withResponse,
+                                           continuation: continuation))
+            drainWrites(peripheral)
+        }
+    }
+    func request(_ command: String, timeout: TimeInterval = 10) async throws -> String {
+        try await waitUntilReady()
+        guard !command.contains("\n"), !command.contains("\r"),
+              let secureChannel else { throw TransportError.encoding }
+        let payload = Data(try secureChannel.sealText(command).utf8)
+        return try await withCheckedThrowingContinuation { continuation in
+            let id = UUID()
+            let timeoutWork = DispatchWorkItem { [weak self] in
+                guard let self,
+                      let index = self.pendingSecureReplies.firstIndex(where: { $0.id == id }) else { return }
+                let pending = self.pendingSecureReplies.remove(at: index)
+                pending.continuation.resume(throwing: TransportError.failed("Secure Bluetooth response timed out."))
+            }
+            pendingSecureReplies.append(PendingSecureReply(id: id, continuation: continuation,
+                                                            timeout: timeoutWork))
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
+            Task { [weak self] in
+                do { try await self?.writeConfirmed(payload, id: "request-\(id.uuidString)") }
+                catch { self?.failPendingSecureReply(id: id, error: error) }
+            }
+        }
+    }
+    func diagnosticsInfo() async throws -> Data {
+        Data(try await request("DIAGNOSTICS INFO").utf8)
+    }
+    func nextDiagnostic(after cursor: UInt32) async throws -> FirmwareLogRecord? {
+        let data = Data(try await request("DIAGNOSTICS NEXT \(cursor)").utf8)
+        if String(data: data, encoding: .utf8) == "{}" { return nil }
+        return try JSONDecoder().decode(FirmwareLogRecord.self, from: data)
+    }
     func send(_ event: HIDEvent) async throws {
         if firmwareUpdater.blocksControl, event != .releaseAll { throw TransportError.failed("Controls are unavailable during a firmware update.") }
         let uuid = control
@@ -1549,7 +1527,18 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         let queued = writeQueue; writeQueue.removeAll(keepingCapacity: true)
         queued.forEach { $0.continuation.resume(throwing: error) }
     }
-    func disconnect() async { shouldReconnect = false; staleBondRecoveryAttempts = 0; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
+    private func failPendingSecureReply(id: UUID, error: Error) {
+        guard let index = pendingSecureReplies.firstIndex(where: { $0.id == id }) else { return }
+        let pending = pendingSecureReplies.remove(at: index)
+        pending.timeout.cancel()
+        pending.continuation.resume(throwing: error)
+    }
+    private func failPendingSecureReplies(_ error: Error) {
+        let pending = pendingSecureReplies
+        pendingSecureReplies.removeAll()
+        pending.forEach { $0.timeout.cancel(); $0.continuation.resume(throwing: error) }
+    }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); failPendingSecureReplies(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
 }
 
 @MainActor enum InputPilotBluetoothManager {

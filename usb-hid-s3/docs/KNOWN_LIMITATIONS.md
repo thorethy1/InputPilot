@@ -12,4 +12,9 @@
   `wifi+ble` mode; throughput and latency still depend on local radio conditions.
 - BLE teardown deliberately avoids `NimBLEDevice::deinit()` (upstream crash on
   Arduino-ESP32 3.2.x / IDF 5.4).
-- BLE uses iOS link encryption/bonding plus the USB-trusted application session.
+- BLE security is owned by the USB-trusted Secure Protocol session; the app
+  deliberately does not create a separate iOS/NimBLE bond.
+- BLE pairing/bonding is enabled on the NimBLE stack (Just Works, bonding + SC)
+  so that iOS can complete the Link-Layer security handshake without crashing
+  the controller. The Secure Protocol v2 session still provides the actual
+  control-plane authentication on top.

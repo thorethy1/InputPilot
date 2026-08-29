@@ -13,6 +13,10 @@ compatibility with older firmware.
   and compatibility fallbacks have been removed.
 - OTA uses the active secure session on both Bluetooth and Wi-Fi and retains
   board, protocol, size, offset and SHA-256 validation.
+- NimBLE BLE pairing and bonding are enabled (Just Works, bonding + SC) so
+  that iOS can complete the Link-Layer security handshake without crashing
+  the controller. The Secure Protocol v2 session still provides the actual
+  control-plane authentication on top of the BLE-level bond.
 - A stale iOS BLE bond after a fresh flash or USB trust rotation is recovered
   once through CoreBluetooth before secure authentication continues.
 

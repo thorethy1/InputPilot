@@ -8,51 +8,8 @@
 #include "DeviceIdentity.h"
 #include "FirmwareLog.h"
 #include "CommandSink.h"
-extern bool deviceBleAuthenticated();
 
 BLEDiagnostics g_bleDiagnostics;
-
-class BLEDiagnostics::InfoCallbacks : public NimBLECharacteristicCallbacks {
- public:
-  explicit InfoCallbacks(BLEDiagnostics &owner) : owner_(owner) {}
-  void onRead(NimBLECharacteristic *characteristic, NimBLEConnInfo &) override {
-    if (deviceBleAuthenticated()) owner_.refreshInfo();
-    else characteristic->setValue("authentication required");
-  }
- private:
-  BLEDiagnostics &owner_;
-};
-
-class BLEDiagnostics::LogCallbacks : public NimBLECharacteristicCallbacks {
- public:
-  explicit LogCallbacks(BLEDiagnostics &owner) : owner_(owner) {}
-  void onSubscribe(NimBLECharacteristic *, NimBLEConnInfo &, uint16_t value) override {
-    owner_.subscribed_ = deviceBleAuthenticated() && (value & 0x0001) != 0;
-    if (owner_.subscribed_) owner_.cursor_ = 0;
-  }
- private:
-  BLEDiagnostics &owner_;
-};
-
-bool BLEDiagnostics::begin(NimBLEServer *server) {
-  if (!server) return false;
-  NimBLEService *service = server->createService(BLE_DIAGNOSTICS_SERVICE_UUID);
-  if (!service) return false;
-  info_ = service->createCharacteristic(
-      BLE_DIAGNOSTICS_INFO_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC);
-  log_ = service->createCharacteristic(
-      BLE_DIAGNOSTICS_LOG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
-                                    NIMBLE_PROPERTY::READ_ENC);
-  if (!info_ || !log_) return false;
-
-  infoCallbacks_ = new InfoCallbacks(*this);
-  info_->setCallbacks(infoCallbacks_);
-  refreshInfo();
-  log_->setValue("Subscribe for recent and live logs");
-  callbacks_ = new LogCallbacks(*this);
-  log_->setCallbacks(callbacks_);
-  return true;
-}
 
 std::string BLEDiagnostics::infoJson() const {
   char json[1024];
@@ -87,52 +44,32 @@ std::string BLEDiagnostics::infoJson() const {
   return std::string(json);
 }
 
-std::string BLEDiagnostics::nextLogJson(uint32_t &cursor) const {
+std::string BLEDiagnostics::compactInfoJson() const {
+  // Keep the encrypted text record below the 512-byte GATT value limit.
+  char json[224];
+  snprintf(json, sizeof(json),
+           "{\"product\":\"%s\",\"firmware\":\"%s\",\"board\":\"%s\"," 
+           "\"protocol\":2,\"otaSchema\":1,\"deviceId\":\"%s\"," 
+           "\"resetReason\":\"%s\"}",
+           FW_PRODUCT, FW_VERSION, FW_BOARD, DeviceIdentity::deviceId(),
+           deviceResetReason());
+  return std::string(json);
+}
+
+std::string BLEDiagnostics::nextLogJson(uint32_t &cursor,
+                                        size_t maxLineBytes) const {
   FirmwareLogEntry entry;
   if (firmwareLogCopySince(cursor, &entry, 1) == 0) return "{}";
   char prefix[48];
   snprintf(prefix, sizeof(prefix), "{\"sequence\":%lu,\"line\":\"",
            static_cast<unsigned long>(entry.sequence));
   std::string json(prefix);
-  for (const char *p = entry.line; *p; ++p) {
+  size_t consumed = 0;
+  for (const char *p = entry.line; *p && consumed < maxLineBytes; ++p, ++consumed) {
     if (*p == '"' || *p == '\\') json += '\\';
     if (*p == '\n') json += "\\n"; else if (*p != '\r') json += *p;
   }
   json += "\"}";
   cursor = entry.sequence;
   return json;
-}
-
-void BLEDiagnostics::refreshInfo() {
-  if (!info_) return;
-  const std::string json = infoJson();
-  info_->setValue(reinterpret_cast<const uint8_t *>(json.data()), json.size());
-}
-
-void BLEDiagnostics::loop(bool otaActive) {
-  if (!subscribed_ || !deviceBleAuthenticated() || !log_ || otaActive ||
-      millis() - lastNotifyMs_ < 100) return;
-  FirmwareLogEntry entries[3];
-  const size_t count = firmwareLogCopySince(cursor_, entries, 3);
-  if (!count) return;
-  lastNotifyMs_ = millis();
-  for (size_t i = 0; i < count; ++i) {
-    char frame[224];
-    snprintf(frame, sizeof(frame), "{\"sequence\":%lu,\"line\":\"",
-             static_cast<unsigned long>(entries[i].sequence));
-    std::string json(frame);
-    for (const char *p = entries[i].line; *p; ++p) {
-      if (*p == '"' || *p == '\\') json += '\\';
-      if (*p == '\n') json += "\\n"; else if (*p != '\r') json += *p;
-    }
-    json += "\"}";
-    log_->setValue(reinterpret_cast<const uint8_t *>(json.data()), json.size());
-    if (!log_->notify()) break;
-    cursor_ = entries[i].sequence;
-  }
-}
-
-void BLEDiagnostics::disconnected() {
-  subscribed_ = false;
-  cursor_ = 0;
 }

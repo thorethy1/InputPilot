@@ -100,7 +100,9 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
                                       ? OTATransportOwner::BLE
                                       : OTATransportOwner::WiFi;
   if (message == "DIAGNOSTICS INFO") {
-    sendSecureReply(source, session, g_bleDiagnostics.infoJson());
+    sendSecureReply(source, session, strcmp(source, "ble") == 0
+                                         ? g_bleDiagnostics.compactInfoJson()
+                                         : g_bleDiagnostics.infoJson());
     return true;
   }
   if (message.rfind("DIAGNOSTICS NEXT ", 0) == 0) {
@@ -108,7 +110,8 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     char *end = nullptr;
     uint32_t cursor = strtoul(cursorText.c_str(), &end, 10);
     if (!end || *end) sendSecureReply(source, session, "error invalid_cursor");
-    else sendSecureReply(source, session, g_bleDiagnostics.nextLogJson(cursor));
+    else sendSecureReply(source, session, g_bleDiagnostics.nextLogJson(
+        cursor, strcmp(source, "ble") == 0 ? 80 : 159));
     return true;
   }
   if (message == "USB RESET") {
@@ -417,18 +420,23 @@ void processBLEControlFrames(size_t budget = 8) {
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *, NimBLEConnInfo &) override {
+  void onConnect(NimBLEServer *, NimBLEConnInfo &info) override {
     s_bleConnected = true;
     s_bleSecureSession.reset();
     s_bleAuthed = false;
-    LOG_BLE("central connected");
+    LOG_BLE("central connected bonded=%s", info.isBonded() ? "yes" : "no");
+  }
+  void onAuthenticationComplete(NimBLEConnInfo &info) override {
+    LOG_BLE("pairing complete bonded=%s encrypted=%s authenticated=%s",
+            info.isBonded() ? "yes" : "no",
+            info.isEncrypted() ? "yes" : "no",
+            info.isAuthenticated() ? "yes" : "no");
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
     s_bleConnected = false;
     s_bleAuthed = false;
     s_bleSecureSession.reset();
     g_bleOta.disconnected();
-    g_bleDiagnostics.disconnected();
     if (s_bleControlQueue) xQueueReset(s_bleControlQueue);
     requestReleaseAll("ble-disconnect");
     if (s_bleTearingDown) {
@@ -483,8 +491,7 @@ void RadioManager::pairingCredentialRotated() {
     const std::vector<uint16_t> peers = s_bleServer
         ? s_bleServer->getPeerDevices() : std::vector<uint16_t>{};
     for (const uint16_t handle : peers) s_bleServer->disconnect(handle);
-    NimBLEDevice::deleteAllBonds();
-    LOG_BLE("connections and stored bonds cleared after USB trust rotation");
+    LOG_BLE("connections cleared after USB trust rotation");
   }
   requestReleaseAll("pairing-rotated");
 }
@@ -636,9 +643,9 @@ void RadioManager::startBle() {
       LOG_BLE("init failed");
       return;
     }
-    NimBLEDevice::setSecurityAuth(true, false, true);
-    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
     LOG_BLE("initialized");
+    NimBLEDevice::setSecurityAuth(true, false, true);  // bonding + secure connections, no MITM (Just Works)
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
     s_bleServer = NimBLEDevice::createServer();
     if (!s_bleServer) {
       snprintf(status_, sizeof(status_), "ble:server-fail");
@@ -655,11 +662,9 @@ void RadioManager::startBle() {
       return;
     }
     NimBLECharacteristic *control = hidSvc->createCharacteristic(
-        BLE_HID_CONTROL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR |
-                                  NIMBLE_PROPERTY::WRITE_ENC);
+        BLE_HID_CONTROL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     s_bleTx = hidSvc->createCharacteristic(
-        BLE_HID_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
-                                 NIMBLE_PROPERTY::READ_ENC);
+        BLE_HID_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     if (!control || !s_bleTx) {
       snprintf(status_, sizeof(status_), "ble:service-fail");
       LOG_BLE("HID status characteristic creation failed");
@@ -676,13 +681,6 @@ void RadioManager::startBle() {
       return;
     }
     LOG_BLE("OTA service created");
-    if (!g_bleDiagnostics.begin(s_bleServer)) {
-      snprintf(status_, sizeof(status_), "ble:service-fail");
-      LOG_BLE("diagnostics service creation failed");
-      return;
-    }
-    LOG_BLE("diagnostics service created");
-
     // NimBLE-Arduino 2.x registers all services together when the server is
     // started. NimBLEService::start() is a deprecated no-op in this version.
     if (!s_bleServer->start()) {
@@ -769,7 +767,6 @@ void RadioManager::loop() {
   // KeyMap, logging and HID queue work off the 4 KiB BLE host stack.
   processBLEControlFrames();
   g_bleOta.loop();
-  g_bleDiagnostics.loop(g_otaEngine.active());
   if (s_managementRebootAtMs &&
       static_cast<int32_t>(millis() - s_managementRebootAtMs) >= 0) {
     esp_restart();

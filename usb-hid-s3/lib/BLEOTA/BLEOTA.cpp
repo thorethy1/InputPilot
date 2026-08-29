@@ -81,12 +81,11 @@ bool BLEOTA::begin(NimBLEServer *server) {
   auto *service = server->createService(BLE_OTA_SERVICE_UUID);
   if (!service) return false;
   auto *control = service->createCharacteristic(
-      BLE_OTA_CONTROL_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_ENC);
+      BLE_OTA_CONTROL_UUID, NIMBLE_PROPERTY::WRITE);
   auto *data = service->createCharacteristic(
-      BLE_OTA_DATA_UUID, NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::WRITE_ENC);
+      BLE_OTA_DATA_UUID, NIMBLE_PROPERTY::WRITE_NR);
   status_ = service->createCharacteristic(
-      BLE_OTA_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY |
-                               NIMBLE_PROPERTY::READ_ENC);
+      BLE_OTA_STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   if (!control || !data || !status_) return false;
   control->setCallbacks(new ControlCallbacks(*this));
   data->setCallbacks(new DataCallbacks(*this));
