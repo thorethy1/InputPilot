@@ -344,6 +344,8 @@ final class BonjourBrowser: BonjourBrowserProtocol {
 
     private func stringValue(from entry: NWTXTRecord.Entry) -> String {
         switch entry {
+        case .none, .empty:
+            return ""
         case let .string(value):
             return value
         case let .data(value):

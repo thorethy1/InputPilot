@@ -220,7 +220,9 @@ private extension Data {
         }
         self = output
     }
+}
 
+extension Data {
     var hex: String { map { String(format: "%02X", $0) }.joined() }
 }
 

@@ -54,7 +54,7 @@ final class HIDRemoteTests: XCTestCase {
         let manager = HIDConnectionManager(ble: transport, tcp: transport, protocolVersion: 1)
         XCTAssertFalse(await manager.send(.click(.left)))
         XCTAssertTrue(transport.events.isEmpty)
-        XCTAssertEqual(manager.connectionSummary, "Firmware unsupported")
+        XCTAssertEqual(manager.connectionSummary, "Firmware must be reflashed")
     }
 
     @MainActor func testSecureTransportsCanFailOver() async {
