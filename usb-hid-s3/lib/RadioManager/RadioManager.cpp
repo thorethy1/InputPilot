@@ -491,7 +491,8 @@ void RadioManager::pairingCredentialRotated() {
     const std::vector<uint16_t> peers = s_bleServer
         ? s_bleServer->getPeerDevices() : std::vector<uint16_t>{};
     for (const uint16_t handle : peers) s_bleServer->disconnect(handle);
-    LOG_BLE("connections cleared after USB trust rotation");
+    NimBLEDevice::deleteAllBonds();
+    LOG_BLE("connections and stored bonds cleared after USB trust rotation");
   }
   requestReleaseAll("pairing-rotated");
 }
