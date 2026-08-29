@@ -24,7 +24,7 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertFalse(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: true, capabilities: ["wifi_transport"], hasEndpoints: true))
     }
 
-    func testTransportSelectionContainsNoFallbackTransport() {
+    @MainActor func testTransportSelectionContainsNoFallbackTransport() {
         XCTAssertEqual(HIDConnectionManager.candidateKinds(mode: .automatic, lowLatency: true), [.bluetooth, .tcp])
         XCTAssertEqual(HIDConnectionManager.candidateKinds(mode: .automatic, lowLatency: false), [.tcp, .bluetooth])
         XCTAssertEqual(HIDConnectionManager.candidateKinds(mode: .wifiOnly, lowLatency: false), [.tcp])
@@ -52,7 +52,8 @@ final class HIDRemoteTests: XCTestCase {
     @MainActor func testProtocolV1IsRejectedBeforeSending() async {
         let transport = MockTransport(kind: .bluetooth, available: true)
         let manager = HIDConnectionManager(ble: transport, tcp: transport, protocolVersion: 1)
-        XCTAssertFalse(await manager.send(.click(.left)))
+        let sent = await manager.send(.click(.left))
+        XCTAssertFalse(sent)
         XCTAssertTrue(transport.events.isEmpty)
         XCTAssertEqual(manager.connectionSummary, "Firmware must be reflashed")
     }
@@ -62,7 +63,8 @@ final class HIDRemoteTests: XCTestCase {
         let tcp = MockTransport(kind: .tcp, available: true)
         let manager = HIDConnectionManager(ble: ble, tcp: tcp,
             capabilities: ["ble_transport", "wifi_transport", "mouse_click"])
-        XCTAssertTrue(await manager.send(.click(.left)))
+        let sent = await manager.send(.click(.left))
+        XCTAssertTrue(sent)
         XCTAssertEqual(tcp.events, [.click(.left)])
         XCTAssertEqual(manager.activeTransport, .tcp)
     }

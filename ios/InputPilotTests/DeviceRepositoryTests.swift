@@ -22,7 +22,8 @@ final class DeviceRepositoryTests: XCTestCase {
         let api = MockAPIClient()
         let url = URL(string: "http://inputpilot-eeff.local/")!
         api.statusResults[url] = .success(DeviceStatus(ok: true, name: "InputPilot", version: "0.8.11", deviceId: device.deviceId, jiggle: false, jiggleIntervalMs: 30_000, mdns: "inputpilot-eeff.local", protocolVersion: 2, capabilities: ["secure_protocol_v2"], otaSchema: 1))
-        XCTAssertTrue(await DeviceRepository(context: context).refresh(device: device, api: api))
+        let refreshed = await DeviceRepository(context: context).refresh(device: device, api: api)
+        XCTAssertTrue(refreshed)
         XCTAssertEqual(api.statusCalls, [url])
     }
 }
