@@ -6,6 +6,7 @@
 #include <freertos/queue.h>
 
 #include "Config.h"
+#include "BLEDiscoveryMetadata.h"
 #include "DeviceIdentity.h"
 #include "OTAEngine.h"
 #include "PairingSecretStore.h"
@@ -95,39 +96,42 @@ bool BLEOTA::begin(NimBLEServer *server) {
 
 void BLEOTA::notify(const char *event, const char *error) {
   if (!status_) return;
-  char json[1080];
   if (strcmp(event, "IDLE") == 0) {
-    snprintf(
-        json, sizeof(json),
-        "{\"product\":\"%s\",\"board\":\"%s\",\"deviceId\":\"%s\",\"deviceName\":\"%s\","
-        "\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"trustRequired\":%s,"
-        "\"capabilities\":[\"secure_protocol_v2\",\"ble_transport\",\"wifi_transport\","
-        "\"secure_wifi_setup\",\"secure_usb_identity\",\"secure_ota\","
-        "\"secure_diagnostics\",\"mouse_move\","
-        "\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",\"keyboard_type\","
-        "\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"protocol_v2\"],"
-        "\"state\":\"idle\",\"event\":\"IDLE\",\"offset\":0,\"size\":0,"
-        "\"maxChunk\":%u,\"windowSize\":%lu}",
-        FW_PRODUCT, FW_BOARD, DeviceIdentity::deviceId(), DeviceIdentity::deviceName(),
-        OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION,
-        "true",
-        static_cast<unsigned>(BLE_OTA_MAX_PAYLOAD),
-        static_cast<unsigned long>(BLE_OTA_ACK_BYTES));
-  } else {
-    snprintf(
-        json, sizeof(json),
-        "{\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"state\":\"%s\","
-        "\"event\":\"%s\",\"offset\":%lu,\"size\":%lu,\"maxChunk\":%u,"
-        "\"windowSize\":%lu%s%s%s}",
-        OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION,
-        OTAProtocol::stateName(g_otaEngine.state()), event,
-        static_cast<unsigned long>(g_otaEngine.received()),
-        static_cast<unsigned long>(g_otaEngine.total()),
-        static_cast<unsigned>(BLE_OTA_MAX_PAYLOAD),
-        static_cast<unsigned long>(BLE_OTA_ACK_BYTES),
-        error ? ",\"error\":\"" : "", error ? error : "", error ? "\"" : "");
+    const std::string metadata = BLEDiscoveryMetadata::build(
+        DeviceIdentity::deviceId(), DeviceIdentity::deviceName());
+    if (!metadata.empty()) {
+      status_->setValue(reinterpret_cast<const uint8_t *>(metadata.data()),
+                        metadata.size());
+    } else {
+      static constexpr char fallback[] = "{\"error\":\"metadata_too_large\"}";
+      status_->setValue(reinterpret_cast<const uint8_t *>(fallback),
+                        sizeof(fallback) - 1);
+    }
+    status_->notify();
+    return;
   }
-  status_->setValue(reinterpret_cast<const uint8_t *>(json), strlen(json));
+  char json[512];
+  const int written = snprintf(
+      json, sizeof(json),
+      "{\"protocol\":%u,\"otaSchema\":%u,\"firmware\":\"%s\",\"state\":\"%s\","
+      "\"event\":\"%s\",\"offset\":%lu,\"size\":%lu,\"maxChunk\":%u,"
+      "\"windowSize\":%lu%s%s%s}",
+      OTA_PROTOCOL_VERSION, OTA_SCHEMA_VERSION, FW_VERSION,
+      OTAProtocol::stateName(g_otaEngine.state()), event,
+      static_cast<unsigned long>(g_otaEngine.received()),
+      static_cast<unsigned long>(g_otaEngine.total()),
+      static_cast<unsigned>(BLE_OTA_MAX_PAYLOAD),
+      static_cast<unsigned long>(BLE_OTA_ACK_BYTES),
+      error ? ",\"error\":\"" : "", error ? error : "", error ? "\"" : "");
+  if (written < 0 || static_cast<size_t>(written) >= sizeof(json)) {
+    static constexpr char fallback[] = "{\"error\":\"status_too_large\"}";
+    status_->setValue(reinterpret_cast<const uint8_t *>(fallback),
+                      sizeof(fallback) - 1);
+    status_->notify();
+    return;
+  }
+  status_->setValue(reinterpret_cast<const uint8_t *>(json),
+                    static_cast<size_t>(written));
   status_->notify();
 }
 

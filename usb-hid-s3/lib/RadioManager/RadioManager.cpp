@@ -491,8 +491,7 @@ void RadioManager::pairingCredentialRotated() {
     const std::vector<uint16_t> peers = s_bleServer
         ? s_bleServer->getPeerDevices() : std::vector<uint16_t>{};
     for (const uint16_t handle : peers) s_bleServer->disconnect(handle);
-    NimBLEDevice::deleteAllBonds();
-    LOG_BLE("connections and stored bonds cleared after USB trust rotation");
+    LOG_BLE("connections cleared after USB trust rotation");
   }
   requestReleaseAll("pairing-rotated");
 }
@@ -645,8 +644,6 @@ void RadioManager::startBle() {
       return;
     }
     LOG_BLE("initialized");
-    NimBLEDevice::setSecurityAuth(true, false, true);  // bonding + secure connections, no MITM (Just Works)
-    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
     s_bleServer = NimBLEDevice::createServer();
     if (!s_bleServer) {
       snprintf(status_, sizeof(status_), "ble:server-fail");
@@ -689,7 +686,7 @@ void RadioManager::startBle() {
       LOG_BLE("GATT server/service start failed");
       return;
     }
-    LOG_BLE("GATT services started (Secure Protocol, OTA, Diagnostics)");
+    LOG_BLE("GATT services started (Secure Protocol, OTA)");
 
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     if (!adv) {
