@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class AddDeviceWizardViewModelTests: XCTestCase {
     private func metadata(protocolVersion: Int = 2, capabilities: [String] = ["secure_protocol_v2", "secure_wifi_setup"]) -> BLEDeviceMetadata {
-        BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "aabbccddeeff", deviceName: "Desk", firmware: "0.8.11", protocolVersion: protocolVersion, otaSchema: 1, capabilities: capabilities, trustRequired: true)
+        BLEDeviceMetadata(product: "InputPilot", board: "esp32-s3-zero-4mb", deviceId: "aabbccddeeff", deviceName: "Desk", firmware: "0.8.12", protocolVersion: protocolVersion, otaSchema: 1, capabilities: capabilities, trustRequired: true)
     }
 
     func testUSBTrustIsRequiredBeforeBluetoothStep() {

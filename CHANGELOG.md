@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.12] - 2026-08-31
+
+- Add a complete BLE-only setup and control path; Wi-Fi is optional.
+- Match the BLE device automatically from the USB-paired hardware identity.
+- Store up to five ordered Wi-Fi networks and try alternatives when a network
+  is unavailable.
+- Add encrypted BLE management for listing, adding, updating, and removing
+  Wi-Fi networks while keeping BLE responsive.
+- Simplify device onboarding so the plus button opens USB pairing directly.
+
 ## [0.8.11] - 2026-08-29
 
 - Replace split authentication and feature-specific transports with Secure Protocol v2 over BLE and Wi-Fi/TCP.
