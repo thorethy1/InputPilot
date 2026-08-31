@@ -25,6 +25,7 @@
 #include "KeyMap.h"
 #include "PairingSecretStore.h"
 #include "SecureSession.h"
+#include "SecureReplySizing.h"
 #include "USBIdentityConfig.h"
 
 RadioManager g_radio;
@@ -61,19 +62,49 @@ constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
 constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
 uint32_t s_managementRebootAtMs = 0;
 
+bool sendBleNotification(const uint8_t *value, size_t length) {
+  if (!value || !s_bleTx || !s_bleServer || !s_bleOwner.connected()) return false;
+  const uint16_t connection = s_bleOwner.owner();
+  const uint16_t mtu = s_bleServer->getPeerMTU(connection);
+  if (mtu <= 3 || length > static_cast<size_t>(mtu - 3)) {
+    LOG_WARN("BLE notification rejected length=%u mtu=%u", static_cast<unsigned>(length),
+             static_cast<unsigned>(mtu));
+    return false;
+  }
+  return s_bleTx->notify(value, length, connection);
+}
+
 void sendControlReply(const char *source, const char *reply) {
   if (!reply) return;
   if (strcmp(source, "ble") == 0 && s_bleTx && s_bleOwner.connected()) {
-    s_bleTx->setValue(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
-    s_bleTx->notify(s_bleOwner.owner());
+    sendBleNotification(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
   } else if (strcmp(source, "wifi") == 0 && s_tcpClient && s_tcpClient.connected()) {
     s_tcpClient.print(reply);
     s_tcpClient.print("\n");
   }
 }
 
+bool sendSecureBinaryReply(SecureSession &session, const std::string &plaintext) {
+  uint8_t record[BLE_CONTROL_FRAME_MAX];
+  size_t recordLength = 0;
+  return session.encryptBinary(
+             reinterpret_cast<const uint8_t *>(plaintext.data()), plaintext.size(),
+             record, sizeof(record), recordLength) &&
+         sendBleNotification(record, recordLength);
+}
+
 void sendSecureReply(const char *source, SecureSession &session,
                      const std::string &plaintext) {
+  if (strcmp(source, "ble") == 0 && s_bleServer && s_bleOwner.connected()) {
+    const uint16_t mtu = s_bleServer->getPeerMTU(s_bleOwner.owner());
+    const size_t textLength = SecureReplySizing::textRecordLength(plaintext.size());
+    if (mtu > 3 && textLength > static_cast<size_t>(mtu - 3)) {
+      if (!sendSecureBinaryReply(session, plaintext))
+        LOG_WARN("secure BLE binary reply rejected plaintext=%u mtu=%u",
+                 static_cast<unsigned>(plaintext.size()), static_cast<unsigned>(mtu));
+      return;
+    }
+  }
   std::string sealed;
   if (session.encryptText(plaintext, sealed)) sendControlReply(source, sealed.c_str());
 }
@@ -186,11 +217,29 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
              static_cast<unsigned>(identity.pid));
     sendSecureReply(
         source, session,
-        "{\"manufacturer_name\":\"" +
-            jsonEscape(String(identity.manufacturerName)) +
-            "\",\"product_name\":\"" + jsonEscape(String(identity.productName)) +
+        "{\"product_name\":\"" + jsonEscape(String(identity.productName)) +
             "\"," + std::string(ids) + ",\"serial_number\":\"" +
             jsonEscape(String(identity.serialNumber)) + "\"}");
+    return true;
+  }
+  if (message == "USB GET2") {
+    const USBIdentityValues &identity = USBIdentityConfig::get();
+    char ids[32];
+    snprintf(ids, sizeof(ids), "\"vid\":%u,\"pid\":%u",
+             static_cast<unsigned>(identity.vid),
+             static_cast<unsigned>(identity.pid));
+    const std::string response =
+        "{\"manufacturer_name\":\"" +
+        jsonEscape(String(identity.manufacturerName)) +
+        "\",\"product_name\":\"" + jsonEscape(String(identity.productName)) +
+        "\"," + std::string(ids) + ",\"serial_number\":\"" +
+        jsonEscape(String(identity.serialNumber)) + "\"}";
+    if (strcmp(source, "ble") == 0) {
+      if (!sendSecureBinaryReply(session, response))
+        sendSecureReply(source, session, "error response_too_large");
+    } else {
+      sendSecureReply(source, session, response);
+    }
     return true;
   }
   if (message.rfind("USB SET2 ", 0) == 0) {

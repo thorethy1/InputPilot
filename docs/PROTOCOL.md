@@ -87,6 +87,13 @@ update operations retain their existing restart behavior. Firmware advertising
 `usb_manufacturer` also accepts encrypted BLE management frame type `0x05` with
 length-prefixed manufacturer, product, and serial strings.
 
+BLE management replies use the existing encrypted text record while it fits the
+negotiated ATT notification payload. Larger replies use the compact Secure
+Protocol binary record (`0xA1`, counter, ciphertext, authentication tag), which
+the app decrypts before matching the response to the pending request. `USB GET2`
+always uses this compact form over BLE and returns the full manufacturer-aware
+identity; `USB GET` retains the legacy response for older apps.
+
 ## Session ownership and recovery
 
 - One BLE manager owns the CoreBluetooth connection per device ID.

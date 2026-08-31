@@ -421,8 +421,8 @@ final class TCPHIDControlTransport: HIDControlTransport {
         if String(data: data, encoding: .utf8) == "{}" { return nil }
         return try JSONDecoder().decode(FirmwareLogRecord.self, from: data)
     }
-    func usbIdentity() async throws -> USBIdentity {
-        let reply = try await request("USB GET")
+    func usbIdentity(includeManufacturer: Bool = false) async throws -> USBIdentity {
+        let reply = try await request(includeManufacturer ? "USB GET2" : "USB GET")
         return try JSONDecoder().decode(USBIdentity.self, from: Data(reply.utf8))
     }
     func setUSBIdentity(productName: String, vid: Int, pid: Int, serialNumber: String) async throws {
@@ -1398,9 +1398,10 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if characteristic.uuid == otaStatus { firmwareUpdater.receive(characteristic.value, error: error); return }
-        guard characteristic.uuid == secureStatus, error == nil, let data = characteristic.value,
-              let reply = String(data: data, encoding: .utf8) else { return }
+        guard characteristic.uuid == secureStatus, error == nil,
+              let data = characteristic.value else { return }
         if state == .authenticating, let secureChannel {
+            guard let reply = String(data: data, encoding: .utf8) else { return }
             do {
                 if reply.hasPrefix("secure challenge "), let rx = characteristics[control] {
                     peripheral.writeValue(Data(try secureChannel.hello(for: reply).utf8), for: rx, type: .withResponse)
@@ -1418,9 +1419,17 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
                 return
             }
         }
-        if state == .ready, let secureChannel,
-           let plaintext = try? secureChannel.openText(reply),
-           !pendingSecureReplies.isEmpty {
+        guard state == .ready, let secureChannel, !pendingSecureReplies.isEmpty else { return }
+        let plaintext: String?
+        if data.first == SecureChannel.binaryVersion,
+           let opened = try? secureChannel.openBinary(data) {
+            plaintext = String(data: opened, encoding: .utf8)
+        } else if let reply = String(data: data, encoding: .utf8) {
+            plaintext = try? secureChannel.openText(reply)
+        } else {
+            plaintext = nil
+        }
+        if let plaintext {
             let pending = pendingSecureReplies.removeFirst()
             pending.timeout.cancel()
             pending.continuation.resume(returning: plaintext)
@@ -1485,8 +1494,8 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         if String(data: data, encoding: .utf8) == "{}" { return nil }
         return try JSONDecoder().decode(FirmwareLogRecord.self, from: data)
     }
-    func usbIdentity() async throws -> USBIdentity {
-        let reply = try await request("USB GET")
+    func usbIdentity(includeManufacturer: Bool = false) async throws -> USBIdentity {
+        let reply = try await request(includeManufacturer ? "USB GET2" : "USB GET")
         return try JSONDecoder().decode(USBIdentity.self, from: Data(reply.utf8))
     }
     func send(_ event: HIDEvent) async throws {

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Prevent BLE disconnects and ESP32 instability when encrypted management
+  responses exceed the negotiated ATT notification payload. Large replies now
+  use compact encrypted binary records while short replies remain compatible
+  with the existing text format.
+
 ## [0.8.14] - 2026-08-31
 
 - Replace the legacy MKF Labs identity with `thorethy` in AltStore metadata,

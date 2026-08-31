@@ -303,12 +303,13 @@ struct DeviceDetailView: View {
                 try await Task.sleep(for: .milliseconds(100))
             }
             let identity: USBIdentity
+            let includeManufacturer = device.capabilities.contains("usb_manufacturer")
             if bluetooth.state == .ready {
-                identity = try await bluetooth.usbIdentity()
+                identity = try await bluetooth.usbIdentity(includeManufacturer: includeManufacturer)
             } else if let host = wifiControlHost {
                 identity = try await InputPilotWiFiManager.session(
                     host: host, deviceId: device.deviceId
-                ).usbIdentity()
+                ).usbIdentity(includeManufacturer: includeManufacturer)
             } else {
                 throw TransportError.unavailable
             }
