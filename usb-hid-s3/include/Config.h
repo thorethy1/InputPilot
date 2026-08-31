@@ -76,6 +76,7 @@
 #define WIFI_AP_PASS ""  // empty = open Soft-AP (easiest phone setup)
 #endif
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
+#define WIFI_RETRY_INTERVAL_MS 30000UL
 
 // Soft-AP / mDNS prefixes. Runtime SSIDs/hostnames append a MAC suffix via
 // DeviceIdentity (e.g. InputPilot-EEFF, inputpilot-eeff.local).

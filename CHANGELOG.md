@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Make BLE and Wi-Fi independent Secure Protocol transports backed by the same
+  command router, capability contract, device identity, and authentication
+  rules; Wi-Fi transitions now reset only the Wi-Fi/TCP session.
+- Start the BLE authentication deadline when `secure begin` reaches the
+  protocol loop rather than when the radio link connects, drain queued proofs
+  before checking expiry, and reject stale secure state from an earlier BLE
+  connection generation.
+- Return structured acknowledgements and provisioning status for Wi-Fi changes,
+  keep BLE authenticated while STA and SoftAP states change, and report an
+  unreachable network as a Wi-Fi failure instead of an authentication failure.
+- Treat handshake transport timeouts as reconnectable on iOS while retaining a
+  terminal state for invalid cryptographic proof, and keep a ready BLE session
+  usable when the Wi-Fi transport is offline or failed.
 - Move every secure BLE control operation—including handshake, USB identity,
   Wi-Fi management, encryption and notification—out of the NimBLE host callback
   and into the bounded firmware loop queue.

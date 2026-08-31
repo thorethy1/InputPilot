@@ -10,14 +10,25 @@ enum AddDeviceWizardStep: Equatable {
 @MainActor
 final class AddDeviceWizardViewModel: ObservableObject {
     private struct SecureWiFiStatus: Decodable {
+        struct Provisioning: Decodable {
+            let state: String
+            let error: String
+        }
         let state: String
         let ip: String
         let deviceId: String
+        let provisioning: Provisioning?
 
         enum CodingKeys: String, CodingKey {
-            case state, ip
+            case state, ip, provisioning
             case deviceId = "device_id"
         }
+    }
+
+    private enum WiFiHandoff {
+        case connected(String)
+        case failed(String)
+        case unavailable
     }
 
     @Published private(set) var step: AddDeviceWizardStep = .securePairing
@@ -144,11 +155,19 @@ final class AddDeviceWizardViewModel: ObservableObject {
         // The authenticated BLE session provides a direct, identity-bound
         // handoff to the station IP. Bonjour remains active as a fallback, but
         // setup no longer depends on the router forwarding multicast DNS.
-        let directHost = await waitForSecureWiFiAddress(
+        let handoff = await waitForSecureWiFiAddress(
             bluetooth: bluetooth,
             expectedDeviceId: metadata.deviceId,
             timeout: 20
         )
+        let directHost: String?
+        switch handoff {
+        case let .connected(host): directHost = host
+        case let .failed(message):
+            errorMessage = message
+            return
+        case .unavailable: directHost = nil
+        }
         // The firmware intentionally owns one secure TCP session. Remove stale
         // managers from an earlier setup/control attempt before verification.
         await InputPilotWiFiManager.removeSessions(deviceId: metadata.deviceId)
@@ -230,7 +249,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         bluetooth: BLEHIDControlTransport,
         expectedDeviceId: String,
         timeout: TimeInterval
-    ) async -> String? {
+    ) async -> WiFiHandoff {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             do {
@@ -238,22 +257,27 @@ final class AddDeviceWizardViewModel: ObservableObject {
                 let status = try JSONDecoder().decode(SecureWiFiStatus.self, from: Data(reply.utf8))
                 guard status.deviceId.lowercased() == expectedDeviceId.lowercased() else {
                     AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned a different device identity")
-                    return nil
+                    return .failed("InputPilot returned a different secure device identity.")
+                }
+                if let provisioning = status.provisioning,
+                   provisioning.state == "failed" {
+                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(provisioning.error)")
+                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
                 }
                 if status.state == "connected", !status.ip.isEmpty {
                     AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(status.ip)")
-                    return DeviceEndpointResolver.sanitizeHost(status.ip)
+                    return .connected(DeviceEndpointResolver.sanitizeHost(status.ip))
                 }
                 if status.state == "soft_ap" {
                     AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned to Soft-AP; STA join failed")
-                    return nil
+                    return .failed("InputPilot could not reach any configured Wi-Fi network. Bluetooth remains connected; check the network credentials and retry.")
                 }
             } catch {
                 AppLog.shared.write(.errors, "BLE Wi-Fi handoff status failed: \(error.localizedDescription)")
             }
             try? await Task.sleep(for: .milliseconds(500))
         }
-        return nil
+        return .unavailable
     }
 
     private func startBrowsing() {

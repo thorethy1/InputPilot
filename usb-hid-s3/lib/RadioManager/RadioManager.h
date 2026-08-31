@@ -14,6 +14,7 @@
 // peripheral and is unaffected.
 
 #include <Arduino.h>
+#include <string>
 
 #include "RadioMode.h"
 
@@ -37,12 +38,13 @@ public:
   // Called by the NimBLE disconnect callback after re-advertising is checked.
   void setBleAdvertisingStatus(bool active);
 
-  // Push a line back to the connected control client (BLE notify / TCP write).
-  void sendToControl(const char *line);
-
   // Apply newly saved STA credentials from an authenticated secure session.
   // If currently in Wifi mode, restarts WiFi to Soft-AP or STA as appropriate.
-  void applyWifiCredentials();
+  void applyWifiCredentials(const String &provisionedSsid = String());
+
+  // Authenticated, transport-independent Wi-Fi status payload used by both
+  // BLE and TCP Secure Protocol sessions.
+  std::string wifiStatusJson() const;
 
   // Invalidate authenticated sessions immediately after BOOT rotates pairing.
   void pairingCredentialRotated();
@@ -68,13 +70,17 @@ private:
   size_t staCredentialIndex_ = 0;
   size_t staAttempts_ = 0;
   uint32_t staDisconnectedSinceMs_ = 0;
+  uint32_t softApStartedMs_ = 0;
+  String provisioningSsid_;
+  String provisioningState_ = "idle";
+  String provisioningError_;
   char status_[64] = "none";
 };
 
 extern RadioManager g_radio;
 
-// Shared BLE session gate used by OTA and diagnostics. All BLE features belong
-// to the one control connection and its one authenticated secure session.
+// BLE transport-session gate used by OTA. Protocol features are dispatched by
+// the common command core after this concrete transport session authenticates.
 bool deviceBleAuthenticated();
 bool deviceBleConnectionOwnsSession(uint16_t connectionHandle);
 uint16_t deviceBleSessionHandle();

@@ -12,6 +12,8 @@ void test_metadata_is_complete_and_below_gatt_limit() {
   TEST_ASSERT_NOT_EQUAL(std::string::npos,
                         json.find("\"secure_protocol_v2\""));
   TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                        json.find("\"protocol_core\""));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos,
                         json.find("\"secure_wifi_setup\""));
   TEST_ASSERT_NOT_EQUAL(std::string::npos,
                         json.find("\"multiple_wifi\""));

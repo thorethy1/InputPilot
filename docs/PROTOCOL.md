@@ -112,6 +112,15 @@ identity; `USB GET` retains the legacy response for older apps.
   application session immediately.
 - A feature is ready only after application authentication, not GATT discovery,
   BLE connection or TCP connection.
+- The BLE authentication deadline starts only after the owner sends
+  `secure begin`. Link connection and GATT discovery are transport setup and do
+  not consume the Secure Protocol authentication window. Queued handshake
+  frames are processed before deadline expiry is evaluated.
+- BLE connection generations are part of session validity. Keys and an
+  `established` flag from a disconnected generation cannot authenticate a new
+  central while loop-side cleanup is pending.
+- A Wi-Fi interface transition invalidates only its TCP session. It does not
+  reset the BLE session, its counters, or its authentication state.
 - Automatic transport selection considers only authenticated ready sessions.
   It never introduces a less secure transport.
 
@@ -137,3 +146,17 @@ Encrypted binary management types under the existing `0xFE` prefix are:
 - `0x01 <ssid-length> <password-length> <ssid> <password>`: add/update
 - `0x04 <ssid-length> <ssid>`: remove one network
 - `0x05`: remove every network
+
+Each binary Wi-Fi management request receives an encrypted structured
+acknowledgement such as
+`{"operation":"wifi_set","status":"accepted"}` before the asynchronous
+radio transition begins. Storage and validation failures use stable protocol
+errors such as `error invalid_wifi_credentials` and
+`error wifi_storage_failed`.
+
+The same command core is available to TCP sessions with `WIFI SETHEX
+<ssid-hex> <password-hex-or->`, `WIFI REMOVEHEX <ssid-hex>`, and `WIFI CLEAR`.
+`WIFI STATUS` is available through either transport and includes overall radio
+state plus a `provisioning` object with `state` and `error`. A failed
+join is therefore reported as `network_unreachable` without changing the
+authentication state of the transport used to query it.

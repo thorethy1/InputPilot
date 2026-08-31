@@ -30,6 +30,8 @@ void test_second_connection_cannot_displace_owner() {
 void test_unauthenticated_owner_expires_but_authenticated_owner_does_not() {
   BLESessionOwnership ownership(15000);
   ownership.claim(3, 1000);
+  TEST_ASSERT_FALSE(ownership.authenticationExpired(50000, false));
+  ownership.authenticationStarted(3, 1000);
   TEST_ASSERT_FALSE(ownership.authenticationExpired(15999, false));
   TEST_ASSERT_TRUE(ownership.authenticationExpired(16000, false));
   ownership.authenticated(3);
@@ -39,8 +41,27 @@ void test_unauthenticated_owner_expires_but_authenticated_owner_does_not() {
 void test_timeout_handles_millis_wraparound() {
   BLESessionOwnership ownership(32);
   ownership.claim(3, UINT32_MAX - 15);
+  ownership.authenticationStarted(3, UINT32_MAX - 15);
   TEST_ASSERT_FALSE(ownership.authenticationExpired(15, false));
   TEST_ASSERT_TRUE(ownership.authenticationExpired(16, false));
+}
+
+void test_gatt_discovery_does_not_consume_authentication_window() {
+  BLESessionOwnership ownership(15000);
+  ownership.claim(11, 1000);
+  TEST_ASSERT_FALSE(ownership.authenticationExpired(60000, false));
+  ownership.authenticationStarted(11, 60000);
+  TEST_ASSERT_FALSE(ownership.authenticationExpired(74999, false));
+  TEST_ASSERT_TRUE(ownership.authenticationExpired(75000, false));
+}
+
+void test_repeated_secure_begin_does_not_extend_authentication_window() {
+  BLESessionOwnership ownership(15000);
+  ownership.claim(12, 1000);
+  ownership.authenticationStarted(12, 2000);
+  ownership.authenticationStarted(12, 12000);
+  TEST_ASSERT_FALSE(ownership.authenticationExpired(16999, false));
+  TEST_ASSERT_TRUE(ownership.authenticationExpired(17000, false));
 }
 
 void test_owner_disconnect_releases_session() {
@@ -57,6 +78,8 @@ int main(int, char **) {
   RUN_TEST(test_second_connection_cannot_displace_owner);
   RUN_TEST(test_unauthenticated_owner_expires_but_authenticated_owner_does_not);
   RUN_TEST(test_timeout_handles_millis_wraparound);
+  RUN_TEST(test_gatt_discovery_does_not_consume_authentication_window);
+  RUN_TEST(test_repeated_secure_begin_does_not_extend_authentication_window);
   RUN_TEST(test_owner_disconnect_releases_session);
   return UNITY_END();
 }

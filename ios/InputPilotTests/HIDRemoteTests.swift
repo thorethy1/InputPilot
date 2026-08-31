@@ -104,6 +104,16 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(manager.activeTransport, .tcp)
     }
 
+    @MainActor func testUnavailableWiFiAuthenticationDoesNotMaskReadyBluetooth() {
+        let ble = MockTransport(kind: .bluetooth, state: .ready)
+        let tcp = MockTransport(kind: .tcp, state: .authenticationFailed)
+        let manager = HIDConnectionManager(
+            ble: ble, tcp: tcp,
+            capabilities: ["ble_transport", "wifi_transport", "mouse_click"]
+        )
+        XCTAssertEqual(manager.connectionSummary, "Ready Bluetooth")
+    }
+
     func testSemanticVersionsCompareNumerically() {
         XCTAssertLessThan(SemanticVersion("0.8.9")!, SemanticVersion("0.8.11")!)
     }
@@ -111,11 +121,16 @@ final class HIDRemoteTests: XCTestCase {
 
 private final class MockTransport: HIDControlTransport {
     let kind: TransportKind
-    var isAvailable: Bool
-    var state: TransportConnectionState { isAvailable ? .ready : .offline }
+    var state: TransportConnectionState
+    var isAvailable: Bool { state == .ready }
     var events: [HIDEvent] = []
-    init(kind: TransportKind, available: Bool) { self.kind = kind; isAvailable = available }
+    init(kind: TransportKind, available: Bool) {
+        self.kind = kind; state = available ? .ready : .offline
+    }
+    init(kind: TransportKind, state: TransportConnectionState) {
+        self.kind = kind; self.state = state
+    }
     func connect() async {}
     func send(_ event: HIDEvent) async throws { events.append(event) }
-    func disconnect() async { isAvailable = false }
+    func disconnect() async { state = .offline }
 }

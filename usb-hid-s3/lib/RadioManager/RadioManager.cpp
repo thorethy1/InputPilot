@@ -43,9 +43,7 @@ NimBLECharacteristic *s_bleTx = nullptr;
 volatile bool s_bleTearingDown = false;
 bool s_bleReady = false;
 
-bool s_bleAuthed = false;
 BLESessionOwnership s_bleOwner(BLE_SECURE_AUTH_TIMEOUT_MS);
-bool s_tcpAuthed = false;
 bool s_wifiOtaWindowed = false;
 bool s_wifiOtaBinary = false;
 uint32_t s_wifiOtaLastAck = 0;
@@ -73,6 +71,15 @@ constexpr size_t TCP_OTA_BINARY_PLAINTEXT_MAX =
 constexpr size_t TCP_OTA_BINARY_RECORD_MAX =
     TCP_OTA_BINARY_PLAINTEXT_MAX + 1 + sizeof(uint64_t) + SecureSession::TagSize;
 uint32_t s_managementRebootAtMs = 0;
+
+bool bleSessionEstablished() {
+  // SecureSession is reset in the firmware loop, not in the NimBLE callback.
+  // A new connection generation must never inherit the prior connection's
+  // established flag during that handoff window.
+  return s_bleOwner.connected() &&
+         s_bleProcessedGeneration == s_bleConnectionGeneration &&
+         s_bleSecureSession.established();
+}
 
 bool sendBleNotification(const uint8_t *value, size_t length) {
   if (!value || !s_bleTx || !s_bleServer || !s_bleOwner.connected()) return false;
@@ -166,8 +173,10 @@ std::string jsonEscape(const String &value) {
   return escaped;
 }
 
-bool dispatchSecureProtocolMessage(const std::string &message, const char *source,
-                                   SecureSession &session) {
+// Common InputPilot command router. `source` selects only response framing and
+// transport-scoped OTA ownership; it does not select a feature implementation.
+bool dispatchProtocolCommand(const std::string &message, const char *source,
+                             SecureSession &session) {
   const OTATransportOwner owner = strcmp(source, "ble") == 0
                                       ? OTATransportOwner::BLE
                                       : OTATransportOwner::WiFi;
@@ -178,21 +187,7 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     return true;
   }
   if (message == "WIFI STATUS") {
-    const char *state = "disconnected";
-    String ip;
-    if (g_radio.isSoftAp()) {
-      state = "soft_ap";
-    } else if (WiFi.status() == WL_CONNECTED) {
-      state = "connected";
-      ip = WiFi.localIP().toString();
-    } else if (g_radio.wifiEnabled()) {
-      state = "connecting";
-    }
-    const std::string response =
-        "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
-        std::string(ip.c_str()) + "\",\"device_id\":\"" +
-        std::string(DeviceIdentity::deviceId()) + "\"}";
-    sendSecureReply(source, session, response);
+    sendSecureReply(source, session, g_radio.wifiStatusJson());
     return true;
   }
   if (message == "WIFI LIST") {
@@ -209,6 +204,54 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     } else {
       sendSecureReply(source, session, "{\"ssid\":\"" +
                       jsonEscape(WifiCredentials::get(index).ssid) + "\"}");
+    }
+    return true;
+  }
+  if (message.rfind("WIFI SETHEX ", 0) == 0) {
+    const size_t separator = message.find(' ', 12);
+    std::string ssid;
+    std::string password;
+    const bool valid = separator != std::string::npos &&
+        decodeHex(message.substr(12, separator - 12), ssid) &&
+        (message.substr(separator + 1) == "-" ||
+         decodeHex(message.substr(separator + 1), password)) &&
+        !ssid.empty() && ssid.size() <= 32 && password.size() <= 63 &&
+        ssid.find('\0') == std::string::npos &&
+        password.find('\0') == std::string::npos;
+    if (!valid) {
+      sendSecureReply(source, session, "error invalid_wifi_credentials");
+    } else if (!WifiCredentials::save(
+                   String(ssid.c_str()), String(password.c_str()))) {
+      sendSecureReply(source, session, "error wifi_storage_failed");
+    } else {
+      const String target(ssid.c_str());
+      sendSecureReply(source, session,
+                      "{\"operation\":\"wifi_set\",\"status\":\"accepted\"}");
+      g_radio.applyWifiCredentials(target);
+    }
+    return true;
+  }
+  if (message.rfind("WIFI REMOVEHEX ", 0) == 0) {
+    std::string ssid;
+    if (!decodeHex(message.substr(15), ssid) || ssid.empty() || ssid.size() > 32 ||
+        ssid.find('\0') != std::string::npos) {
+      sendSecureReply(source, session, "error invalid_wifi_credentials");
+    } else if (!WifiCredentials::remove(String(ssid.c_str()))) {
+      sendSecureReply(source, session, "error wifi_network_not_found");
+    } else {
+      sendSecureReply(source, session,
+                      "{\"operation\":\"wifi_remove\",\"status\":\"accepted\"}");
+      g_radio.applyWifiCredentials();
+    }
+    return true;
+  }
+  if (message == "WIFI CLEAR") {
+    if (!WifiCredentials::clear()) {
+      sendSecureReply(source, session, "error wifi_storage_failed");
+    } else {
+      sendSecureReply(source, session,
+                      "{\"operation\":\"wifi_clear\",\"status\":\"accepted\"}");
+      g_radio.applyWifiCredentials();
     }
     return true;
   }
@@ -414,18 +457,17 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
   return false;
 }
 
-void dispatchControlLine(const std::string &line, const char *source,
-                         bool *authed);
+void dispatchControlLine(const std::string &line, const char *source);
 
 void dispatchTcpBinaryOTARecord(const uint8_t *record, size_t recordLength) {
   static uint8_t plaintext[TCP_OTA_BINARY_PLAINTEXT_MAX];
   size_t plaintextLength = 0;
-  if (!s_tcpAuthed || !s_wifiOtaBinary ||
+  if (!s_tcpSecureSession.established() || !s_wifiOtaBinary ||
       g_otaEngine.owner() != OTATransportOwner::WiFi ||
       !s_tcpSecureSession.decryptBinary(record, recordLength, plaintext,
                                         sizeof(plaintext), plaintextLength) ||
       plaintextLength <= 1 + sizeof(uint32_t) || plaintext[0] != 0x01) {
-    if (s_tcpAuthed)
+    if (s_tcpSecureSession.established())
       sendSecureReply("wifi", s_tcpSecureSession, "error invalid_binary_data");
     return;
   }
@@ -494,7 +536,7 @@ void processTcpReceiveBuffer() {
     std::string line(reinterpret_cast<const char *>(s_tcpReceiveBuf.data() + consumed),
                      lineLength);
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (!line.empty()) dispatchControlLine(line, "wifi", &s_tcpAuthed);
+    if (!line.empty()) dispatchControlLine(line, "wifi");
     consumed += lineLength + 1;
   }
   if (consumed)
@@ -502,29 +544,28 @@ void processTcpReceiveBuffer() {
                           s_tcpReceiveBuf.begin() + consumed);
 }
 
-void dispatchControlLine(const std::string &line, const char *source,
-                         bool *authed) {
+void dispatchControlLine(const std::string &line, const char *source) {
   SecureSession &session = strcmp(source, "ble") == 0
                                ? s_bleSecureSession : s_tcpSecureSession;
   std::string reply;
   if (line == "secure begin") {
     // A BLE owner gets one authentication window per connection. Repeated
     // begin messages must not extend that window indefinitely.
-    if (strcmp(source, "ble") == 0 && s_bleAuthed) {
+    if (strcmp(source, "ble") == 0 && bleSessionEstablished()) {
       LOG_BLE("secure renegotiation rejected; reconnect required");
       return;
     }
+    if (strcmp(source, "ble") == 0)
+      s_bleOwner.authenticationStarted(s_bleOwner.owner(), millis());
     uint8_t secret[PairingSecretStore::SecretSize];
     const bool ok = PairingSecretStore::load(secret) &&
                     session.begin(secret, DeviceIdentity::deviceId(), reply);
     memset(secret, 0, sizeof(secret));
     if (ok) sendControlReply(source, reply.c_str());
-    if (authed) *authed = false;
     return;
   }
   if (line.rfind("secure hello ", 0) == 0) {
     const bool ok = session.acceptHello(line, reply);
-    if (authed) *authed = ok;
     if (ok && strcmp(source, "ble") == 0)
       s_bleOwner.authenticated(s_bleOwner.owner());
     sendControlReply(source, ok ? reply.c_str() : "secure failed");
@@ -532,16 +573,13 @@ void dispatchControlLine(const std::string &line, const char *source,
   }
   std::string plaintext;
   if (session.established() && session.decryptText(line, plaintext)) {
-    if (authed) *authed = true;
-    if (!dispatchSecureProtocolMessage(plaintext, source, session)) {
+    if (!dispatchProtocolCommand(plaintext, source, session)) {
       handleCommandLine(plaintext, source);
     }
   } else {
     LOG_INFO("unauthenticated or invalid secure record rejected src=%s", source);
   }
 }
-
-std::string s_bleLineBuf;
 
 class BinaryCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
@@ -589,7 +627,7 @@ void processBLEControlFrames(size_t budget = 8) {
       std::string line(reinterpret_cast<const char *>(frame.bytes), frame.length);
       if (!line.empty() && line.back() == '\n') line.pop_back();
       if (!line.empty() && line.back() == '\r') line.pop_back();
-      if (!line.empty()) dispatchControlLine(line, "ble", &s_bleAuthed);
+      if (!line.empty()) dispatchControlLine(line, "ble");
       continue;
     }
     uint8_t decrypted[BLE_CONTROL_FRAME_MAX];
@@ -599,7 +637,7 @@ void processBLEControlFrames(size_t budget = 8) {
       LOG_INFO("encrypted binary control rejected");
       continue;
     }
-    if (!s_bleAuthed) {
+    if (!bleSessionEstablished()) {
       LOG_INFO("binary control rejected: BLE session not authenticated");
       continue;
     }
@@ -684,25 +722,37 @@ void processBLEControlFrames(size_t budget = 8) {
           const size_t ssidLength = frame.bytes[2];
           if (ssidLength == 0 || ssidLength > 32 || frame.length != 3 + ssidLength) {
             LOG_WARN("secure BLE Wi-Fi removal rejected: invalid length");
+            sendSecureReply("ble", s_bleSecureSession,
+                            "error invalid_wifi_credentials");
             continue;
           }
           const String ssid(reinterpret_cast<const char *>(frame.bytes + 3), ssidLength);
           if (!WifiCredentials::remove(ssid)) {
             LOG_WARN("secure BLE Wi-Fi removal failed ssid=\"%s\"", ssid.c_str());
+            sendSecureReply("ble", s_bleSecureSession,
+                            "error wifi_network_not_found");
             continue;
           }
+          sendSecureReply("ble", s_bleSecureSession,
+                          "{\"operation\":\"wifi_remove\",\"status\":\"accepted\"}");
           g_radio.applyWifiCredentials();
           continue;
         }
         if (frame.length == 2 && frame.bytes[1] == 5) {
           if (!WifiCredentials::clear()) {
             LOG_WARN("secure BLE Wi-Fi clear failed");
+            sendSecureReply("ble", s_bleSecureSession,
+                            "error wifi_storage_failed");
             continue;
           }
+          sendSecureReply("ble", s_bleSecureSession,
+                          "{\"operation\":\"wifi_clear\",\"status\":\"accepted\"}");
           g_radio.applyWifiCredentials();
           continue;
         }
         LOG_WARN("secure BLE management frame rejected: invalid type");
+        sendSecureReply("ble", s_bleSecureSession,
+                        "error unsupported_management_operation");
         continue;
       }
       const size_t ssidLength = frame.bytes[2];
@@ -710,6 +760,8 @@ void processBLEControlFrames(size_t budget = 8) {
       if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
           frame.length != 4 + ssidLength + passwordLength) {
         LOG_WARN("secure BLE Wi-Fi setup rejected: invalid lengths");
+        sendSecureReply("ble", s_bleSecureSession,
+                        "error invalid_wifi_credentials");
         continue;
       }
       const String ssid(reinterpret_cast<const char *>(frame.bytes + 4), ssidLength);
@@ -717,10 +769,14 @@ void processBLEControlFrames(size_t budget = 8) {
                             passwordLength);
       if (!WifiCredentials::save(ssid, password)) {
         LOG_WARN("secure BLE Wi-Fi setup failed");
+        sendSecureReply("ble", s_bleSecureSession,
+                        "error wifi_storage_failed");
         continue;
       }
       LOG_WIFI("secure BLE Wi-Fi setup saved ssid=\"%s\"", ssid.c_str());
-      g_radio.applyWifiCredentials();
+      sendSecureReply("ble", s_bleSecureSession,
+                      "{\"operation\":\"wifi_set\",\"status\":\"accepted\"}");
+      g_radio.applyWifiCredentials(ssid);
       continue;
     }
     HIDMessage message;
@@ -771,7 +827,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     const BLESessionOwnership::ClaimResult claim = s_bleOwner.claim(handle, millis());
     if (claim == BLESessionOwnership::ClaimResult::Rejected) {
       LOG_BLE("additional central rejected handle=%u owner=%u ownerAuthenticated=%s",
-              handle, s_bleOwner.owner(), s_bleAuthed ? "yes" : "no");
+              handle, s_bleOwner.owner(),
+              bleSessionEstablished() ? "yes" : "no");
       server->disconnect(handle);
       return;
     }
@@ -779,12 +836,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     uint32_t generation = s_bleConnectionGeneration + 1;
     if (generation == 0) generation = 1;
     s_bleConnectionGeneration = generation;
-    s_bleAuthed = false;
     // Ask iOS for a low-latency, zero-slave-latency link. The peer remains free
     // to choose compatible values; these bounds improve sustained OTA writes
     // without making reconnection depend on an aggressive single interval.
     server->updateConnParams(handle, 12, 24, 0, 400);
-    LOG_BLE("central connected handle=%u secure authentication deadline=%lums",
+    LOG_BLE("central connected handle=%u; secure authentication starts on protocol traffic timeout=%lums",
             handle, static_cast<unsigned long>(BLE_SECURE_AUTH_TIMEOUT_MS));
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
@@ -794,7 +850,6 @@ class ServerCallbacks : public NimBLEServerCallbacks {
               handle, reason, s_bleOwner.owner());
       return;
     }
-    s_bleAuthed = false;
     g_bleOta.disconnected();
     requestReleaseAll("ble-disconnect");
     if (s_bleTearingDown) {
@@ -829,7 +884,9 @@ ServerCallbacks s_serverCallbacks;
 
 }  // namespace
 
-bool deviceBleAuthenticated() { return s_bleOwner.connected() && s_bleAuthed; }
+bool deviceBleAuthenticated() {
+  return bleSessionEstablished();
+}
 
 bool deviceBleConnectionOwnsSession(uint16_t connectionHandle) {
   return s_bleOwner.owns(connectionHandle);
@@ -846,8 +903,6 @@ bool decryptBleSecureRecord(const uint8_t *record, size_t recordLength,
 }
 
 void RadioManager::pairingCredentialRotated() {
-  s_bleAuthed = false;
-  s_tcpAuthed = false;
   s_bleSecureSession.reset();
   s_tcpSecureSession.reset();
   if (s_tcpClient) s_tcpClient.stop();
@@ -893,6 +948,11 @@ bool RadioManager::setMode(RadioMode m) {
 void RadioManager::startSoftAp() {
   staConnecting_ = false;
   softAp_ = true;
+  softApStartedMs_ = millis();
+  if (provisioningState_ == "connecting") {
+    provisioningState_ = "failed";
+    provisioningError_ = "network_unreachable";
+  }
   DeviceIdentity::begin();
   WiFi.mode(WIFI_AP);
   const char *apSsid = DeviceIdentity::softApSsid();
@@ -933,6 +993,10 @@ void RadioManager::finishStaConnection() {
   staConnecting_ = false;
   staAttempts_ = 0;
   staDisconnectedSinceMs_ = 0;
+  if (provisioningSsid_.length() > 0 && WiFi.SSID() == provisioningSsid_) {
+    provisioningState_ = "connected";
+    provisioningError_ = "";
+  }
   DeviceIdentity::begin();
   s_tcpServer.begin();
   s_tcpServer.setNoDelay(true);
@@ -956,7 +1020,21 @@ void RadioManager::finishStaConnection() {
 
 void RadioManager::serviceStaConnection() {
   if (!staConnecting_) {
-    if (softAp_ || WiFi.status() == WL_CONNECTED) {
+    if (softAp_) {
+      const size_t count = WifiCredentials::count();
+      if (count == 0 || millis() - softApStartedMs_ < WIFI_RETRY_INTERVAL_MS)
+        return;
+      // SoftAP is a fallback state, not a terminal state. Periodically run a
+      // fresh asynchronous STA pass so restoring the router recovers without
+      // rebooting and without touching BLE.
+      LOG_WIFI("Soft-AP retry interval elapsed; retrying configured networks");
+      stopWifiServices();
+      staAttempts_ = 0;
+      const WifiCreds candidate = WifiCredentials::get(0);
+      startSta(candidate.ssid, candidate.pass, 0);
+      return;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
       staDisconnectedSinceMs_ = 0;
       return;
     }
@@ -985,6 +1063,12 @@ void RadioManager::serviceStaConnection() {
   }
   if (millis() - staConnectStartedMs_ < WIFI_CONNECT_TIMEOUT_MS) return;
   LOG_WIFI("connect timeout for candidate %u", static_cast<unsigned>(staCredentialIndex_ + 1));
+  const WifiCreds failedCandidate = WifiCredentials::get(staCredentialIndex_);
+  if (provisioningState_ == "connecting" &&
+      failedCandidate.ssid == provisioningSsid_) {
+    provisioningState_ = "failed";
+    provisioningError_ = "network_unreachable";
+  }
   staConnecting_ = false;
   WiFi.disconnect(false, false);
   const size_t count = WifiCredentials::count();
@@ -1023,7 +1107,6 @@ void RadioManager::stopWifiServices() {
   s_wifiOtaWindowed = false;
   s_wifiOtaBinary = false;
   s_wifiOtaLastAck = 0;
-  s_tcpAuthed = false;
   s_tcpSecureSession.reset();
 }
 
@@ -1037,7 +1120,10 @@ void RadioManager::stopWifi() {
   LOG_WIFI("stopped");
 }
 
-void RadioManager::applyWifiCredentials() {
+void RadioManager::applyWifiCredentials(const String &provisionedSsid) {
+  provisioningSsid_ = provisionedSsid;
+  provisioningState_ = provisionedSsid.length() > 0 ? "connecting" : "idle";
+  provisioningError_ = "";
   if (!wifiEnabled()) {
     LOG_WIFI("credentials updated (will apply on next radio wifi)");
     return;
@@ -1050,6 +1136,25 @@ void RadioManager::applyWifiCredentials() {
   WiFi.disconnect(false, false);
   startWifi();
   LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
+}
+
+std::string RadioManager::wifiStatusJson() const {
+  const char *state = "disconnected";
+  String ip;
+  if (softAp_) {
+    state = "soft_ap";
+  } else if (WiFi.status() == WL_CONNECTED) {
+    state = "connected";
+    ip = WiFi.localIP().toString();
+  } else if (wifiEnabled()) {
+    state = "connecting";
+  }
+  return "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
+         std::string(ip.c_str()) + "\",\"device_id\":\"" +
+         std::string(DeviceIdentity::deviceId()) +
+         "\",\"provisioning\":{\"state\":\"" +
+         std::string(provisioningState_.c_str()) + "\",\"error\":\"" +
+         jsonEscape(provisioningError_) + "\"}}";
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,14 +1291,18 @@ void RadioManager::stopBle() {
     }
   }
   s_bleOwner.clear();
-  s_bleAuthed = false;
-  s_bleLineBuf.clear();
+  s_bleSecureSession.reset();
+  s_bleProcessedGeneration = s_bleConnectionGeneration;
   LOG_BLE("stopped (advertising off; stack idle)");
 }
 
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
-  if (s_bleOwner.authenticationExpired(millis(), s_bleAuthed)) {
+  // Drain Secure Protocol traffic before evaluating its deadline. A proof
+  // queued just before expiry must be allowed to establish the session.
+  processBLEControlFrames();
+  if (s_bleOwner.authenticationExpired(
+          millis(), bleSessionEstablished())) {
     const uint16_t handle = s_bleOwner.owner();
     LOG_BLE("secure authentication timed out handle=%u; disconnecting", handle);
     // Clear the deadline before requesting disconnect so this is issued once.
@@ -1205,7 +1314,6 @@ void RadioManager::loop() {
   }
   // Decode binary writes outside NimBLE's host callback. This keeps STL,
   // KeyMap, logging and HID queue work off the 4 KiB BLE host stack.
-  processBLEControlFrames();
   g_bleOta.loop();
   if (s_managementRebootAtMs &&
       static_cast<int32_t>(millis() - s_managementRebootAtMs) >= 0) {
@@ -1229,7 +1337,6 @@ void RadioManager::loop() {
       s_tcpReceiveBuf.clear();
       s_tcpReceiveBuf.reserve(TCP_OTA_BINARY_RECORD_MAX * 2);
       s_tcpSecureSession.reset();
-      s_tcpAuthed = false;
       s_wifiOtaWindowed = false;
       s_wifiOtaBinary = false;
       s_wifiOtaLastAck = 0;
@@ -1250,7 +1357,7 @@ void RadioManager::loop() {
       if (!s_tcpClient.connected()) break;
     }
   } else {
-    if (s_tcpAuthed) {
+    if (s_tcpSecureSession.established()) {
       requestReleaseAll("tcp-disconnect");
       if (g_otaEngine.owner() == OTATransportOwner::WiFi && g_otaEngine.active())
         g_otaEngine.abort("connection_lost");
@@ -1259,7 +1366,6 @@ void RadioManager::loop() {
     s_wifiOtaWindowed = false;
     s_wifiOtaBinary = false;
     s_wifiOtaLastAck = 0;
-    s_tcpAuthed = false;
     s_tcpSecureSession.reset();
   }
 }
@@ -1280,14 +1386,4 @@ const char *RadioManager::statusStr() {
     }
   }
   return status_;
-}
-
-void RadioManager::sendToControl(const char *line) {
-  if (bleEnabled() && s_bleTx && s_bleOwner.connected()) {
-    s_bleTx->setValue((const uint8_t *)line, strlen(line));
-    s_bleTx->notify(s_bleOwner.owner());
-  } else if (wifiEnabled() && s_tcpClient && s_tcpClient.connected()) {
-    s_tcpClient.print(line);
-    s_tcpClient.print("\n");
-  }
 }

@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-// Tracks the single BLE connection that owns the device-wide Secure Session.
+// Tracks the single BLE connection that owns the BLE transport session.
 // This class deliberately has no Arduino/NimBLE dependencies so its timeout
 // and connection-race behaviour can be covered by host tests.
 class BLESessionOwnership {
@@ -20,11 +20,21 @@ class BLESessionOwnership {
       : authenticationTimeoutMs_(authenticationTimeoutMs) {}
 
   ClaimResult claim(uint16_t connectionHandle, uint32_t nowMs) {
+    (void)nowMs;
     if (owner_ == connectionHandle) return ClaimResult::AlreadyOwner;
     if (owner_ != NoOwner) return ClaimResult::Rejected;
     owner_ = connectionHandle;
-    authenticationDeadlineMs_ = nowMs + authenticationTimeoutMs_;
+    // A BLE link is not an authentication attempt. GATT discovery can be
+    // delayed by radio coexistence, especially while STA is scanning. Start
+    // the bounded authentication window only after Secure Protocol traffic
+    // actually reaches the protocol loop.
+    authenticationDeadlineMs_ = 0;
     return ClaimResult::Claimed;
+  }
+
+  void authenticationStarted(uint16_t connectionHandle, uint32_t nowMs) {
+    if (owner_ == connectionHandle && authenticationDeadlineMs_ == 0)
+      authenticationDeadlineMs_ = nowMs + authenticationTimeoutMs_;
   }
 
   bool release(uint16_t connectionHandle) {

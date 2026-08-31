@@ -242,6 +242,10 @@ final class TCPHIDControlTransport: HIDControlTransport {
                     authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
                     return
                 }
+                if reply == "secure failed" {
+                    failAuthentication(on: conn)
+                    return
+                }
             } catch {
                 failAuthentication(on: conn)
                 return
@@ -269,11 +273,18 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var lastProtocolError: String?
     private func startAuthTimeout(for conn: NWConnection) {
         authTimeoutWork?.cancel()
-        let work = DispatchWorkItem { [weak self, weak conn] in guard let self, let conn, self.connection === conn, self.state == .authenticating else { return }; self.failAuthentication(on: conn) }
+        let work = DispatchWorkItem { [weak self, weak conn] in guard let self, let conn, self.connection === conn, self.state == .authenticating else { return }; self.retryAfterAuthenticationTimeout(on: conn) }
         authTimeoutWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work)
     }
     private func failAuthentication(on conn: NWConnection) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; receiving = false; conn.cancel() }
+    private func retryAfterAuthenticationTimeout(on conn: NWConnection) {
+        authTimeoutWork?.cancel(); authTimeoutWork = nil
+        lastProtocolError = "Secure Wi-Fi handshake timed out; reconnecting."
+        isAvailable = false; secureChannel = nil; receiving = false
+        state = shouldReconnect ? .reconnecting : .offline
+        conn.cancel()
+    }
     private func failConnection(_ message: String, on conn: NWConnection) { lastProtocolError = message; isAvailable = false; receiving = false; conn.cancel() }
     private func failPendingReplies(_ error: Error) {
         let pending = pendingReplies; pendingReplies.removeAll()
@@ -507,6 +518,39 @@ final class TCPHIDControlTransport: HIDControlTransport {
             networks.append(try JSONDecoder().decode(NetworkResponse.self, from: Data(reply.utf8)).ssid)
         }
         return networks
+    }
+    func setWiFi(ssid: String, password: String) async throws {
+        let ssidData = Data(ssid.utf8)
+        let passwordData = Data(password.utf8)
+        guard (1 ... 32).contains(ssidData.count), passwordData.count <= 63 else {
+            throw TransportError.failed("Wi-Fi names are limited to 32 bytes and passwords to 63 bytes.")
+        }
+        let encodedPassword = passwordData.isEmpty ? "-" : passwordData.hex
+        try validateWiFiManagementReply(
+            try await request("WIFI SETHEX \(ssidData.hex) \(encodedPassword)"),
+            operation: "wifi_set"
+        )
+    }
+    func removeWiFi(ssid: String) async throws {
+        let ssidData = Data(ssid.utf8)
+        guard (1 ... 32).contains(ssidData.count) else {
+            throw TransportError.failed("The Wi-Fi network name is invalid.")
+        }
+        try validateWiFiManagementReply(
+            try await request("WIFI REMOVEHEX \(ssidData.hex)"),
+            operation: "wifi_remove"
+        )
+    }
+    func clearWiFiNetworks() async throws {
+        try validateWiFiManagementReply(try await request("WIFI CLEAR"), operation: "wifi_clear")
+    }
+    private func validateWiFiManagementReply(_ reply: String, operation: String) throws {
+        if reply.hasPrefix("error ") { throw TransportError.failed(reply) }
+        struct Reply: Decodable { let operation: String; let status: String }
+        guard let decoded = try? JSONDecoder().decode(Reply.self, from: Data(reply.utf8)),
+              decoded.operation == operation, decoded.status == "accepted" else {
+            throw TransportError.failed("InputPilot returned an invalid Wi-Fi management response.")
+        }
     }
     func setUSBIdentity(productName: String, vid: Int, pid: Int, serialNumber: String) async throws {
         let product = Data(productName.utf8).hex
@@ -1400,6 +1444,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         let timeout: DispatchWorkItem
     }
     private var pendingSecureReplies: [PendingSecureReply] = []
+    private var secureRequestInFlight = false
     static func writeType(for event: HIDEvent, properties: CBCharacteristicProperties) -> CBCharacteristicWriteType? {
         let highFrequency: Bool = {
             if case .mouseMove = event { return true }
@@ -1530,6 +1575,11 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
                     isAvailable = true; state = .ready; prepareFirmwareUpdater(peripheral)
                     return
                 }
+                if reply == "secure failed" {
+                    appLog(.errors, "BLE secure proof was rejected")
+                    failAuthentication(peripheral)
+                    return
+                }
             } catch {
                 appLog(.errors, "BLE secure handshake failed")
                 failAuthentication(peripheral)
@@ -1569,8 +1619,15 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         peripheral.setNotifyValue(true, for: status)
     }
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) { firmwareUpdater.writerReady(); drainWrites(peripheral) }
-    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.failAuthentication(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
+    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.retryAfterAuthenticationTimeout(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
     private func failAuthentication(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; central.cancelPeripheralConnection(peripheral) }
+    private func retryAfterAuthenticationTimeout(_ peripheral: CBPeripheral) {
+        authTimeoutWork?.cancel(); authTimeoutWork = nil
+        appLog(.bluetooth, "Secure handshake timed out; reconnecting without invalidating USB trust")
+        isAvailable = false; secureChannel = nil
+        state = shouldReconnect ? .reconnecting : .offline
+        central.cancelPeripheralConnection(peripheral)
+    }
     private func writeConfirmed(_ payload: Data, id: String) async throws {
         guard let peripheral, let characteristic = characteristics[control],
               characteristic.properties.contains(.write) else { throw TransportError.unavailable }
@@ -1586,16 +1643,26 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         guard !firmwareUpdater.blocksControl else {
             throw TransportError.failed("Secure Bluetooth management is busy during firmware transfer.")
         }
+        guard !command.contains("\n"), !command.contains("\r"),
+              let secureChannel else { throw TransportError.encoding }
+        return try await requestPayload(timeout: timeout) {
+            Data(try secureChannel.sealText(command).utf8)
+        }
+    }
+    private func requestPayload(
+        timeout: TimeInterval = 10,
+        makePayload: () throws -> Data
+    ) async throws -> String {
         let slotDeadline = Date().addingTimeInterval(timeout)
-        while !pendingSecureReplies.isEmpty {
+        while secureRequestInFlight {
             guard state == .ready, Date() < slotDeadline else {
                 throw TransportError.failed("Secure Bluetooth request queue timed out.")
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        guard !command.contains("\n"), !command.contains("\r"),
-              let secureChannel else { throw TransportError.encoding }
-        let payload = Data(try secureChannel.sealText(command).utf8)
+        secureRequestInFlight = true
+        defer { secureRequestInFlight = false }
+        let payload = try makePayload()
         return try await withCheckedThrowingContinuation { continuation in
             let id = UUID()
             let timeoutWork = DispatchWorkItem { [weak self] in
@@ -1607,9 +1674,9 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             pendingSecureReplies.append(PendingSecureReply(id: id, continuation: continuation,
                                                             timeout: timeoutWork))
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
-            Task { [weak self] in
-                do { try await self?.writeConfirmed(payload, id: "request-\(id.uuidString)") }
-                catch { self?.failPendingSecureReply(id: id, error: error) }
+            Task {
+                do { try await self.writeConfirmed(payload, id: "request-\(id.uuidString)") }
+                catch { self.failPendingSecureReply(id: id, error: error) }
             }
         }
     }
@@ -1736,21 +1803,41 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         guard let secureChannel else {
             throw TransportError.failed("Device management requires secure USB pairing.")
         }
-        let payload = try secureChannel.sealBinary(plaintext)
-        guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
-            throw TransportError.failed("The encrypted management command is too large.")
+        let reply: String
+        do {
+            reply = try await requestPayload(timeout: 2) {
+                let payload = try secureChannel.sealBinary(plaintext)
+                guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+                    throw TransportError.failed("The encrypted management command is too large.")
+                }
+                return payload
+            }
+        } catch where error.localizedDescription == "Secure Bluetooth response timed out." {
+            // Firmware through 0.8.17 acknowledged only the ATT write. Preserve
+            // that wire compatibility; 0.8.18+ returns the structured protocol
+            // acknowledgement above without entering this fallback.
+            appLog(.control, "BLE management used legacy ATT-only acknowledgement id=\(id)")
+            return
         }
-        try await withCheckedThrowingContinuation { continuation in
-            writeQueue.append(PendingWrite(
-                id: "\(id)-\(UUID().uuidString)", characteristic: commandCharacteristic,
-                payload: payload, type: .withResponse, continuation: continuation
-            ))
-            drainWrites(peripheral)
+        if reply.hasPrefix("error ") {
+            let code = String(reply.dropFirst("error ".count))
+            switch code {
+            case "invalid_wifi_credentials":
+                throw TransportError.failed("The Wi-Fi network name or password is invalid.")
+            case "wifi_network_not_found":
+                throw TransportError.failed("That Wi-Fi network is no longer configured.")
+            case "wifi_storage_failed":
+                throw TransportError.failed("InputPilot could not store the Wi-Fi configuration.")
+            default:
+                throw TransportError.failed("InputPilot rejected the Wi-Fi operation (\(code)).")
+            }
         }
-        // ATT acknowledgement means the encrypted frame reached the firmware's
-        // bounded queue. Give its main loop a moment to commit NVS before a
-        // subsequent WIFI LIST request is issued on the same connection.
-        try await Task.sleep(for: .milliseconds(150))
+        struct ManagementReply: Decodable { let operation: String; let status: String }
+        guard let result = try? JSONDecoder().decode(ManagementReply.self, from: Data(reply.utf8)),
+              result.status == "accepted" else {
+            throw TransportError.failed("InputPilot returned an invalid Wi-Fi management response.")
+        }
+        appLog(.control, "BLE management acknowledged id=\(id) operation=\(result.operation)")
     }
     func reboot() async throws {
         guard !firmwareUpdater.blocksControl else {

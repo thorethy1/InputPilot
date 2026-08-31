@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "DeviceIdentity.h"
 #include "Logging.h"
+#include "ProtocolCapabilities.h"
 
 WifiConfigServer g_wifiConfig;
 
@@ -22,11 +23,9 @@ String statusJson() {
   json += "\"secure_port\":" + String(WIFI_CONTROL_PORT) + ",";
   json += "\"trust_required\":";
   json += "true";
-  json += ",\"capabilities\":[\"secure_protocol_v2\",\"ble_transport\",";
-  json += "\"wifi_transport\",\"secure_wifi_setup\",\"multiple_wifi\",\"secure_usb_identity\",\"usb_manufacturer\",";
-  json += "\"secure_ota\",\"secure_diagnostics\",\"mouse_move\",";
-  json += "\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
-  json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\"]}";
+  json += ",\"capabilities\":";
+  json += ProtocolCapabilities::jsonArray();
+  json += "}";
   return json;
 }
 }

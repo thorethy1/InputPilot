@@ -44,14 +44,30 @@ replace this gate.
 - Upgrade a phone that still has a bond from an older build; forgetting that
   obsolete system bond must be a one-time transition only. A stale application
   secret must show actionable USB re-pair guidance.
-- Connect without starting Secure Protocol authentication. After 15 seconds the
-  ESP32 must disconnect that central, remain responsive and advertise again.
+- Delay GATT discovery for longer than 15 seconds while Wi-Fi scans. The BLE
+  link must remain connected because no authentication attempt has started.
+  Then send `secure begin` without a valid `secure hello`; the ESP32 must
+  disconnect that central after the bounded protocol-authentication window,
+  remain responsive and advertise again.
 - While one phone has an authenticated BLE session, connect a second central.
   The first session and an active BLE OTA must continue unchanged; the second
   central must be disconnected and its writes ignored.
 - Supply wrong Wi-Fi password, unavailable SSID, captive portal, DHCP failure,
-  mDNS failure and changed IP. Recovery must return to secure BLE provisioning
-  and must never offer manual or unauthenticated device addition.
+  mDNS failure and changed IP. The authenticated BLE session must remain usable,
+  `WIFI STATUS` must report a provisioning-specific failure, and recovery must
+  never offer manual or unauthenticated device addition.
+- Boot in Wi-Fi+BLE mode with every saved network unavailable. Establish and
+  use the full Secure Protocol over BLE before, during, and after SoftAP
+  fallback; there must be no repeating authentication-deadline disconnect.
+  Restore the router and verify the periodic station retry reconnects Wi-Fi
+  without rebooting or resetting the established BLE session.
+- Add a valid and an invalid network over BLE. In both cases verify the
+  encrypted management acknowledgement arrives before radio transition. The
+  valid network must connect; the invalid network must return
+  `network_unreachable`, while subsequent BLE commands continue to work.
+- Drop Wi-Fi during an authenticated dual-transport session, exercise BLE HID
+  and management throughout reconnect attempts, then restore Wi-Fi and verify
+  a fresh TCP handshake without BLE renegotiation.
 - Disconnect each transport during drag/macro; confirm release-all and no replay
   of stateful input on the other transport.
 - Interrupt BLE and Wi-Fi OTA at start, 25%, 99%, verification and reboot.
