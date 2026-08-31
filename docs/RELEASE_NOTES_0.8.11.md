@@ -16,6 +16,9 @@ compatibility with older firmware.
 - BLE deliberately creates no separate iOS/NimBLE bond. Secure Protocol v2
   provides authenticated encryption directly, so flashing and USB trust
   rotation cannot leave conflicting link-layer pairing databases behind.
+- A BLE connection has 15 seconds to authenticate. The first connection owns
+  the session exclusively; another central cannot reset it, submit control or
+  OTA writes, or receive session notifications.
 - Public BLE discovery metadata is bounded below the 512-byte GATT value limit.
 
 Devices running older firmware must be reflashed over USB before they can be

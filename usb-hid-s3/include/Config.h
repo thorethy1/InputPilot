@@ -89,6 +89,7 @@
 #define BLE_HID_SERVICE_UUID  "7d9f0001-4f4d-4f56-4552-484944000001"
 #define BLE_HID_CONTROL_UUID  "7d9f0002-4f4d-4f56-4552-484944000001"
 #define BLE_HID_STATUS_UUID   "7d9f0005-4f4d-4f56-4552-484944000001"
+#define BLE_SECURE_AUTH_TIMEOUT_MS 15000UL
 
 // InputPilot Secure Protocol v2 BLE OTA flow-control characteristics. OTA
 // writes are AES-GCM records from the active control session.

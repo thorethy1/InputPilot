@@ -35,6 +35,11 @@ replace this gate.
 - Upgrade a phone that still has a bond from an older build; forgetting that
   obsolete system bond must be a one-time transition only. A stale application
   secret must show actionable USB re-pair guidance.
+- Connect without starting Secure Protocol authentication. After 15 seconds the
+  ESP32 must disconnect that central, remain responsive and advertise again.
+- While one phone has an authenticated BLE session, connect a second central.
+  The first session and an active BLE OTA must continue unchanged; the second
+  central must be disconnected and its writes ignored.
 - Supply wrong Wi-Fi password, unavailable SSID, captive portal, DHCP failure,
   mDNS failure and changed IP. Recovery must return to secure BLE provisioning
   and must never offer manual or unauthenticated device addition.

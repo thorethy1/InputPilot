@@ -68,6 +68,8 @@ extern RadioManager g_radio;
 // Shared BLE session gate used by OTA and diagnostics. All BLE features belong
 // to the one control connection and its one authenticated secure session.
 bool deviceBleAuthenticated();
+bool deviceBleConnectionOwnsSession(uint16_t connectionHandle);
+uint16_t deviceBleSessionHandle();
 bool decryptBleSecureRecord(const uint8_t *record, size_t recordLength,
                             uint8_t *plaintext, size_t plaintextCapacity,
                             size_t &plaintextLength);

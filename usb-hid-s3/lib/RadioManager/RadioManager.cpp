@@ -20,6 +20,7 @@
 #include "WifiConfigServer.h"
 #include "BLEOTA.h"
 #include "BLEDiagnostics.h"
+#include "BLESessionOwnership.h"
 #include "OTAEngine.h"
 #include "KeyMap.h"
 #include "PairingSecretStore.h"
@@ -35,13 +36,13 @@ namespace {
 
 NimBLEServer *s_bleServer = nullptr;
 NimBLECharacteristic *s_bleTx = nullptr;
-volatile bool s_bleConnected = false;
 // Set while stopBle() is releasing the stack so the disconnect callback does
 // NOT restart advertising mid-teardown (which crashes deinit(true)).
 volatile bool s_bleTearingDown = false;
 bool s_bleReady = false;
 
 bool s_bleAuthed = false;
+BLESessionOwnership s_bleOwner(BLE_SECURE_AUTH_TIMEOUT_MS);
 bool s_tcpAuthed = false;
 WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
 WiFiClient s_tcpClient;
@@ -60,9 +61,9 @@ uint32_t s_managementRebootAtMs = 0;
 
 void sendControlReply(const char *source, const char *reply) {
   if (!reply) return;
-  if (strcmp(source, "ble") == 0 && s_bleTx && s_bleConnected) {
+  if (strcmp(source, "ble") == 0 && s_bleTx && s_bleOwner.connected()) {
     s_bleTx->setValue(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
-    s_bleTx->notify();
+    s_bleTx->notify(s_bleOwner.owner());
   } else if (strcmp(source, "wifi") == 0 && s_tcpClient && s_tcpClient.connected()) {
     s_tcpClient.print(reply);
     s_tcpClient.print("\n");
@@ -227,6 +228,12 @@ void dispatchControlLine(const std::string &line, const char *source,
                                ? s_bleSecureSession : s_tcpSecureSession;
   std::string reply;
   if (line == "secure begin") {
+    // A BLE owner gets one authentication window per connection. Repeated
+    // begin messages must not extend that window indefinitely.
+    if (strcmp(source, "ble") == 0 && s_bleAuthed) {
+      LOG_BLE("secure renegotiation rejected; reconnect required");
+      return;
+    }
     uint8_t secret[PairingSecretStore::SecretSize];
     const bool ok = PairingSecretStore::load(secret) &&
                     session.begin(secret, DeviceIdentity::deviceId(), reply);
@@ -238,6 +245,8 @@ void dispatchControlLine(const std::string &line, const char *source,
   if (line.rfind("secure hello ", 0) == 0) {
     const bool ok = session.acceptHello(line, reply);
     if (authed) *authed = ok;
+    if (ok && strcmp(source, "ble") == 0)
+      s_bleOwner.authenticated(s_bleOwner.owner());
     sendControlReply(source, ok ? reply.c_str() : "secure failed");
     return;
   }
@@ -268,7 +277,12 @@ void feedControlLines(std::string &buf, const std::string &incoming,
 std::string s_bleLineBuf;
 
 class BinaryCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &) override {
+  void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    if (!s_bleOwner.owns(info.getConnHandle())) {
+      LOG_BLE("control write rejected from non-owner handle=%u owner=%u",
+              info.getConnHandle(), s_bleOwner.owner());
+      return;
+    }
     const std::string &value = c->getValue();
     if (value.empty()) return;
     if (static_cast<uint8_t>(value[0]) != SecureSession::BinaryVersion) {
@@ -414,26 +428,34 @@ void processBLEControlFrames(size_t budget = 8) {
     else if (s_bleTx) {
       const uint8_t pong[] = {HIDProtocol::Version, 0x7f};
       s_bleTx->setValue(pong, sizeof(pong));
-      s_bleTx->notify();
+      s_bleTx->notify(s_bleOwner.owner());
     }
   }
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *, NimBLEConnInfo &info) override {
-    s_bleConnected = true;
+  void onConnect(NimBLEServer *server, NimBLEConnInfo &info) override {
+    const uint16_t handle = info.getConnHandle();
+    const BLESessionOwnership::ClaimResult claim = s_bleOwner.claim(handle, millis());
+    if (claim == BLESessionOwnership::ClaimResult::Rejected) {
+      LOG_BLE("additional central rejected handle=%u owner=%u ownerAuthenticated=%s",
+              handle, s_bleOwner.owner(), s_bleAuthed ? "yes" : "no");
+      server->disconnect(handle);
+      return;
+    }
+    if (claim == BLESessionOwnership::ClaimResult::AlreadyOwner) return;
     s_bleSecureSession.reset();
     s_bleAuthed = false;
-    LOG_BLE("central connected bonded=%s", info.isBonded() ? "yes" : "no");
+    LOG_BLE("central connected handle=%u secure authentication deadline=%lums",
+            handle, static_cast<unsigned long>(BLE_SECURE_AUTH_TIMEOUT_MS));
   }
-  void onAuthenticationComplete(NimBLEConnInfo &info) override {
-    LOG_BLE("pairing complete bonded=%s encrypted=%s authenticated=%s",
-            info.isBonded() ? "yes" : "no",
-            info.isEncrypted() ? "yes" : "no",
-            info.isAuthenticated() ? "yes" : "no");
-  }
-  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int reason) override {
-    s_bleConnected = false;
+  void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
+    const uint16_t handle = info.getConnHandle();
+    if (!s_bleOwner.release(handle)) {
+      LOG_BLE("non-owner central disconnected handle=%u reason=%d owner=%u",
+              handle, reason, s_bleOwner.owner());
+      return;
+    }
     s_bleAuthed = false;
     s_bleSecureSession.reset();
     g_bleOta.disconnected();
@@ -471,7 +493,13 @@ ServerCallbacks s_serverCallbacks;
 
 }  // namespace
 
-bool deviceBleAuthenticated() { return s_bleConnected && s_bleAuthed; }
+bool deviceBleAuthenticated() { return s_bleOwner.connected() && s_bleAuthed; }
+
+bool deviceBleConnectionOwnsSession(uint16_t connectionHandle) {
+  return s_bleOwner.owns(connectionHandle);
+}
+
+uint16_t deviceBleSessionHandle() { return s_bleOwner.owner(); }
 
 bool decryptBleSecureRecord(const uint8_t *record, size_t recordLength,
                             uint8_t *plaintext, size_t plaintextCapacity,
@@ -750,10 +778,10 @@ void RadioManager::stopBle() {
         s_bleServer->disconnect(handle);
       }
       uint32_t start = millis();
-      while (s_bleConnected && (millis() - start) < 1000) delay(10);
+      while (s_bleOwner.connected() && (millis() - start) < 1000) delay(10);
     }
   }
-  s_bleConnected = false;
+  s_bleOwner.clear();
   s_bleAuthed = false;
   s_bleLineBuf.clear();
   LOG_BLE("stopped (advertising off; stack idle)");
@@ -761,6 +789,16 @@ void RadioManager::stopBle() {
 
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
+  if (s_bleOwner.authenticationExpired(millis(), s_bleAuthed)) {
+    const uint16_t handle = s_bleOwner.owner();
+    LOG_BLE("secure authentication timed out handle=%u; disconnecting", handle);
+    // Clear the deadline before requesting disconnect so this is issued once.
+    s_bleOwner.pauseAuthenticationTimeout(handle);
+    if (!s_bleServer || !s_bleServer->disconnect(handle)) {
+      LOG_BLE("timed-out central disconnect request failed handle=%u; retrying", handle);
+      s_bleOwner.restartAuthentication(handle, millis());
+    }
+  }
   // Decode binary writes outside NimBLE's host callback. This keeps STL,
   // KeyMap, logging and HID queue work off the 4 KiB BLE host stack.
   processBLEControlFrames();
@@ -808,12 +846,12 @@ void RadioManager::loop() {
 
 const char *RadioManager::statusStr() {
   if (mode_ == RadioMode::WifiBle) {
-    if (softAp_) snprintf(status_, sizeof(status_), "wifi:ap+ble:%s", s_bleConnected ? "conn" : "adv");
+    if (softAp_) snprintf(status_, sizeof(status_), "wifi:ap+ble:%s", s_bleOwner.connected() ? "conn" : "adv");
     else if (WiFi.status() == WL_CONNECTED)
       snprintf(status_, sizeof(status_), "wifi:%s+ble:%s", WiFi.localIP().toString().c_str(),
-               s_bleConnected ? "conn" : "adv");
+               s_bleOwner.connected() ? "conn" : "adv");
   } else if (mode_ == RadioMode::Ble) {
-    snprintf(status_, sizeof(status_), "ble:%s", s_bleConnected ? "conn" : "adv");
+    snprintf(status_, sizeof(status_), "ble:%s", s_bleOwner.connected() ? "conn" : "adv");
   } else if (mode_ == RadioMode::Wifi) {
     if (softAp_) {
       snprintf(status_, sizeof(status_), "wifi:ap");
@@ -825,9 +863,9 @@ const char *RadioManager::statusStr() {
 }
 
 void RadioManager::sendToControl(const char *line) {
-  if (bleEnabled() && s_bleTx && s_bleConnected) {
+  if (bleEnabled() && s_bleTx && s_bleOwner.connected()) {
     s_bleTx->setValue((const uint8_t *)line, strlen(line));
-    s_bleTx->notify();
+    s_bleTx->notify(s_bleOwner.owner());
   } else if (wifiEnabled() && s_tcpClient && s_tcpClient.connected()) {
     s_tcpClient.print(line);
     s_tcpClient.print("\n");

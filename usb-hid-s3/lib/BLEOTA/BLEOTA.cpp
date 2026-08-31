@@ -11,6 +11,8 @@
 #include "OTAEngine.h"
 #include "PairingSecretStore.h"
 extern bool deviceBleAuthenticated();
+extern bool deviceBleConnectionOwnsSession(uint16_t connectionHandle);
+extern uint16_t deviceBleSessionHandle();
 extern bool decryptBleSecureRecord(const uint8_t *, size_t, uint8_t *, size_t,
                                    size_t &);
 namespace {
@@ -48,7 +50,8 @@ BLEOTA g_bleOta;
 class BLEOTA::ControlCallbacks : public NimBLECharacteristicCallbacks {
  public:
   explicit ControlCallbacks(BLEOTA &owner) : owner_(owner) {}
-  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &) override {
+  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &info) override {
+    if (!deviceBleConnectionOwnsSession(info.getConnHandle())) return;
     owner_.enqueueControl(characteristic->getValue());
   }
 
@@ -59,7 +62,8 @@ class BLEOTA::ControlCallbacks : public NimBLECharacteristicCallbacks {
 class BLEOTA::DataCallbacks : public NimBLECharacteristicCallbacks {
  public:
   explicit DataCallbacks(BLEOTA &owner) : owner_(owner) {}
-  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &) override {
+  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &info) override {
+    if (!deviceBleConnectionOwnsSession(info.getConnHandle())) return;
     owner_.enqueueData(characteristic->getValue());
   }
 
@@ -107,7 +111,8 @@ void BLEOTA::notify(const char *event, const char *error) {
       status_->setValue(reinterpret_cast<const uint8_t *>(fallback),
                         sizeof(fallback) - 1);
     }
-    status_->notify();
+    const uint16_t handle = deviceBleSessionHandle();
+    if (handle != UINT16_MAX) status_->notify(handle);
     return;
   }
   char json[512];
@@ -127,12 +132,14 @@ void BLEOTA::notify(const char *event, const char *error) {
     static constexpr char fallback[] = "{\"error\":\"status_too_large\"}";
     status_->setValue(reinterpret_cast<const uint8_t *>(fallback),
                       sizeof(fallback) - 1);
-    status_->notify();
+    const uint16_t handle = deviceBleSessionHandle();
+    if (handle != UINT16_MAX) status_->notify(handle);
     return;
   }
   status_->setValue(reinterpret_cast<const uint8_t *>(json),
                     static_cast<size_t>(written));
-  status_->notify();
+  const uint16_t handle = deviceBleSessionHandle();
+  if (handle != UINT16_MAX) status_->notify(handle);
 }
 
 void BLEOTA::fail(const char *error) { notify("ERROR", error); }
