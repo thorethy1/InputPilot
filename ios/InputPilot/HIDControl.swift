@@ -1426,27 +1426,63 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         guard (1 ... 32).contains(ssidData.count), passwordData.count <= 63 else {
             throw TransportError.failed("Wi-Fi names are limited to 32 bytes and passwords to 63 bytes.")
         }
+        var plaintext = Data([0xFE, 0x01, UInt8(ssidData.count), UInt8(passwordData.count)])
+        plaintext.append(ssidData)
+        plaintext.append(passwordData)
+        try await sendManagementFrame(plaintext, id: "wifi-setup")
+    }
+    func configuredWiFiNetworks() async throws -> [String] {
+        struct CountResponse: Decodable { let count: Int }
+        struct NetworkResponse: Decodable { let ssid: String }
+        let countReply = try await request("WIFI LIST")
+        let count = try JSONDecoder().decode(CountResponse.self, from: Data(countReply.utf8)).count
+        guard (0 ... 5).contains(count) else {
+            throw TransportError.failed("InputPilot returned an invalid Wi-Fi network count.")
+        }
+        var networks: [String] = []
+        for index in 0 ..< count {
+            let reply = try await request("WIFI GET \(index)")
+            networks.append(try JSONDecoder().decode(NetworkResponse.self, from: Data(reply.utf8)).ssid)
+        }
+        return networks
+    }
+    func removeWiFi(ssid: String) async throws {
+        try await waitUntilReady()
+        let ssidData = Data(ssid.utf8)
+        guard (1 ... 32).contains(ssidData.count) else {
+            throw TransportError.failed("The Wi-Fi network name is invalid.")
+        }
+        var plaintext = Data([0xFE, 0x04, UInt8(ssidData.count)])
+        plaintext.append(ssidData)
+        try await sendManagementFrame(plaintext, id: "wifi-remove")
+    }
+    func clearWiFiNetworks() async throws {
+        try await waitUntilReady()
+        try await sendManagementFrame(Data([0xFE, 0x05]), id: "wifi-clear")
+    }
+    private func sendManagementFrame(_ plaintext: Data, id: String) async throws {
         guard let peripheral, let commandCharacteristic = characteristics[control],
               commandCharacteristic.properties.contains(.write) else {
             throw TransportError.unavailable
         }
         guard let secureChannel else {
-            throw TransportError.failed("Wi-Fi setup requires secure USB pairing.")
+            throw TransportError.failed("Device management requires secure USB pairing.")
         }
-        var plaintext = Data([0xFE, 0x01, UInt8(ssidData.count), UInt8(passwordData.count)])
-        plaintext.append(ssidData)
-        plaintext.append(passwordData)
         let payload = try secureChannel.sealBinary(plaintext)
         guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
-            throw TransportError.failed("Wi-Fi credentials exceed the encrypted Bluetooth frame size.")
+            throw TransportError.failed("The encrypted management command is too large.")
         }
         try await withCheckedThrowingContinuation { continuation in
             writeQueue.append(PendingWrite(
-                id: "wifi-setup-\(UUID().uuidString)", characteristic: commandCharacteristic,
+                id: "\(id)-\(UUID().uuidString)", characteristic: commandCharacteristic,
                 payload: payload, type: .withResponse, continuation: continuation
             ))
             drainWrites(peripheral)
         }
+        // ATT acknowledgement means the encrypted frame reached the firmware's
+        // bounded queue. Give its main loop a moment to commit NVS before a
+        // subsequent WIFI LIST request is issued on the same connection.
+        try await Task.sleep(for: .milliseconds(150))
     }
     func reboot() async throws {
         try await waitUntilReady()

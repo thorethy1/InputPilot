@@ -2,7 +2,6 @@ import Foundation
 import SwiftData
 
 enum AddDeviceWizardStep: Equatable {
-    case choosePath
     case securePairing
     case bleScanning
     case confirmBLE(BLEDeviceMetadata)
@@ -21,13 +20,14 @@ final class AddDeviceWizardViewModel: ObservableObject {
         }
     }
 
-    @Published private(set) var step: AddDeviceWizardStep = .choosePath
+    @Published private(set) var step: AddDeviceWizardStep = .securePairing
     @Published private(set) var candidates: [DiscoveredService] = []
     @Published private(set) var isSaving = false
     @Published var errorMessage: String?
     @Published var displayName = ""
     @Published var homeWifiSSID = ""
     @Published var homeWifiPassword = ""
+    @Published var configureWiFi = true
     @Published private(set) var mergeMessage: String?
     @Published private(set) var securelyPairedDeviceId: String?
     @Published private(set) var knownDevices = SavedDeviceIndex.empty
@@ -85,13 +85,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
         step = .confirmBLE(metadata)
     }
 
-    func backToChoosePath() {
+    func backToPairing() {
         browser.stopBrowsing()
         candidates = []
         errorMessage = nil
         mergeMessage = nil
         securelyPairedDeviceId = nil
-        step = .choosePath
+        step = .securePairing
     }
 
     func backFromConfirm() {
@@ -109,9 +109,10 @@ final class AddDeviceWizardViewModel: ObservableObject {
         displayName = ""
         homeWifiSSID = ""
         homeWifiPassword = ""
+        configureWiFi = true
         mergeMessage = nil
         securelyPairedDeviceId = nil
-        step = .choosePath
+        step = .securePairing
     }
 
     func saveDevice(context: ModelContext) async throws {
@@ -123,9 +124,16 @@ final class AddDeviceWizardViewModel: ObservableObject {
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let ssid = homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { errorMessage = "Display name is required."; return }
-        guard !ssid.isEmpty else { errorMessage = "Home Wi-Fi network name is required."; return }
+        guard !configureWiFi || !ssid.isEmpty else { errorMessage = "Home Wi-Fi network name is required."; return }
         guard PairingKeyStore.load(deviceId: metadata.deviceId) != nil else {
             errorMessage = "Secure setup requires a valid USB pairing code."
+            return
+        }
+
+        let repository = DeviceRepository(context: context)
+        if !configureWiFi {
+            _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
+            browser.stopBrowsing()
             return
         }
 
@@ -213,7 +221,6 @@ final class AddDeviceWizardViewModel: ObservableObject {
             }
             return
         }
-        let repository = DeviceRepository(context: context)
         _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
         _ = try await repository.addFromDiscovery(status: status, fallbackHost: candidate.host, displayName: trimmedName)
         browser.stopBrowsing()

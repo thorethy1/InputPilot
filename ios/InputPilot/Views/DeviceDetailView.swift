@@ -21,6 +21,12 @@ struct DeviceDetailView: View {
     @State private var keepAwakeMessage: String?
     @State private var managementBusy = false
     @State private var managementMessage: String?
+    @State private var wifiNetworks: [String] = []
+    @State private var newWifiSSID = ""
+    @State private var newWifiPassword = ""
+    @State private var wifiBusy = false
+    @State private var wifiMessage: String?
+    @State private var showClearWiFiConfirmation = false
 
     init(device: StoredDevice) {
         _device = Bindable(wrappedValue: device)
@@ -80,7 +86,7 @@ struct DeviceDetailView: View {
 
             Section("Software") {
                 LabeledContent("Firmware", value: device.firmwareVersion ?? "Unknown")
-                LabeledContent("Protocol", value: String(device.protocolVersion))
+                LabeledContent("Secure Protocol", value: "v\(device.protocolVersion)")
                 LabeledContent("OTA Schema", value: String(device.otaSchema))
                 LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
                 let transports = [device.capabilities.contains("wifi_transport") ? "Wi-Fi" : nil, device.capabilities.contains("ble_transport") ? "Bluetooth" : nil].compactMap { $0 }
@@ -93,6 +99,56 @@ struct DeviceDetailView: View {
                 if managementBusy { ProgressView() }
                 if let managementMessage {
                     Text(managementMessage).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            if device.capabilities.contains("secure_wifi_setup") {
+                Section {
+                    if device.capabilities.contains("multiple_wifi") {
+                        if wifiNetworks.isEmpty {
+                            Text("No Wi-Fi networks configured")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(wifiNetworks, id: \.self) { ssid in
+                                HStack {
+                                    Label(ssid, systemImage: "wifi")
+                                    Spacer()
+                                    Button(role: .destructive) {
+                                        Task { await removeWiFi(ssid) }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(wifiBusy || bluetooth.state != .ready)
+                                    .accessibilityLabel("Remove \(ssid)")
+                                }
+                            }
+                        }
+                    }
+                    TextField("Wi-Fi name (SSID)", text: $newWifiSSID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Wi-Fi password", text: $newWifiPassword)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button(device.capabilities.contains("multiple_wifi") ? "Add or Update Network" : "Change Wi-Fi Network") {
+                        Task { await saveWiFi() }
+                    }
+                    .disabled(wifiBusy || bluetooth.state != .ready || newWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if device.capabilities.contains("multiple_wifi"), !wifiNetworks.isEmpty {
+                        Button("Forget All Networks", role: .destructive) {
+                            showClearWiFiConfirmation = true
+                        }
+                        .disabled(wifiBusy || bluetooth.state != .ready)
+                    }
+                    if wifiBusy { ProgressView() }
+                    if let wifiMessage {
+                        Text(wifiMessage).font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Wi-Fi Networks")
+                } footer: {
+                    Text("Up to five networks are tried in order. Bluetooth remains available when none can be reached.")
                 }
             }
 
@@ -181,7 +237,8 @@ struct DeviceDetailView: View {
         .task {
             async let bluetoothConnection: Void = bluetooth.connect()
             await viewModel.refreshDevice(device, context: modelContext)
-            _ = await bluetoothConnection
+            await bluetoothConnection
+            await loadWiFiNetworks()
         }
         .onAppear {
             displayName = device.displayName
@@ -196,6 +253,12 @@ struct DeviceDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes it from your saved list on this iPhone.")
+        }
+        .alert("Forget all Wi-Fi networks?", isPresented: $showClearWiFiConfirmation) {
+            Button("Forget All", role: .destructive) { Task { await clearWiFiNetworks() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("InputPilot will continue to work over Bluetooth.")
         }
     }
 
@@ -213,6 +276,49 @@ struct DeviceDetailView: View {
     }
 
     private var hasPairingKey: Bool { PairingKeyStore.load(deviceId: device.deviceId) != nil }
+
+    @MainActor
+    private func loadWiFiNetworks() async {
+        guard device.capabilities.contains("multiple_wifi") else { return }
+        do { wifiNetworks = try await bluetooth.configuredWiFiNetworks() }
+        catch { wifiMessage = "Could not load Wi-Fi networks: \(error.localizedDescription)" }
+    }
+
+    @MainActor
+    private func saveWiFi() async {
+        let ssid = newWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ssid.isEmpty else { return }
+        wifiBusy = true
+        defer { wifiBusy = false }
+        do {
+            try await bluetooth.setWiFi(ssid: ssid, password: newWifiPassword)
+            newWifiSSID = ""; newWifiPassword = ""
+            wifiMessage = "Wi-Fi network saved."
+            if device.capabilities.contains("multiple_wifi") { await loadWiFiNetworks() }
+        } catch { wifiMessage = error.localizedDescription }
+    }
+
+    @MainActor
+    private func removeWiFi(_ ssid: String) async {
+        wifiBusy = true
+        defer { wifiBusy = false }
+        do {
+            try await bluetooth.removeWiFi(ssid: ssid)
+            wifiNetworks.removeAll { $0 == ssid }
+            wifiMessage = "Wi-Fi network removed."
+        } catch { wifiMessage = error.localizedDescription }
+    }
+
+    @MainActor
+    private func clearWiFiNetworks() async {
+        wifiBusy = true
+        defer { wifiBusy = false }
+        do {
+            try await bluetooth.clearWiFiNetworks()
+            wifiNetworks = []
+            wifiMessage = "All Wi-Fi networks removed. Bluetooth remains available."
+        } catch { wifiMessage = error.localizedDescription }
+    }
     private var moveEnabledBinding: Binding<Bool> { Binding(get: { device.jiggleEnabled }, set: { device.jiggleEnabled = $0; saveKeepAwake() }) }
     private var clickEnabledBinding: Binding<Bool> { Binding(get: { device.clickEnabled }, set: { device.clickEnabled = $0; saveKeepAwake() }) }
     private var moveIntervalBinding: Binding<Int> { Binding(get: { device.moveIntervalMs }, set: { device.moveIntervalMs = $0; saveKeepAwake() }) }

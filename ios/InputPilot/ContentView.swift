@@ -82,15 +82,12 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Button {
-                    showAddWizard = true
-                } label: {
-                    Label("Add Device", systemImage: "plus")
-                }
+            Button {
+                showAddWizard = true
             } label: {
                 Image(systemName: "plus")
             }
+            .accessibilityLabel("Add Device")
         }
     }
 
@@ -367,7 +364,7 @@ private struct ConnectionSettingsView: View {
                 if let selected {
                     if devices.count > 1 { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
                     LabeledContent("Firmware", value: selected.firmwareVersion ?? "Unknown")
-                    LabeledContent("Protocol", value: String(selected.protocolVersion))
+                    LabeledContent("Secure Protocol", value: "v\(selected.protocolVersion)")
                     LabeledContent("OTA Schema", value: String(selected.otaSchema))
                     if let lastSeen = selected.lastSeen { LabeledContent("Last seen", value: lastSeen.formatted(date: .abbreviated, time: .shortened)) }
                 }
@@ -411,9 +408,9 @@ struct USBPairingInputTestView: View {
                     Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(.red)
                 }
                 Button("Pair another device") { captured = ""; pairedDeviceId = ""; result = .waiting }
-                if result == .valid, let continueAction {
-                    Button("Continue with Encrypted Bluetooth") { continueAction() }
-                        .buttonStyle(.borderedProminent)
+                    .disabled(embedded && result == .valid)
+                if result == .valid, continueAction != nil {
+                    ProgressView("Connecting over encrypted Bluetooth…")
                 }
             }
             Section("Safety") {
@@ -450,6 +447,9 @@ struct USBPairingInputTestView: View {
             result = .valid
             onPaired?(frame.deviceId)
             Task { await InputPilotBluetoothManager.removeSession(deviceId: frame.deviceId) }
+            if let continueAction {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { continueAction() }
+            }
         } catch {
             result = .storageFailed
         }

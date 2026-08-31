@@ -5,7 +5,7 @@
 // command lines into the same handler as the serial interface.
 //
 // WiFi path:
-//   - STA credentials in NVS (WifiCredentials). If none → Soft-AP setup portal
+//   - Ordered STA credentials in NVS (WifiCredentials). If none → Soft-AP setup portal
 //     (DeviceIdentity::softApSsid) + read-only discovery on :80. STA mode
 //     advertises mDNS via DeviceIdentity::mdnsFqdn.
 //   - If credentials exist → STA + TCP line control on WIFI_CONTROL_PORT.
@@ -56,7 +56,7 @@ private:
   void startBle();
   void stopBle();
   void startSoftAp();
-  void startSta(const String &ssid, const String &pass);
+  void startSta(const String &ssid, const String &pass, size_t credentialIndex);
   void finishStaConnection();
   void serviceStaConnection();
   void stopWifiServices();
@@ -65,6 +65,9 @@ private:
   bool softAp_ = false;
   bool staConnecting_ = false;
   uint32_t staConnectStartedMs_ = 0;
+  size_t staCredentialIndex_ = 0;
+  size_t staAttempts_ = 0;
+  uint32_t staDisconnectedSinceMs_ = 0;
   char status_[64] = "none";
 };
 

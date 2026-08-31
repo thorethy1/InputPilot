@@ -9,6 +9,7 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
 
     func testUSBTrustIsRequiredBeforeBluetoothStep() {
         let model = AddDeviceWizardViewModel(browser: MockBonjourBrowser(), apiClient: MockAPIClient())
+        XCTAssertEqual(model.step, .securePairing)
         model.chooseSecureSetup()
         model.continueSecureSetup()
         XCTAssertEqual(model.step, .securePairing)

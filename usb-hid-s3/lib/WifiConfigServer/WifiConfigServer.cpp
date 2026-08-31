@@ -23,7 +23,7 @@ String statusJson() {
   json += "\"trust_required\":";
   json += "true";
   json += ",\"capabilities\":[\"secure_protocol_v2\",\"ble_transport\",";
-  json += "\"wifi_transport\",\"secure_wifi_setup\",\"secure_usb_identity\",";
+  json += "\"wifi_transport\",\"secure_wifi_setup\",\"multiple_wifi\",\"secure_usb_identity\",";
   json += "\"secure_ota\",\"secure_diagnostics\",\"mouse_move\",";
   json += "\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\",";
   json += "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\",\"release_all\"]}";

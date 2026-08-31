@@ -13,7 +13,7 @@ std::string BLEDiscoveryMetadata::build(const char *deviceId,
       "\"deviceName\":\"%s\",\"protocol\":%u,\"otaSchema\":%u," 
       "\"firmware\":\"%s\",\"trustRequired\":true,"
       "\"capabilities\":[\"secure_protocol_v2\",\"ble_transport\"," 
-      "\"wifi_transport\",\"secure_wifi_setup\",\"secure_usb_identity\"," 
+      "\"wifi_transport\",\"secure_wifi_setup\",\"multiple_wifi\",\"secure_usb_identity\","
       "\"secure_ota\",\"secure_diagnostics\",\"mouse_move\",\"mouse_click\"," 
       "\"mouse_button_state\",\"mouse_scroll\",\"keyboard_type\"," 
       "\"keyboard_key\",\"keyboard_layout\",\"release_all\",\"protocol_v2\"]}",

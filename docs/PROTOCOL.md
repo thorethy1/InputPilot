@@ -85,3 +85,26 @@ transport ownership.
   BLE connection or TCP connection.
 - Automatic transport selection considers only authenticated ready sessions.
   It never introduces a less secure transport.
+
+## Wi-Fi provisioning
+
+Wi-Fi is optional. A trusted device can be added and controlled entirely over
+BLE without ever provisioning a network. Firmware keeps BLE advertising while
+configured Wi-Fi networks are unavailable, so the app can establish the same
+Secure Protocol v2 session as its automatic fallback.
+
+Firmware stores up to five networks. Saving a network through the encrypted BLE
+management frame adds or updates it and moves it to the front of the connection
+order. On startup (or after a credentials change), station mode tries each saved
+network before exposing the setup Soft-AP. Passwords are never returned to the
+app.
+
+Authenticated text command `WIFI LIST` returns `{"count":2}`. The app then
+requests each bounded entry with `WIFI GET 0`, `WIFI GET 1`, and so on; the
+response is `{"ssid":"network name"}`. This keeps encrypted responses within a
+small BLE ATT payload even when every stored SSID has the maximum length.
+Encrypted binary management types under the existing `0xFE` prefix are:
+
+- `0x01 <ssid-length> <password-length> <ssid> <password>`: add/update
+- `0x04 <ssid-length> <ssid>`: remove one network
+- `0x05`: remove every network

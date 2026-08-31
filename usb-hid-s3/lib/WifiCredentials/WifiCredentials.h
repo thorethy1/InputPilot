@@ -4,18 +4,18 @@
 #include <Arduino.h>
 
 /**
- * NVS-backed WiFi STA credentials.
+ * NVS-backed ordered WiFi STA credentials (up to MaxNetworks).
  *
  * Persistence model (Preferences namespace "wifi"):
  *   - `provisioned` (bool): once true, NVS is authoritative (even if ssid empty).
- *   - `ssid` / `pass` (string): STA credentials.
+ *   - `count` (byte), `ssid0..4` / `pass0..4`: connection candidates.
  *
  * First boot (`provisioned` false): seed from compile-time WIFI_SSID/WIFI_PASS
  * if WIFI_SSID is non-empty, then mark provisioned. That preserves the old
  * wifi_secrets.h workflow.
  *
- * `clear()` sets ssid/pass empty and provisioned=true so Soft-AP setup is used
- * even when compile-time secrets still exist in the binary.
+ * Legacy `ssid` / `pass` values are migrated to slot zero. `clear()` empties
+ * every slot and keeps provisioned=true so compile-time secrets stay ignored.
  */
 
 struct WifiCreds {
@@ -25,14 +25,22 @@ struct WifiCreds {
 
 class WifiCredentials {
 public:
+  static constexpr size_t MaxNetworks = 5;
+
   // Load from NVS (seeding from compile-time defaults on first boot).
   static void begin();
 
   static bool hasSsid();
   static WifiCreds get();
+  static WifiCreds get(size_t index);
+  static size_t count();
 
-  // Persist and mark provisioned. Empty pass is allowed (open network).
+  // Add or update a network and make it the first connection candidate.
+  // Empty pass is allowed (open network).
   static bool save(const String &ssid, const String &pass);
+
+  // Forget one network. Returns false when it was not present.
+  static bool remove(const String &ssid);
 
   // Forget STA creds (forces Soft-AP on next radio wifi).
   static bool clear();

@@ -95,6 +95,32 @@ bool decodeHex(const std::string &encoded, std::string &decoded) {
   return true;
 }
 
+std::string jsonEscape(const String &value) {
+  std::string escaped;
+  escaped.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(value[i]);
+    switch (c) {
+      case '\"': escaped += "\\\""; break;
+      case '\\': escaped += "\\\\"; break;
+      case '\b': escaped += "\\b"; break;
+      case '\f': escaped += "\\f"; break;
+      case '\n': escaped += "\\n"; break;
+      case '\r': escaped += "\\r"; break;
+      case '\t': escaped += "\\t"; break;
+      default:
+        if (c < 0x20) {
+          char unicode[7];
+          snprintf(unicode, sizeof(unicode), "\\u%04x", c);
+          escaped += unicode;
+        } else {
+          escaped += static_cast<char>(c);
+        }
+    }
+  }
+  return escaped;
+}
+
 bool dispatchSecureProtocolMessage(const std::string &message, const char *source,
                                    SecureSession &session) {
   const OTATransportOwner owner = strcmp(source, "ble") == 0
@@ -122,6 +148,23 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
         std::string(ip.c_str()) + "\",\"device_id\":\"" +
         std::string(DeviceIdentity::deviceId()) + "\"}";
     sendSecureReply(source, session, response);
+    return true;
+  }
+  if (message == "WIFI LIST") {
+    sendSecureReply(source, session, "{\"count\":" +
+                    std::to_string(WifiCredentials::count()) + "}");
+    return true;
+  }
+  if (message.rfind("WIFI GET ", 0) == 0) {
+    const std::string indexText = message.substr(9);
+    char *end = nullptr;
+    const unsigned long index = strtoul(indexText.c_str(), &end, 10);
+    if (!end || *end || index >= WifiCredentials::count()) {
+      sendSecureReply(source, session, "error invalid_wifi_index");
+    } else {
+      sendSecureReply(source, session, "{\"ssid\":\"" +
+                      jsonEscape(WifiCredentials::get(index).ssid) + "\"}");
+    }
     return true;
   }
   if (message.rfind("DIAGNOSTICS NEXT ", 0) == 0) {
@@ -388,6 +431,28 @@ void processBLEControlFrames(size_t budget = 8) {
         continue;
       }
       if (frame.length < 4 || frame.bytes[1] != 1) {
+        if (frame.length >= 3 && frame.bytes[1] == 4) {
+          const size_t ssidLength = frame.bytes[2];
+          if (ssidLength == 0 || ssidLength > 32 || frame.length != 3 + ssidLength) {
+            LOG_WARN("secure BLE Wi-Fi removal rejected: invalid length");
+            continue;
+          }
+          const String ssid(reinterpret_cast<const char *>(frame.bytes + 3), ssidLength);
+          if (!WifiCredentials::remove(ssid)) {
+            LOG_WARN("secure BLE Wi-Fi removal failed ssid=\"%s\"", ssid.c_str());
+            continue;
+          }
+          g_radio.applyWifiCredentials();
+          continue;
+        }
+        if (frame.length == 2 && frame.bytes[1] == 5) {
+          if (!WifiCredentials::clear()) {
+            LOG_WARN("secure BLE Wi-Fi clear failed");
+            continue;
+          }
+          g_radio.applyWifiCredentials();
+          continue;
+        }
         LOG_WARN("secure BLE management frame rejected: invalid type");
         continue;
       }
@@ -597,11 +662,15 @@ void RadioManager::startSoftAp() {
   s_tcpServer.setNoDelay(true);
 }
 
-void RadioManager::startSta(const String &ssid, const String &pass) {
+void RadioManager::startSta(const String &ssid, const String &pass,
+                            size_t credentialIndex) {
   softAp_ = false;
+  staCredentialIndex_ = credentialIndex;
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
-  LOG_WIFI("connecting to %s ...", ssid.c_str());
+  LOG_WIFI("connecting to %s (candidate %u/%u) ...", ssid.c_str(),
+           static_cast<unsigned>(credentialIndex + 1),
+           static_cast<unsigned>(WifiCredentials::count()));
   staConnecting_ = true;
   staConnectStartedMs_ = millis();
   snprintf(status_, sizeof(status_), "wifi:connecting");
@@ -609,6 +678,8 @@ void RadioManager::startSta(const String &ssid, const String &pass) {
 
 void RadioManager::finishStaConnection() {
   staConnecting_ = false;
+  staAttempts_ = 0;
+  staDisconnectedSinceMs_ = 0;
   DeviceIdentity::begin();
   s_tcpServer.begin();
   s_tcpServer.setNoDelay(true);
@@ -631,26 +702,61 @@ void RadioManager::finishStaConnection() {
 }
 
 void RadioManager::serviceStaConnection() {
-  if (!staConnecting_) return;
+  if (!staConnecting_) {
+    if (softAp_ || WiFi.status() == WL_CONNECTED) {
+      staDisconnectedSinceMs_ = 0;
+      return;
+    }
+    if (staDisconnectedSinceMs_ == 0) {
+      staDisconnectedSinceMs_ = millis();
+      return;
+    }
+    // Allow brief station transitions to recover by themselves. A sustained
+    // loss starts a fresh pass through every configured network while BLE
+    // remains advertising/connected.
+    if (millis() - staDisconnectedSinceMs_ < 3000) return;
+    const size_t count = WifiCredentials::count();
+    if (count == 0) { startSoftAp(); return; }
+    LOG_WIFI("station connection lost; trying alternate networks");
+    stopWifiServices();
+    staAttempts_ = 0;
+    const size_t next = (staCredentialIndex_ + 1) % count;
+    const WifiCreds candidate = WifiCredentials::get(next);
+    staDisconnectedSinceMs_ = 0;
+    startSta(candidate.ssid, candidate.pass, next);
+    return;
+  }
   if (WiFi.status() == WL_CONNECTED) {
     finishStaConnection();
     return;
   }
   if (millis() - staConnectStartedMs_ < WIFI_CONNECT_TIMEOUT_MS) return;
-  LOG_WIFI("connect timeout; returning to Soft-AP discovery");
+  LOG_WIFI("connect timeout for candidate %u", static_cast<unsigned>(staCredentialIndex_ + 1));
   staConnecting_ = false;
   WiFi.disconnect(false, false);
+  const size_t count = WifiCredentials::count();
+  ++staAttempts_;
+  if (staAttempts_ < count) {
+    const size_t next = (staCredentialIndex_ + 1) % count;
+    const WifiCreds candidate = WifiCredentials::get(next);
+    startSta(candidate.ssid, candidate.pass, next);
+    return;
+  }
+  LOG_WIFI("all configured networks unavailable; returning to Soft-AP discovery");
   startSoftAp();
 }
 
 void RadioManager::startWifi() {
-  WifiCreds c = WifiCredentials::get();
+  staCredentialIndex_ = 0;
+  staAttempts_ = 0;
+  staDisconnectedSinceMs_ = 0;
+  WifiCreds c = WifiCredentials::get(0);
   if (c.ssid.length() == 0) {
     LOG_WIFI("no STA credentials in NVS; starting Soft-AP setup");
     startSoftAp();
     return;
   }
-  startSta(c.ssid, c.pass);
+  startSta(c.ssid, c.pass, 0);
 }
 
 void RadioManager::stopWifiServices() {
@@ -684,8 +790,7 @@ void RadioManager::applyWifiCredentials() {
   LOG_WIFI("applying credentials; transitioning to STA asynchronously");
   stopWifiServices();
   WiFi.disconnect(false, false);
-  const WifiCreds credentials = WifiCredentials::get();
-  startSta(credentials.ssid, credentials.pass);
+  startWifi();
   LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
 }
 

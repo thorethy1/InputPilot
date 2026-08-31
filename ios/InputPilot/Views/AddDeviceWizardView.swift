@@ -7,12 +7,12 @@ struct AddDeviceWizardView: View {
     @Query private var storedDevices: [StoredDevice]
     @StateObject private var viewModel = AddDeviceWizardViewModel()
     @StateObject private var bluetooth = BLEDeviceDiscoveryManager()
+    @State private var connectingBluetoothDeviceId: String?
 
     var body: some View {
         NavigationStack {
             Group {
                 switch viewModel.step {
-                case .choosePath: choosePathStep
                 case .securePairing: securePairingStep
                 case .bleScanning: bluetoothScanningStep
                 case .confirmBLE: confirmBLEStep
@@ -33,10 +33,9 @@ struct AddDeviceWizardView: View {
 
     private var navigationTitle: String {
         switch viewModel.step {
-        case .choosePath: "Add Device"
         case .securePairing: "USB Trust"
         case .bleScanning: "Secure Bluetooth"
-        case .confirmBLE: "Wi-Fi Setup"
+        case .confirmBLE: "Connection Setup"
         }
     }
 
@@ -48,27 +47,7 @@ struct AddDeviceWizardView: View {
         if viewModel.bleMetadata != nil {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Finish") { Task { await saveDevice() } }
-                    .disabled(viewModel.isSaving || viewModel.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-
-    private var choosePathStep: some View {
-        List {
-            Section("Secure device setup") {
-                Button { viewModel.chooseSecureSetup() } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Set Up Securely").foregroundStyle(.primary)
-                            Text("USB trust, encrypted Bluetooth provisioning, then authenticated Wi-Fi verification.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                    } icon: { Image(systemName: "lock.shield") }
-                }
-            }
-            Section {
-                Label("Older firmware is intentionally unsupported and must be reflashed over USB.", systemImage: "exclamationmark.triangle")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .disabled(viewModel.isSaving || viewModel.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (viewModel.configureWiFi && viewModel.homeWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }
         }
     }
@@ -79,34 +58,22 @@ struct AddDeviceWizardView: View {
             embedded: true,
             continueAction: { viewModel.continueSecureSetup(); bluetooth.start() }
         )
-        .toolbar { ToolbarItem(placement: .bottomBar) { Button("Back") { viewModel.backToChoosePath() } } }
     }
 
     private var bluetoothScanningStep: some View {
-        Group {
-            let devices = bluetooth.devices.filter {
-                $0.deviceId.lowercased() == viewModel.securelyPairedDeviceId?.lowercased()
-            }
-            if devices.isEmpty {
-                ContentUnavailableView("Scanning…", systemImage: "antenna.radiowaves.left.and.right", description: Text("Looking for the InputPilot trusted over USB."))
-            } else {
-                List(devices) { device in
-                    Button {
-                        Task {
-                            do { viewModel.selectBluetooth(try await bluetooth.metadata(for: device)) }
-                            catch { viewModel.errorMessage = error.localizedDescription; bluetooth.start() }
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(device.name).font(.headline).foregroundStyle(.primary)
-                            Text(device.deviceId).font(.caption).foregroundStyle(.secondary)
-                            Text("RSSI \(device.rssi) dBm").font(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-            }
+        ContentUnavailableView {
+            Label(connectingBluetoothDeviceId == nil ? "Scanning…" : "Connecting…",
+                  systemImage: "antenna.radiowaves.left.and.right")
+        } description: {
+            Text("Finding and authenticating the InputPilot identified during USB pairing.")
+        } actions: {
+            if connectingBluetoothDeviceId != nil { ProgressView() }
         }
-        .toolbar { ToolbarItem(placement: .bottomBar) { Button("Back") { bluetooth.stop(); viewModel.backToChoosePath() } } }
+        .onAppear { connectToPairedBluetoothDevice(in: bluetooth.devices) }
+        .onChange(of: bluetooth.devices) { _, devices in
+            connectToPairedBluetoothDevice(in: devices)
+        }
+        .toolbar { ToolbarItem(placement: .bottomBar) { Button("Back") { bluetooth.stop(); connectingBluetoothDeviceId = nil; viewModel.backToPairing() } } }
     }
 
     @ViewBuilder private var confirmBLEStep: some View {
@@ -121,6 +88,11 @@ struct AddDeviceWizardView: View {
                 }
                 Section("Friendly name") { TextField("Name", text: $viewModel.displayName) }
                 Section {
+                    Toggle("Configure Wi-Fi", isOn: $viewModel.configureWiFi)
+                } footer: {
+                    Text("Wi-Fi is optional. InputPilot can be controlled entirely over secure Bluetooth without a router or internet connection.")
+                }
+                Section {
                     TextField("Wi-Fi name (SSID)", text: $viewModel.homeWifiSSID)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("Wi-Fi password", text: $viewModel.homeWifiPassword)
@@ -128,6 +100,7 @@ struct AddDeviceWizardView: View {
                 } header: { Text("Encrypted Wi-Fi setup") } footer: {
                     Text("Credentials travel through the USB-trusted Bluetooth session. Setup completes only after this identity authenticates over the home network.")
                 }
+                .disabled(!viewModel.configureWiFi)
             }
             .toolbar { ToolbarItem(placement: .bottomBar) { Button("Back") { viewModel.backFromConfirm(); bluetooth.start() } } }
         }
@@ -138,6 +111,24 @@ struct AddDeviceWizardView: View {
             try await viewModel.saveDevice(context: modelContext)
             if viewModel.errorMessage == nil { dismiss() }
         } catch { viewModel.errorMessage = error.localizedDescription }
+    }
+
+    private func connectToPairedBluetoothDevice(in devices: [BLEDiscoveredDevice]) {
+        guard connectingBluetoothDeviceId == nil,
+              let pairedId = viewModel.securelyPairedDeviceId,
+              let device = devices.first(where: { $0.deviceId.lowercased() == pairedId.lowercased() }) else { return }
+        connectingBluetoothDeviceId = device.deviceId
+        Task {
+            do {
+                let metadata = try await bluetooth.metadata(for: device)
+                connectingBluetoothDeviceId = nil
+                viewModel.selectBluetooth(metadata)
+            } catch {
+                connectingBluetoothDeviceId = nil
+                viewModel.errorMessage = error.localizedDescription
+                bluetooth.start()
+            }
+        }
     }
 
     private var errorAlertBinding: Binding<Bool> {
