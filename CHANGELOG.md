@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## [0.8.15] - 2026-08-31
 
 - Prevent BLE disconnects and ESP32 instability when encrypted management
   responses exceed the negotiated ATT notification payload. Large replies now
   use compact encrypted binary records while short replies remain compatible
   with the existing text format.
+- Bump firmware and iOS to 0.8.15 (build 19).
 
 ## [0.8.14] - 2026-08-31
 
