@@ -73,6 +73,16 @@ Firmware bytes therefore never pass through an HTTP upload endpoint. BLE uses
 the same OTA engine, metadata validation, SHA-256 verification and exclusive
 transport ownership.
 
+Starting with 0.8.13, `START ... flow=windowed` negotiates cumulative ACK flow
+control. A supporting device replies `ota ready 0 window=4096 chunk=128`; the
+sender may then keep at most `window` unacknowledged bytes in flight. The
+legacy `ota ready 0` reply selects one acknowledgement per `DATA` command, so
+new and old app/firmware combinations remain interoperable.
+
+Authenticated management supports `USB GET`, which returns `product_name`,
+numeric `vid`, numeric `pid`, and `serial_number` as JSON. `USB SET` and
+`USB RESET` retain their existing restart behavior.
+
 ## Session ownership and recovery
 
 - One BLE manager owns the CoreBluetooth connection per device ID.

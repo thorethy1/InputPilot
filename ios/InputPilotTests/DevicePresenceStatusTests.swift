@@ -20,6 +20,7 @@ final class DevicePresenceStatusTests: XCTestCase {
         )
         XCTAssertEqual(status, .readyWiFi)
         XCTAssertEqual(status.title, "Online")
+        XCTAssertEqual(status.detail, "Online via Wi-Fi only")
     }
 
     func testBluetoothReadyWinsOverWiFiFailure() {
@@ -29,7 +30,8 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyBluetooth)
-        XCTAssertEqual(status.title, "Ready")
+        XCTAssertEqual(status.title, "Online")
+        XCTAssertEqual(status.detail, "Online via Bluetooth only")
     }
 
     func testWorkingWiFiWinsOverBluetoothReconnect() {
@@ -39,6 +41,17 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyWiFi)
+    }
+
+    func testBothWorkingTransportsAreShown() {
+        let status = DevicePresenceStatus.resolve(
+            wifi: .reachable,
+            bluetooth: .ready,
+            hasConfiguredWiFi: true
+        )
+        XCTAssertEqual(status, .readyBoth)
+        XCTAssertEqual(status.title, "Online")
+        XCTAssertEqual(status.detail, "Online via Wi-Fi and Bluetooth")
     }
 
     func testDiscoveredIsNotReportedAsReady() {

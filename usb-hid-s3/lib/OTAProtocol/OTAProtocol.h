@@ -12,6 +12,7 @@ struct OTAStartRequest {
   uint32_t size = 0;
   std::string version;
   std::string sha256;
+  bool windowed = false;
 };
 
 class OTAProtocol {
@@ -21,6 +22,9 @@ class OTAProtocol {
   static bool validSha256(const std::string &value);
   static bool acceptsOffset(uint32_t expected, uint32_t offset, size_t payload,
                             uint32_t total);
+  static bool shouldAcknowledge(uint32_t received, uint32_t lastAck,
+                                uint32_t total, bool windowed,
+                                uint32_t acknowledgementWindow);
   static const char *stateName(OTAState state);
 };
 

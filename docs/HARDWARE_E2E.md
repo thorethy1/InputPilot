@@ -22,10 +22,17 @@ replace this gate.
    mDNS blocked and verify the secure BLE-to-STA-address handoff still succeeds.
 7. Exercise mouse/trackpad, keyboard/layout input, presets/macros, Keep Awake,
    diagnostics, device settings, USB identity and reboot over BLE and Wi-Fi
-   wherever the UI offers both.
+   wherever the UI offers both. Set a non-default USB serial number, reopen
+   device details, and verify the value is read back over each transport.
 8. Install a valid image by encrypted BLE OTA; verify inactive-slot selection,
    SHA-256/metadata validation, reboot, reconnect and installed version.
 9. Repeat by encrypted Wi-Fi OTA and verify no HTTP OTA request is emitted.
+   Record image size, negotiated window/chunk, total transfer time, and average
+   bytes per second. Confirm 0.8.13 negotiates the windowed path and compare it
+   with the legacy one-ACK-per-128-byte baseline.
+10. In the device list, verify live states for Wi-Fi plus Bluetooth, Wi-Fi only,
+    Bluetooth only, and offline. Turning off iOS Bluetooth must remove the BLE
+    path without hiding a still-working Wi-Fi path.
 
 ## Recovery matrix
 
@@ -64,6 +71,8 @@ replace this gate.
   queue depth, disconnect reasons and HID execution counters.
 - Perform 50 BLE reconnects and 20 credential rotations; verify one shared
   CoreBluetooth session and no duplicate notification subscriptions.
-- Run BLE and Wi-Fi OTA five times each, alternating slots.
+- Run BLE and Wi-Fi OTA five times each, alternating slots. Record negotiated
+  BLE ATT payload, ACK window, queue errors, elapsed time, and throughput for
+  every run; do not increase BLE queue/window constants without these results.
 - Verify credentials, secure plaintext, session keys and typed content never
   appear in diagnostics exports or logs.

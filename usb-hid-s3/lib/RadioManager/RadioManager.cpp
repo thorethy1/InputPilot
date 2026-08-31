@@ -44,6 +44,8 @@ bool s_bleReady = false;
 bool s_bleAuthed = false;
 BLESessionOwnership s_bleOwner(BLE_SECURE_AUTH_TIMEOUT_MS);
 bool s_tcpAuthed = false;
+bool s_wifiOtaWindowed = false;
+uint32_t s_wifiOtaLastAck = 0;
 WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
 WiFiClient s_tcpClient;
 std::string s_tcpLineBuf;
@@ -176,6 +178,19 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
         cursor, strcmp(source, "ble") == 0 ? 80 : 159));
     return true;
   }
+  if (message == "USB GET") {
+    const USBIdentityValues &identity = USBIdentityConfig::get();
+    char ids[32];
+    snprintf(ids, sizeof(ids), "\"vid\":%u,\"pid\":%u",
+             static_cast<unsigned>(identity.vid),
+             static_cast<unsigned>(identity.pid));
+    sendSecureReply(
+        source, session,
+        "{\"product_name\":\"" + jsonEscape(String(identity.productName)) +
+            "\"," + std::string(ids) + ",\"serial_number\":\"" +
+            jsonEscape(String(identity.serialNumber)) + "\"}");
+    return true;
+  }
   if (message == "USB RESET") {
     if (!USBIdentityConfig::reset()) sendSecureReply(source, session, "error invalid_usb_identity");
     else {
@@ -228,7 +243,16 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
       sendSecureReply(source, session, "error " +
           (error.empty() ? std::string(g_otaEngine.error()) : error));
     } else {
-      sendSecureReply(source, session, "ota ready 0");
+      s_wifiOtaWindowed = owner == OTATransportOwner::WiFi && request.windowed;
+      s_wifiOtaLastAck = 0;
+      if (s_wifiOtaWindowed) {
+        sendSecureReply(source, session,
+                        "ota ready 0 window=" +
+                            std::to_string(WIFI_OTA_ACK_BYTES) + " chunk=" +
+                            std::to_string(WIFI_OTA_MAX_CHUNK_BYTES));
+      } else {
+        sendSecureReply(source, session, "ota ready 0");
+      }
     }
     return true;
   }
@@ -259,7 +283,11 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     if (!g_otaEngine.write(offset, reinterpret_cast<const uint8_t *>(bytes.data()),
                            bytes.size())) {
       sendSecureReply(source, session, "error " + std::string(g_otaEngine.error()));
-    } else {
+    } else if (OTAProtocol::shouldAcknowledge(
+                   g_otaEngine.received(), s_wifiOtaLastAck,
+                   g_otaEngine.total(), s_wifiOtaWindowed,
+                   WIFI_OTA_ACK_BYTES)) {
+      s_wifiOtaLastAck = g_otaEngine.received();
       sendSecureReply(source, session,
                       "ota ack " + std::to_string(g_otaEngine.received()));
     }
@@ -270,6 +298,8 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
       sendSecureReply(source, session, "error " + std::string(g_otaEngine.error()));
     } else {
       sendSecureReply(source, session, "ota success");
+      s_wifiOtaWindowed = false;
+      s_wifiOtaLastAck = 0;
       s_managementRebootAtMs = millis() + 750;
     }
     return true;
@@ -278,6 +308,8 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     if (g_otaEngine.owner() == owner && g_otaEngine.active())
       g_otaEngine.abort("user_cancelled", true);
     sendSecureReply(source, session, "ota cancelled");
+    s_wifiOtaWindowed = false;
+    s_wifiOtaLastAck = 0;
     return true;
   }
   return false;

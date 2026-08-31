@@ -3,6 +3,11 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    func testUSBIdentityDecodesSecureProtocolResponse() throws {
+        let data = Data(#"{"product_name":"InputPilot","vid":51966,"pid":16385,"serial_number":"Desk-01"}"#.utf8)
+        let identity = try JSONDecoder().decode(USBIdentity.self, from: data)
+        XCTAssertEqual(identity, USBIdentity(productName: "InputPilot", vid: 0xCAFE, pid: 0x4001, serialNumber: "Desk-01"))
+    }
     private func firmwareImage(protocolVersion: Int = 2) -> Data {
         var data = Data(repeating: 0xff, count: FirmwareImageMetadata.minimumSize)
         data[0] = 0xe9
@@ -22,6 +27,16 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertTrue(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: true, capabilities: caps, hasEndpoints: true))
         XCTAssertFalse(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: false, capabilities: caps, hasEndpoints: true))
         XCTAssertFalse(FirmwareUpdateManager.wifiOTAAvailable(hasSecurePairing: true, capabilities: ["wifi_transport"], hasEndpoints: true))
+    }
+
+    func testWindowedWiFiOTAReadyNegotiation() {
+        let parameters = TCPHIDControlTransport.windowedParameters(
+            from: "ota ready 0 window=4096 chunk=128"
+        )
+        XCTAssertEqual(parameters?.window, 4096)
+        XCTAssertEqual(parameters?.chunk, 128)
+        XCTAssertNil(TCPHIDControlTransport.windowedParameters(from: "ota ready 0"))
+        XCTAssertNil(TCPHIDControlTransport.windowedParameters(from: "ota ready 0 window=4096 chunk=512"))
     }
 
     @MainActor func testTransportSelectionContainsNoFallbackTransport() {

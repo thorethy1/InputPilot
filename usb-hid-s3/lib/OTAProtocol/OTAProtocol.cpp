@@ -34,6 +34,7 @@ bool OTAProtocol::parseStart(const std::string &line, OTAStartRequest &out,
       out.size = static_cast<uint32_t>(parsed); haveSize = true;
     } else if (key == "version") { out.version = value; haveVersion = !value.empty(); }
     else if (key == "sha256") { out.sha256 = value; haveHash = validSha256(value); }
+    else if (key == "flow") { out.windowed = value == "windowed"; }
   }
   if (!haveProtocol) error = "missing_protocol";
   else if (!haveSize) error = "missing_size";
@@ -46,6 +47,14 @@ bool OTAProtocol::parseStart(const std::string &line, OTAStartRequest &out,
 bool OTAProtocol::acceptsOffset(uint32_t expected, uint32_t offset,
                                 size_t payload, uint32_t total) {
   return offset == expected && payload > 0 && payload <= total - expected;
+}
+
+bool OTAProtocol::shouldAcknowledge(uint32_t received, uint32_t lastAck,
+                                    uint32_t total, bool windowed,
+                                    uint32_t acknowledgementWindow) {
+  if (!windowed) return true;
+  return received == total ||
+         (received >= lastAck && received - lastAck >= acknowledgementWindow);
 }
 
 const char *OTAProtocol::stateName(OTAState state) {

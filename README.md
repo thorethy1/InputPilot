@@ -6,7 +6,7 @@
 
 
 
-**InputPilot 0.8.12** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. Setup establishes trust by USB, then uses the same authenticated Secure Protocol v2 over Bluetooth and Wi-Fi. Older firmware is intentionally unsupported and must be reflashed over USB.
+**InputPilot 0.8.13** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. Setup establishes trust by USB, then uses the same authenticated Secure Protocol v2 over Bluetooth and Wi-Fi. Older firmware is intentionally unsupported and must be reflashed over USB.
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 
@@ -100,7 +100,7 @@ Wi-Fi and BLE may run together on the ESP32-S3. The firmware defaults to `wifi+b
 
 ## Firmware installation
 
-InputPilot ships one application firmware with two installation paths. `firmware.bin` is the same InputPilot application image included in the initial USB flash and used for later BLE OTA updates. Initial installation additionally needs the bootloader, partition table, and OTA bootstrap image.
+InputPilot ships one application firmware with two installation paths. `firmware.bin` is the same InputPilot application image included in the initial USB flash and used for later authenticated OTA updates. Initial installation additionally needs the bootloader, partition table, and OTA bootstrap image.
 
 ### First installation / required reflash
 
@@ -108,7 +108,7 @@ Use `InitialFirmware.bin` over USB, or flash the individual files from `InputPil
 
 ### Future firmware updates
 
-Use the InputPilot iOS Firmware tab. The app downloads only `firmware-manifest.json` and `firmware.bin` from GitHub Releases, validates them, and transfers only `firmware.bin` through BLE OTA. Never select an initial-flash image, bootloader, partition table, or `boot_app0.bin` in the Firmware tab.
+Use the InputPilot iOS Firmware tab. The app downloads only `firmware-manifest.json` and `firmware.bin` from GitHub Releases, validates them, and transfers only `firmware.bin` over authenticated Wi-Fi or BLE OTA. Never select an initial-flash image, bootloader, partition table, or `boot_app0.bin` in the Firmware tab.
 
 ```text
 New ESP32-S3
@@ -123,10 +123,10 @@ InputPilot installed
 iOS app checks GitHub ── firmware-manifest.json + firmware.bin
     │
     ▼
-BLE OTA
+Authenticated Wi-Fi or BLE OTA
 ```
 
-## Bluetooth firmware updates
+## Firmware updates over Wi-Fi and Bluetooth
 
 Firmware v0.8.7 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
@@ -151,12 +151,17 @@ Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) wi
 | Asset | Content |
 |-------|---------|
 | `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
+| `altstore-source.json` | AltStore Classic source for installing and updating the public unsigned IPA |
 | `InitialFirmware.bin` | Single merged image for initial installation or required USB reflash; never OTA |
 | `InputPilot-Firmware-vX.Y.Z.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |
-| `firmware.bin` | App-only image for normal BLE OTA |
+| `firmware.bin` | App-only image for normal authenticated Wi-Fi or BLE OTA |
 | `firmware-manifest.json` | Permanent automatic-update contract containing version, compatibility, size, and SHA-256 |
 
 The individual bootloader, partition, OTA bootstrap, checksum, and initial-flash manifest files remain inside the complete ZIP instead of being duplicated as public release assets. `firmware.bin` and `firmware-manifest.json` are always published together so older InputPilot apps can discover and verify future updates.
+
+Add `https://github.com/thorethy1/InputPilot/releases/latest/download/altstore-source.json`
+as an AltStore Classic source to receive iOS app updates. The source is generated
+from the validated public IPA for every tagged release.
 
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 

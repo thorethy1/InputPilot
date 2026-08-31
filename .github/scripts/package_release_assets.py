@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import plistlib
@@ -132,6 +133,72 @@ def validate_unsigned_ipa(ipa: Path) -> None:
             raise ValueError(f"IPA Mach-O binaries contain LC_CODE_SIGNATURE: {signed_machos}")
 
 
+def read_ipa_info(ipa: Path) -> dict:
+    with zipfile.ZipFile(ipa) as archive:
+        matches = [name for name in archive.namelist()
+                   if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", name)]
+        if len(matches) != 1:
+            raise ValueError(f"expected one app Info.plist in {ipa}, found {matches}")
+        return plistlib.loads(archive.read(matches[0]))
+
+
+def create_altstore_source(ipa: Path, tag: str, release_date: str,
+                           destination: Path) -> None:
+    info = read_ipa_info(ipa)
+    version = str(info.get("CFBundleShortVersionString", ""))
+    build = str(info.get("CFBundleVersion", ""))
+    bundle_id = info.get("CFBundleIdentifier")
+    if bundle_id != "com.thorethy.inputpilot" or version != tag.removeprefix("v") or not build:
+        raise ValueError("IPA identity/version does not match the AltStore release")
+    try:
+        dt.date.fromisoformat(release_date)
+    except ValueError as error:
+        raise ValueError(f"invalid AltStore release date: {release_date}") from error
+    asset_name = f"InputPilot-{tag}-ios-unsigned.ipa"
+    base = "https://raw.githubusercontent.com/thorethy1/InputPilot/main"
+    source = {
+        "name": "InputPilot",
+        "subtitle": "Secure local control for InputPilot hardware.",
+        "description": "Install and update the InputPilot iOS companion app.",
+        "website": "https://github.com/thorethy1/InputPilot",
+        "iconURL": f"{base}/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+        "tintColor": "#007AFF",
+        "apps": [{
+            "name": "InputPilot",
+            "bundleIdentifier": bundle_id,
+            "developerName": "MKF Labs",
+            "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
+            "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
+            "iconURL": f"{base}/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+            "tintColor": "#007AFF",
+            "category": "utilities",
+            "screenshots": [
+                f"{base}/docs/images/ios-device-list.jpg",
+                f"{base}/docs/images/ios-device-detail.jpg",
+            ],
+            "versions": [{
+                "version": version,
+                "buildVersion": build,
+                "date": release_date,
+                "localizedDescription": f"InputPilot {version} release.",
+                "downloadURL": f"https://github.com/thorethy1/InputPilot/releases/download/{tag}/{asset_name}",
+                "size": ipa.stat().st_size,
+                "sha256": hashlib.sha256(ipa.read_bytes()).hexdigest(),
+                "minOSVersion": "17.0",
+            }],
+            "appPermissions": {
+                "entitlements": [],
+                "privacy": [
+                    {"name": "BluetoothAlways", "usageDescription": info["NSBluetoothAlwaysUsageDescription"]},
+                    {"name": "LocalNetwork", "usageDescription": info["NSLocalNetworkUsageDescription"]},
+                ],
+            },
+        }],
+        "news": [],
+    }
+    destination.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+
+
 INITIAL_IMAGE_NAMES = ("bootloader.bin", "partitions.bin", "boot_app0.bin", "firmware.bin")
 INITIAL_SUPPORT_NAMES = ("initial-flash-manifest.json", "flash_args")
 
@@ -201,6 +268,7 @@ def main() -> None:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--release-date", default=dt.datetime.now(dt.timezone.utc).date().isoformat())
     args = parser.parse_args()
 
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.tag):
@@ -217,6 +285,8 @@ def main() -> None:
     initial_zip = args.output / f"InputPilot-Firmware-{args.tag}.zip"
     initial_bin = args.output / "InitialFirmware.bin"
     shutil.copyfile(ipa_source, ipa)
+    altstore_source = args.output / "altstore-source.json"
+    create_altstore_source(ipa, args.tag, args.release_date, altstore_source)
     firmware_source = args.input / "firmware"
     validate_initial_flash_assets(firmware_source)
     version = args.tag.removeprefix("v")
@@ -226,8 +296,9 @@ def main() -> None:
         raise ValueError("firmware manifests do not match the release tag")
     readme = firmware_source / "README.txt"
     readme.write_text(
-        "This package is for initial USB installation or migration.\n"
-        "Normal future updates must use only firmware.bin through the InputPilot app.\n"
+        "INITIAL USB INSTALLATION / RECOVERY ONLY.\n"
+        "Normal future updates must use the standalone firmware.bin release asset through the InputPilot app.\n"
+        "The firmware.bin inside this ZIP is an internal component of the complete USB flash set.\n"
         "Do not select bootloader.bin, partitions.bin or boot_app0.bin in the Firmware tab.\n",
         encoding="utf-8",
     )
@@ -236,13 +307,13 @@ def main() -> None:
     ota_assets = copy_ota_assets(args.input / "firmware", args.output)
     expected = {
         ipa.name, initial_zip.name, initial_bin.name,
-        "firmware.bin", "firmware-manifest.json",
+        "firmware.bin", "firmware-manifest.json", altstore_source.name,
     }
     actual = {path.name for path in args.output.iterdir() if path.is_file()}
     if actual != expected:
         raise ValueError(f"unexpected public release asset set: {sorted(actual)}")
 
-    for path in (initial_zip, initial_bin, ipa, *ota_assets):
+    for path in (initial_zip, initial_bin, ipa, altstore_source, *ota_assets):
         print(f"{path.name}\t{path.stat().st_size} bytes")
 
 

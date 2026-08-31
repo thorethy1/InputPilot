@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import plistlib
 import tempfile
 import unittest
 import zipfile
@@ -66,6 +67,28 @@ class InitialFlashPackagingTests(unittest.TestCase):
         copied = package.copy_ota_assets(self.root, output)
         self.assertEqual({path.name for path in copied}, {"firmware.bin", "firmware-manifest.json"})
         self.assertEqual({path.name for path in output.iterdir()}, {"firmware.bin", "firmware-manifest.json"})
+
+    def test_altstore_source_matches_ipa_metadata(self):
+        ipa = self.root / "InputPilot-v0.8.13-ios-unsigned.ipa"
+        info = {
+            "CFBundleIdentifier": "com.thorethy.inputpilot",
+            "CFBundleShortVersionString": "0.8.13",
+            "CFBundleVersion": "17",
+            "NSBluetoothAlwaysUsageDescription": "Bluetooth usage",
+            "NSLocalNetworkUsageDescription": "Local network usage",
+        }
+        with zipfile.ZipFile(ipa, "w") as archive:
+            archive.writestr("Payload/InputPilot.app/Info.plist", plistlib.dumps(info))
+        destination = self.root / "altstore-source.json"
+        package.create_altstore_source(ipa, "v0.8.13", "2026-08-31", destination)
+        source = json.loads(destination.read_text())
+        app = source["apps"][0]
+        version = app["versions"][0]
+        self.assertEqual(app["bundleIdentifier"], "com.thorethy.inputpilot")
+        self.assertEqual((version["version"], version["buildVersion"]), ("0.8.13", "17"))
+        self.assertEqual(version["size"], ipa.stat().st_size)
+        self.assertEqual({item["name"] for item in app["appPermissions"]["privacy"]},
+                         {"BluetoothAlways", "LocalNetwork"})
 
 
 if __name__ == "__main__":

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.13] - 2026-08-31
+
+- Read the configured USB identity through authenticated Wi-Fi or Bluetooth and
+  show the actual USB serial number in device details.
+- Add negotiated windowed Wi-Fi OTA with cumulative acknowledgements while
+  preserving the legacy 128-byte request/ack transfer for older counterparts.
+- Keep `firmware.bin` as the stable OTA release contract and clarify its role
+  relative to `InitialFirmware.bin` and the initial-flash ZIP.
+- Generate an AltStore source from every validated public iOS release asset.
+- Show each device as online or offline with its live transport combination
+  (Wi-Fi and Bluetooth, Wi-Fi only, or Bluetooth only), and remove the generic
+  powered-on Bluetooth row from device details.
+- Bump firmware and iOS to 0.8.13 (build 17).
+
 ## [0.8.12] - 2026-08-31
 
 - Add a complete BLE-only setup and control path; Wi-Fi is optional.

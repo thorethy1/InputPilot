@@ -102,16 +102,6 @@ enum TransportConnectionState: String, Equatable {
 }
 enum BluetoothRadioState: String, Equatable {
     case unknown, resetting, unsupported, unauthorized, poweredOff, poweredOn
-
-    var title: String {
-        switch self {
-        case .unknown, .resetting: "Bluetooth status unknown"
-        case .unsupported: "Bluetooth not supported"
-        case .unauthorized: "Bluetooth permission denied"
-        case .poweredOff: "Bluetooth is off"
-        case .poweredOn: "Bluetooth is on"
-        }
-    }
 }
 
 protocol HIDControlTransport: AnyObject {
@@ -125,6 +115,19 @@ protocol HIDControlTransport: AnyObject {
 
 enum TransportError: LocalizedError { case unavailable, encoding, failed(String)
     var errorDescription: String? { switch self { case .unavailable: "Transport unavailable"; case .encoding: "Could not encode event"; case let .failed(s): s } }
+}
+
+struct USBIdentity: Codable, Equatable {
+    let productName: String
+    let vid: Int
+    let pid: Int
+    let serialNumber: String
+
+    enum CodingKeys: String, CodingKey {
+        case productName = "product_name"
+        case vid, pid
+        case serialNumber = "serial_number"
+    }
 }
 
 final class TCPHIDControlTransport: HIDControlTransport {
@@ -144,6 +147,9 @@ final class TCPHIDControlTransport: HIDControlTransport {
         let timeout: DispatchWorkItem
     }
     private var pendingReplies: [PendingReply] = []
+    private var otaAcknowledged = 0
+    private var otaProtocolError: String?
+    private var otaCancelled = false
     init(host: String, deviceId: String, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout }
     func connect() async {
         shouldReconnect = true
@@ -226,6 +232,12 @@ final class TCPHIDControlTransport: HIDControlTransport {
             let pending = pendingReplies.removeFirst(); pending.timeout.cancel()
             pending.continuation.resume(returning: plaintext); return
         }
+        if plaintext.hasPrefix("ota ack "),
+           let offset = Int(plaintext.dropFirst("ota ack ".count)) {
+            otaAcknowledged = max(otaAcknowledged, offset)
+            return
+        }
+        if plaintext.lowercased().hasPrefix("error") { otaProtocolError = plaintext }
         if plaintext.lowercased().hasPrefix("error") { lastProtocolError = plaintext }
     }
     private var lastProtocolError: String?
@@ -296,23 +308,92 @@ final class TCPHIDControlTransport: HIDControlTransport {
     }
     func installFirmware(_ firmware: Data, version: String, sha256: String,
                          progress: @escaping (Int) -> Void) async throws {
-        var reply = try await request("START protocol=2 version=\(version) size=\(firmware.count) sha256=\(sha256)")
-        guard reply == "ota ready 0" else { throw TransportError.failed(reply) }
-        var offset = 0
-        while offset < firmware.count {
-            try Task.checkCancellation()
-            // Secure text records hex-encode ciphertext. Keep the resulting
-            // line below the firmware's bounded TCP receive buffer.
-            let count = min(128, firmware.count - offset)
-            reply = try await request("DATA \(offset) \(Data(firmware[offset ..< offset + count]).hex)", timeout: 15)
-            offset += count
-            guard reply == "ota ack \(offset)" else { throw TransportError.failed(reply) }
-            progress(offset)
+        var reply = try await request("START protocol=2 version=\(version) size=\(firmware.count) sha256=\(sha256) flow=windowed")
+        let windowed = Self.windowedParameters(from: reply)
+        guard reply == "ota ready 0" || windowed != nil else { throw TransportError.failed(reply) }
+        otaAcknowledged = 0
+        otaProtocolError = nil
+        otaCancelled = false
+        if let windowed {
+            appLog(.tcp, "OTA flow=windowed window=\(windowed.window) chunk=\(windowed.chunk) bytes=\(firmware.count)")
+            try await installFirmwareWindowed(
+                firmware, window: windowed.window, chunk: windowed.chunk,
+                progress: progress
+            )
+        } else {
+            appLog(.tcp, "OTA flow=legacy-stop-and-wait chunk=128 bytes=\(firmware.count)")
+            try await installFirmwareLegacy(firmware, progress: progress)
         }
         reply = try await request("FINISH", timeout: 30)
         guard reply == "ota success" else { throw TransportError.failed(reply) }
     }
-    func abortFirmwareUpdate() async { _ = try? await request("ABORT") }
+    static func windowedParameters(from reply: String) -> (window: Int, chunk: Int)? {
+        var values: [String: Int] = [:]
+        for field in reply.split(separator: " ") {
+            let parts = field.split(separator: "=", maxSplits: 1)
+            if parts.count == 2, let value = Int(parts[1]) {
+                values[String(parts[0])] = value
+            }
+        }
+        guard reply.hasPrefix("ota ready 0 "),
+              let window = values["window"], window > 0,
+              let chunk = values["chunk"], (1 ... 128).contains(chunk) else { return nil }
+        return (window, chunk)
+    }
+    private func installFirmwareLegacy(_ firmware: Data,
+                                       progress: @escaping (Int) -> Void) async throws {
+        var offset = 0
+        while offset < firmware.count {
+            if otaCancelled { throw CancellationError() }
+            try Task.checkCancellation()
+            // Secure text records hex-encode ciphertext. Keep the resulting
+            // line below the firmware's bounded TCP receive buffer.
+            let count = min(128, firmware.count - offset)
+            let reply = try await request("DATA \(offset) \(Data(firmware[offset ..< offset + count]).hex)", timeout: 15)
+            offset += count
+            guard reply == "ota ack \(offset)" else { throw TransportError.failed(reply) }
+            progress(offset)
+        }
+    }
+    private func installFirmwareWindowed(_ firmware: Data, window: Int, chunk: Int,
+                                         progress: @escaping (Int) -> Void) async throws {
+        var offset = 0
+        var lastAcknowledgement = Date()
+        var lastAcknowledgedOffset = 0
+        while offset < firmware.count {
+            if otaCancelled { throw CancellationError() }
+            try Task.checkCancellation()
+            while offset - otaAcknowledged >= window {
+                if let otaProtocolError { throw TransportError.failed(otaProtocolError) }
+                if otaAcknowledged > lastAcknowledgedOffset {
+                    lastAcknowledgedOffset = otaAcknowledged
+                    lastAcknowledgement = Date()
+                }
+                guard Date().timeIntervalSince(lastAcknowledgement) < 15 else {
+                    throw TransportError.failed("Windowed Wi-Fi firmware acknowledgement timed out.")
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            let count = min(chunk, firmware.count - offset)
+            guard let secureChannel else { throw TransportError.unavailable }
+            let command = "DATA \(offset) \(Data(firmware[offset ..< offset + count]).hex)"
+            try await sendLine(try secureChannel.sealText(command))
+            offset += count
+            progress(offset)
+        }
+        let deadline = Date().addingTimeInterval(15)
+        while otaAcknowledged < firmware.count {
+            if let otaProtocolError { throw TransportError.failed(otaProtocolError) }
+            guard Date() < deadline else {
+                throw TransportError.failed("Final windowed Wi-Fi firmware acknowledgement timed out.")
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    func abortFirmwareUpdate() async {
+        otaCancelled = true
+        _ = try? await request("ABORT")
+    }
     func diagnosticsInfo() async throws -> Data {
         Data(try await request("DIAGNOSTICS INFO").utf8)
     }
@@ -320,6 +401,10 @@ final class TCPHIDControlTransport: HIDControlTransport {
         let data = Data(try await request("DIAGNOSTICS NEXT \(cursor)").utf8)
         if String(data: data, encoding: .utf8) == "{}" { return nil }
         return try JSONDecoder().decode(FirmwareLogRecord.self, from: data)
+    }
+    func usbIdentity() async throws -> USBIdentity {
+        let reply = try await request("USB GET")
+        return try JSONDecoder().decode(USBIdentity.self, from: Data(reply.utf8))
     }
     func setUSBIdentity(productName: String, vid: Int, pid: Int, serialNumber: String) async throws {
         let product = Data(productName.utf8).hex
@@ -965,7 +1050,8 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         guard let selected = order.first else { state = .failed("No permitted firmware update transport is available."); return }
         if selected == .wifi {
             do { try await installWiFi(firmware, version: version, expectedSHA256: expectedSHA256); return }
-            catch where order.contains(.bluetooth) && state == .preparing { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256); return }
+            catch where order.contains(.bluetooth) && state == .preparing && !cancelled { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256); return }
+            catch is CancellationError { if cancelled { state = .cancelled }; return }
             catch { state = .failed(error.localizedDescription); return }
         }
         await installBLE(firmware, version: version, expectedSHA256: expectedSHA256)
@@ -999,6 +1085,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         let negotiatedMaximum = min(maximumChunkSize,
                                     peripheral.maximumWriteValueLength(for: .withoutResponse) - 29)
         let maximum = max(5, negotiatedMaximum)
+        appLog(.bluetooth, "OTA flow=windowed window=\(windowSize) chunk=\(maximum) bytes=\(firmware.count)")
         var offset = 0
         while offset < firmware.count && !cancelled {
             while (!peripheral.canSendWriteWithoutResponse || offset - acknowledged >= windowSize) && !cancelled {
@@ -1371,6 +1458,10 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         let data = Data(try await request("DIAGNOSTICS NEXT \(cursor)").utf8)
         if String(data: data, encoding: .utf8) == "{}" { return nil }
         return try JSONDecoder().decode(FirmwareLogRecord.self, from: data)
+    }
+    func usbIdentity() async throws -> USBIdentity {
+        let reply = try await request("USB GET")
+        return try JSONDecoder().decode(USBIdentity.self, from: Data(reply.utf8))
     }
     func send(_ event: HIDEvent) async throws {
         if firmwareUpdater.blocksControl, event != .releaseAll { throw TransportError.failed("Controls are unavailable during a firmware update.") }

@@ -17,6 +17,7 @@ enum DevicePresenceStatus: Equatable, Sendable {
     case reconnecting
     case authenticating
     case authenticationFailed
+    case readyBoth
     case readyBluetooth
     case readyWiFi
 
@@ -30,8 +31,7 @@ enum DevicePresenceStatus: Equatable, Sendable {
         case .reconnecting: "Reconnecting…"
         case .authenticating: "Authenticating…"
         case .authenticationFailed: "Authentication failed"
-        case .readyBluetooth: "Ready"
-        case .readyWiFi: "Online"
+        case .readyBoth, .readyBluetooth, .readyWiFi: "Online"
         }
     }
 
@@ -45,16 +45,19 @@ enum DevicePresenceStatus: Equatable, Sendable {
         case .reconnecting: "The previous connection was lost"
         case .authenticating: "Verifying device access"
         case .authenticationFailed: "Pair the device again over USB to rotate its trust credential"
-        case .readyBluetooth: "Connected securely over Bluetooth and ready for control"
-        case .readyWiFi: "Reachable on the local Wi-Fi network"
+        case .readyBoth: "Online via Wi-Fi and Bluetooth"
+        case .readyBluetooth: "Online via Bluetooth only"
+        case .readyWiFi: "Online via Wi-Fi only"
         }
     }
 
-    var isUsable: Bool { self == .readyBluetooth || self == .readyWiFi }
+    var isUsable: Bool {
+        self == .readyBoth || self == .readyBluetooth || self == .readyWiFi
+    }
 
     var color: Color {
         switch self {
-        case .readyBluetooth, .readyWiFi: AppColors.success
+        case .readyBoth, .readyBluetooth, .readyWiFi: AppColors.success
         case .bluetoothDiscovered, .connecting, .reconnecting, .authenticating, .checking: AppColors.info
         case .setup: AppColors.warning
         case .authenticationFailed, .offline: AppColors.error
@@ -66,6 +69,7 @@ enum DevicePresenceStatus: Equatable, Sendable {
         bluetooth: TransportConnectionState,
         hasConfiguredWiFi: Bool
     ) -> DevicePresenceStatus {
+        if bluetooth == .ready && wifi == .reachable { return .readyBoth }
         // A working transport takes precedence over a failure or reconnect on another.
         if bluetooth == .ready { return .readyBluetooth }
         if wifi == .reachable { return hasConfiguredWiFi ? .readyWiFi : .setup }

@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.12"
+#define FW_VERSION      "0.8.13"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0812
+#define FW_VERSION_BCD  0x0813
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -102,5 +102,7 @@
 
 // Secure Protocol v2 TCP transport on both Soft-AP and station networks.
 #define WIFI_CONTROL_PORT 3333
+#define WIFI_OTA_ACK_BYTES (4UL * 1024UL)
+#define WIFI_OTA_MAX_CHUNK_BYTES 128UL
 
 #endif // CONFIG_H

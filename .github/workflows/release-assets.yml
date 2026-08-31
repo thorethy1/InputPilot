@@ -77,6 +77,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "date=$(jq -r '.published_at[0:10]' <<<"$release_json")" >> "$GITHUB_OUTPUT"
           echo "Release tag $tag resolves to $sha"
 
       - name: Require successful CI for the release commit
@@ -141,6 +142,7 @@ jobs:
           rm -rf release-assets
           python3 .github/scripts/package_release_assets.py \
             --tag "${{ steps.release.outputs.tag }}" \
+            --release-date "${{ steps.release.outputs.date }}" \
             --input staging \
             --output release-assets
           {

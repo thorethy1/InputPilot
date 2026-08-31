@@ -53,14 +53,17 @@ struct DeviceDetailView: View {
                 Text(presence.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                LabeledContent("Bluetooth", value: bluetooth.radioState.title)
                 if bluetooth.radioState == .unauthorized {
+                    Label("Bluetooth access is disabled for InputPilot", systemImage: "bluetooth.slash")
+                        .foregroundStyle(AppColors.warning)
                     Button("Open InputPilot Settings") {
                         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                         UIApplication.shared.open(url)
                     }
                 } else if bluetooth.radioState == .poweredOff {
-                    Text("Turn on Bluetooth in Control Center or Settings, or use Wi-Fi if it is available.")
+                    Label("Bluetooth is off", systemImage: "bluetooth.slash")
+                        .foregroundStyle(AppColors.warning)
+                    Text("Turn on Bluetooth in Control Center or Settings. Wi-Fi remains available when the device is connected to the local network.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -76,6 +79,7 @@ struct DeviceDetailView: View {
 
             Section("Device") {
                 LabeledContent("Device ID", value: device.deviceId)
+                LabeledContent("USB Serial Number", value: usbSerialNumber.isEmpty ? "Unavailable" : usbSerialNumber)
                 LabeledContent("Hostname", value: device.mdnsHost)
                 if let staIP = device.staIP,
                    DeviceEndpointResolver.sanitizeHost(staIP)
@@ -238,6 +242,7 @@ struct DeviceDetailView: View {
             async let bluetoothConnection: Void = bluetooth.connect()
             await viewModel.refreshDevice(device, context: modelContext)
             await bluetoothConnection
+            await loadUSBIdentity()
             await loadWiFiNetworks()
         }
         .onAppear {
@@ -276,6 +281,36 @@ struct DeviceDetailView: View {
     }
 
     private var hasPairingKey: Bool { PairingKeyStore.load(deviceId: device.deviceId) != nil }
+
+    @MainActor
+    private func loadUSBIdentity() async {
+        guard hasPairingKey, device.capabilities.contains("secure_usb_identity") else { return }
+        usbBusy = true
+        defer { usbBusy = false }
+        do {
+            let bluetoothDeadline = Date().addingTimeInterval(5)
+            while bluetooth.state != .ready, Date() < bluetoothDeadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let identity: USBIdentity
+            if bluetooth.state == .ready {
+                identity = try await bluetooth.usbIdentity()
+            } else if let host = wifiControlHost {
+                identity = try await InputPilotWiFiManager.session(
+                    host: host, deviceId: device.deviceId
+                ).usbIdentity()
+            } else {
+                throw TransportError.unavailable
+            }
+            usbProductName = identity.productName
+            usbVID = String(format: "0x%04X", identity.vid)
+            usbPID = String(format: "0x%04X", identity.pid)
+            usbSerialNumber = identity.serialNumber
+            usbMessage = nil
+        } catch {
+            usbMessage = "Could not load USB identity: \(error.localizedDescription)"
+        }
+    }
 
     @MainActor
     private func loadWiFiNetworks() async {

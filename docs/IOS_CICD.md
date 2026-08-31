@@ -8,6 +8,13 @@ The regular CI artifact has `CFBundleIdentifier=com.thorethy.inputpilot`, but no
 
 Do not create the public artifact by deleting only `embedded.mobileprovision` from an already signed personal IPA. Any bundle modification invalidates the existing signature, and the signed IPA may contain identity information in both its profile and signature. Build the unsigned target from source as CI does instead.
 
+Each tagged release also generates `altstore-source.json` from the validated
+unsigned IPA. Its stable URL is
+`https://github.com/thorethy1/InputPilot/releases/latest/download/altstore-source.json`.
+The generator reads the bundle identifier, marketing version, build number,
+privacy permissions, file size, and SHA-256 directly from the packaged IPA so
+the AltStore entry cannot silently diverge from the released app.
+
 ## Repository secrets
 
 Configure these in **Settings → Secrets and variables → Actions**:
