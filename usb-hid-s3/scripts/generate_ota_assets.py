@@ -5,18 +5,25 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY))
+from versioning import project_version  # noqa: E402
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--firmware", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=Path("include/Config.h"))
+    parser.add_argument("--version-file", type=Path,
+                        default=REPOSITORY / "Version.xcconfig")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     image = args.firmware.read_bytes()
     config = args.config.read_text(encoding="utf-8")
-    version = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', config).group(1)
+    version = project_version(args.version_file)
     schema = int(re.search(r"#define\s+OTA_SCHEMA_VERSION\s+(\d+)", config).group(1))
     protocol = int(re.search(r"#define\s+OTA_PROTOCOL_VERSION\s+(\d+)", config).group(1))
     digest = hashlib.sha256(image).hexdigest()

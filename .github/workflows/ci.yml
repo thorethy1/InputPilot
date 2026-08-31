@@ -59,7 +59,9 @@ jobs:
 
       - name: Test release packaging
         working-directory: ${{ github.workspace }}
-        run: python .github/scripts/test_package_release_assets.py
+        run: |
+          python .github/scripts/test_package_release_assets.py
+          python .github/scripts/test_versioning.py
 
       - name: Generate OTA manifest and checksum
         run: |
@@ -178,7 +180,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}"
+            INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}" \
+            INPUTPILOT_BUILD="$GITHUB_RUN_NUMBER"
 
   ios-package:
     name: iOS unsigned IPA
@@ -215,7 +218,8 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             PRODUCT_BUNDLE_IDENTIFIER=com.thorethy.inputpilot \
-            INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}"
+            INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}" \
+            INPUTPILOT_BUILD="$GITHUB_RUN_NUMBER"
 
           app="$derived/Build/Products/Release-iphoneos/InputPilot.app"
           [[ -d "$app" ]] || { echo "::error::Unsigned device app was not produced."; exit 1; }

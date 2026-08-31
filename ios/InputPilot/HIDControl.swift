@@ -1622,8 +1622,17 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         return try JSONDecoder().decode(FirmwareLogRecord.self, from: data)
     }
     func usbIdentity(includeManufacturer: Bool = false) async throws -> USBIdentity {
-        let reply = try await request(includeManufacturer ? "USB GET2" : "USB GET")
-        return try JSONDecoder().decode(USBIdentity.self, from: Data(reply.utf8))
+        let basicReply = try await request("USB GET")
+        let basic = try JSONDecoder().decode(USBIdentity.self, from: Data(basicReply.utf8))
+        guard includeManufacturer else { return basic }
+        // USB GET2 can exceed the text-notification size on smaller negotiated
+        // ATT MTUs. Keep the serial/VID/PID result even when the optional,
+        // manufacturer-inclusive response cannot be delivered by an older peer.
+        guard let extendedReply = try? await request("USB GET2", timeout: 3),
+              let extended = try? JSONDecoder().decode(
+                USBIdentity.self, from: Data(extendedReply.utf8)
+              ) else { return basic }
+        return extended
     }
     func send(_ event: HIDEvent) async throws {
         if firmwareUpdater.blocksControl { throw TransportError.failed("Controls are unavailable during a firmware update.") }

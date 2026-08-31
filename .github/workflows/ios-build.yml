@@ -113,6 +113,7 @@ jobs:
             CODE_SIGN_IDENTITY='${{ steps.signing.outputs.identity }}' \
             PROVISIONING_PROFILE_SPECIFIER='${{ steps.signing.outputs.profile_name }}' \
             INPUTPILOT_GIT_COMMIT="${GITHUB_SHA::7}" \
+            INPUTPILOT_BUILD="$GITHUB_RUN_NUMBER" \
             OTHER_CODE_SIGN_FLAGS='--keychain ${{ steps.signing.outputs.keychain }}'
 
       - name: Export signed IPA

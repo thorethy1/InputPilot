@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Move every secure BLE control operation—including handshake, USB identity,
+  Wi-Fi management, encryption and notification—out of the NimBLE host callback
+  and into the bounded firmware loop queue.
+- Preserve the smaller USB identity response when an optional manufacturer
+  response does not fit or time out over Bluetooth, so the serial number still
+  loads without Wi-Fi.
+- Use `Version.xcconfig` as the single app/firmware version source, assign iOS
+  build numbers in GitHub Actions, and add an automated semantic release
+  workflow that bumps, tests, tags, publishes and starts asset attachment.
+
 ## [0.8.16] - 2026-08-31
 
 - Replace hex-expanded Wi-Fi OTA data messages with negotiated encrypted binary

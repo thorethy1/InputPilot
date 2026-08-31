@@ -56,12 +56,17 @@ SecureSession s_bleSecureSession;
 SecureSession s_tcpSecureSession;
 
 struct BLEControlFrame {
+  uint32_t generation = 0;
+  uint16_t connectionHandle = BLESessionOwnership::NoOwner;
   uint16_t length = 0;
   uint8_t bytes[242]{};
 };
 QueueHandle_t s_bleControlQueue = nullptr;
 constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
 constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
+volatile uint32_t s_bleConnectionGeneration = 0;
+uint32_t s_bleProcessedGeneration = 0;
+volatile bool s_bleControlQueueOverflow = false;
 constexpr size_t TCP_CONTROL_TEXT_MAX = 768;
 constexpr size_t TCP_OTA_BINARY_PLAINTEXT_MAX =
     1 + sizeof(uint32_t) + WIFI_OTA_BINARY_MAX_CHUNK_BYTES;
@@ -546,54 +551,65 @@ class BinaryCallbacks : public NimBLECharacteristicCallbacks {
       return;
     }
     const std::string &value = c->getValue();
-    if (value.empty()) return;
-    if (static_cast<uint8_t>(value[0]) != SecureSession::BinaryVersion) {
-      std::string line = value;
-      if (!line.empty() && line.back() == '\n') line.pop_back();
-      if (!line.empty() && line.back() == '\r') line.pop_back();
-      dispatchControlLine(line, "ble", &s_bleAuthed);
-      return;
-    }
-    uint8_t decrypted[BLE_CONTROL_FRAME_MAX];
-    const uint8_t *frameBytes = reinterpret_cast<const uint8_t *>(value.data());
-    size_t frameLength = value.size();
-    size_t decryptedLength = 0;
-    if (!s_bleSecureSession.decryptBinary(frameBytes, frameLength, decrypted,
-                                          sizeof(decrypted), decryptedLength)) {
-      LOG_INFO("encrypted binary control rejected");
-      return;
-    }
-    frameBytes = decrypted;
-    frameLength = decryptedLength;
-    // Authentication is performed through the text control characteristic
-    // before binary event characteristics are accepted.
-    if (!s_bleAuthed) {
-      LOG_INFO("binary control rejected: BLE session not authenticated");
-      return;
-    }
-    if (!s_bleControlQueue || frameLength > BLE_CONTROL_FRAME_MAX) {
-      recordHIDDecodeError("ble-binary", frameLength);
+    if (!s_bleControlQueue || value.empty() ||
+        value.size() > BLE_CONTROL_FRAME_MAX) {
+      s_bleControlQueueOverflow = true;
       return;
     }
     BLEControlFrame frame;
-    frame.length = static_cast<uint16_t>(frameLength);
-    memcpy(frame.bytes, frameBytes, frameLength);
-    if (frame.length > 1 && frame.bytes[0] == 0xFE)
-      frame.bytes[0] = 0xFD;
+    frame.generation = s_bleConnectionGeneration;
+    frame.connectionHandle = info.getConnHandle();
+    frame.length = static_cast<uint16_t>(value.size());
+    memcpy(frame.bytes, value.data(), value.size());
     if (xQueueSend(s_bleControlQueue, &frame, 0) != pdTRUE)
-      recordHIDDecodeError("ble-binary", frameLength);
+      s_bleControlQueueOverflow = true;
   }
 };
 
 void processBLEControlFrames(size_t budget = 8) {
   if (!s_bleControlQueue) return;
+  if (s_bleControlQueueOverflow) {
+    s_bleControlQueueOverflow = false;
+    recordHIDDecodeError("ble-queue", 0);
+    LOG_WARN("BLE control queue overflow or oversized frame");
+  }
   BLEControlFrame frame;
   for (size_t processed = 0;
        processed < budget && xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
        ++processed) {
+    if (frame.generation != s_bleConnectionGeneration ||
+        !s_bleOwner.owns(frame.connectionHandle)) {
+      continue;
+    }
+    if (frame.generation != s_bleProcessedGeneration) {
+      s_bleSecureSession.reset();
+      s_bleProcessedGeneration = frame.generation;
+    }
+    if (static_cast<uint8_t>(frame.bytes[0]) != SecureSession::BinaryVersion) {
+      std::string line(reinterpret_cast<const char *>(frame.bytes), frame.length);
+      if (!line.empty() && line.back() == '\n') line.pop_back();
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (!line.empty()) dispatchControlLine(line, "ble", &s_bleAuthed);
+      continue;
+    }
+    uint8_t decrypted[BLE_CONTROL_FRAME_MAX];
+    size_t decryptedLength = 0;
+    if (!s_bleSecureSession.decryptBinary(frame.bytes, frame.length, decrypted,
+                                          sizeof(decrypted), decryptedLength)) {
+      LOG_INFO("encrypted binary control rejected");
+      continue;
+    }
+    if (!s_bleAuthed) {
+      LOG_INFO("binary control rejected: BLE session not authenticated");
+      continue;
+    }
+    frame.length = static_cast<uint16_t>(decryptedLength);
+    memcpy(frame.bytes, decrypted, decryptedLength);
     // An external 0xFE marker is changed to internal 0xFD only after successful
     // decryption. Type 1 carries length-prefixed raw Wi-Fi credentials, keeping
     // the maximum encrypted record well below a typical iOS ATT write size.
+    if (frame.length > 1 && frame.bytes[0] == 0xFE)
+      frame.bytes[0] = 0xFD;
     if (frame.length > 1 && frame.bytes[0] == 0xFD) {
       if (frame.bytes[1] == 2 && frame.length == 2) {
         if (!USBIdentityConfig::reset()) {
@@ -760,7 +776,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       return;
     }
     if (claim == BLESessionOwnership::ClaimResult::AlreadyOwner) return;
-    s_bleSecureSession.reset();
+    uint32_t generation = s_bleConnectionGeneration + 1;
+    if (generation == 0) generation = 1;
+    s_bleConnectionGeneration = generation;
     s_bleAuthed = false;
     // Ask iOS for a low-latency, zero-slave-latency link. The peer remains free
     // to choose compatible values; these bounds improve sustained OTA writes
@@ -777,9 +795,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       return;
     }
     s_bleAuthed = false;
-    s_bleSecureSession.reset();
     g_bleOta.disconnected();
-    if (s_bleControlQueue) xQueueReset(s_bleControlQueue);
     requestReleaseAll("ble-disconnect");
     if (s_bleTearingDown) {
       LOG_BLE("central disconnected reason=%d during teardown", reason);

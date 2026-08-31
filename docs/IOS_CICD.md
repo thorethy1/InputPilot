@@ -15,6 +15,11 @@ The generator reads the bundle identifier, marketing version, build number,
 privacy permissions, file size, and SHA-256 directly from the packaged IPA so
 the AltStore entry cannot silently diverge from the released app.
 
+`Version.xcconfig` is the single marketing-version source for both the iOS app
+and ESP32 firmware. CI overrides `INPUTPILOT_BUILD` with its monotonically
+increasing workflow run number; local builds use the harmless fallback declared
+in that file.
+
 ## Repository secrets
 
 Configure these in **Settings → Secrets and variables → Actions**:
@@ -39,12 +44,14 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 
 ## Release assets (public)
 
-The [`release-assets.yml`](/.github/workflows/release-assets.yml) workflow attaches versioned firmware and iOS assets to published GitHub Releases:
+The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the normal release entry point. Choose a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. It updates only the shared version on a temporary branch, starts CI for that exact commit, and promotes the commit to `main` only after CI succeeds. It then publishes the tag and generated release notes and dispatches [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
 
-- Published releases with a `vMAJOR.MINOR.PATCH` tag trigger it automatically.
-- It validates source version consistency (iOS `MARKETING_VERSION`, CHANGELOG, RELEASE_NOTES, README).
-- It waits for a successful CI run on the exact tag commit.
-- Assets downloaded from that CI run are validated, renamed, and uploaded as Release assets.
-- The iOS asset is the **unsigned** IPA from CI — identical to `InputPilot-unsigned-${{ github.sha }}` with no provisioning profile or signature. The signed IPA from the `ios-build.yml` workflow is never included in release assets, even if it exists on a previous CI run.
+- validates the release tag against `Version.xcconfig`;
+- waits for a successful CI run on the exact tag commit;
+- validates, renames and uploads assets downloaded from that CI run;
+- includes the **unsigned** iOS IPA from CI — identical to `InputPilot-unsigned-${{ github.sha }}` with no provisioning profile or signature. The signed IPA from the `ios-build.yml` workflow is never included in release assets, even if it exists on a previous CI run.
+
+Published releases still trigger the asset workflow for manual/emergency use,
+but the tag must match the shared version.
 
 To repair a release that was published without assets, run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name.

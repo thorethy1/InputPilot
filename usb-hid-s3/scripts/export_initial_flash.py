@@ -4,7 +4,13 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+
+REPOSITORY = Path(env.subst("$PROJECT_DIR")).resolve().parent
+sys.path.insert(0, str(REPOSITORY))
+from versioning import project_version  # noqa: E402
 
 
 PRODUCT = "InputPilot"
@@ -43,9 +49,7 @@ def export_initial_flash(source, target, env):
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f"required full-flash image is missing or empty: {path}")
 
-    config = Path(build_env.subst("$PROJECT_DIR")) / "include" / "Config.h"
-    import re
-    version = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', config.read_text()).group(1)
+    version = project_version(REPOSITORY / "Version.xcconfig")
     manifest = {
         "product": PRODUCT,
         "version": version,

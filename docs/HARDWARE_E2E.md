@@ -71,6 +71,10 @@ replace this gate.
   queue depth, disconnect reasons and HID execution counters.
 - Perform 50 BLE reconnects and 20 credential rotations; verify one shared
   CoreBluetooth session and no duplicate notification subscriptions.
+- Open device details and reload USB identity plus the configured Wi-Fi list 50
+  times over BLE-only mode. The USB serial must populate every time, the ESP32
+  must not reset, and diagnostics must show neither queue overflow nor secure
+  response timeout.
 - Run BLE and Wi-Fi OTA five times each, alternating slots. Record negotiated
   BLE ATT payload, ACK window, queue errors, elapsed time, and throughput for
   every run; do not increase BLE queue/window constants without these results.

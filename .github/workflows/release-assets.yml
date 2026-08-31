@@ -59,19 +59,21 @@ jobs:
           import sys
 
           version = sys.argv[1]
-          checks = {
-              "ios/InputPilot.xcodeproj/project.pbxproj": rf'MARKETING_VERSION\s*=\s*{re.escape(version)};',
-              "CHANGELOG.md": rf'(?m)^## \[{re.escape(version)}\]',
-              "README.md": rf'\*\*InputPilot {re.escape(version)}\*\*',
-          }
-          for filename, pattern in checks.items():
-              text = Path(filename).read_text(encoding="utf-8")
-              if not re.search(pattern, text):
-                  raise SystemExit(f"{filename} does not declare release version {version}")
-          notes = Path(f"docs/RELEASE_NOTES_{version}.md")
-          if not notes.is_file():
-              raise SystemExit(f"missing release notes: {notes}")
-          print(f"All checked project versions match {version}")
+          if Path("Version.xcconfig").is_file():
+              sys.path.insert(0, str(Path.cwd()))
+              from versioning import project_version
+              configured = project_version()
+          else:
+              # Compatibility for repairing releases created before the shared
+              # version source was introduced.
+              config = Path("usb-hid-s3/include/Config.h").read_text(encoding="utf-8")
+              match = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', config)
+              configured = match.group(1) if match else ""
+          if configured != version:
+              raise SystemExit(
+                  f"source declares {configured or 'no version'}, release tag declares {version}"
+              )
+          print(f"Shared app/firmware version matches {version}")
           PY
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

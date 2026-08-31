@@ -3,13 +3,17 @@
 
 /**
  * Compile-time configuration for the USB HID S3 firmware.
- * Values the test suite reads back (FW_VERSION) live here.
+ * Version values are injected from the repository-level Version.xcconfig.
  */
 
-#define FW_VERSION      "0.8.16"
+#ifndef FW_VERSION
+#define FW_VERSION      "0.0.0-dev"
+#endif
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0816
+#ifndef FW_VERSION_BCD
+#define FW_VERSION_BCD  0x0000
+#endif
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif

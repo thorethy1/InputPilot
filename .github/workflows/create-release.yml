@@ -1,0 +1,147 @@
+name: Create release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version component to increment
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Bump, validate and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Increment shared version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          git checkout -B main origin/main
+          previous="$(python3 versioning.py show)"
+          version="$(python3 versioning.py bump '${{ inputs.bump }}')"
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag $tag already exists."
+            exit 1
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Version.xcconfig
+          git commit -m "Release InputPilot $version"
+          sha="$(git rev-parse HEAD)"
+          branch="release/$tag-$GITHUB_RUN_ID"
+          git push origin "HEAD:refs/heads/$branch"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Start CI for release commit
+        shell: bash
+        run: >-
+          gh workflow run ci.yml
+          --ref '${{ steps.version.outputs.branch }}'
+          --repo "$GITHUB_REPOSITORY"
+
+      - name: Require successful CI
+        id: ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.version.outputs.sha }}'
+          run_id=""
+          for attempt in $(seq 1 60); do
+            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+              --commit "$sha" --event workflow_dispatch --limit 10 \
+              --json databaseId,status,conclusion,url)"
+            run_id="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
+            if [[ -n "$run_id" ]]; then break; fi
+            echo "Waiting for CI run on $sha (attempt $attempt/60)..."
+            sleep 5
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "::error::CI did not start for $sha."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+
+      - name: Tag and publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.version.outputs.tag }}'
+          sha='${{ steps.version.outputs.sha }}'
+          git push origin "$sha:refs/heads/main"
+          git tag -a "$tag" "$sha" -m "InputPilot ${{ steps.version.outputs.version }}"
+          git push origin "$tag"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+            --target "$sha" \
+            --title "InputPilot ${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            --verify-tag
+
+      - name: Attach and verify artifacts from validated CI
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.version.outputs.sha }}'
+          gh workflow run release-assets.yml --repo "$GITHUB_REPOSITORY" \
+            --ref main -f tag='${{ steps.version.outputs.tag }}'
+          run_id=""
+          for attempt in $(seq 1 60); do
+            runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow release-assets.yml --event workflow_dispatch \
+              --commit "$sha" --limit 10 --json databaseId)"
+            run_id="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
+            if [[ -n "$run_id" ]]; then break; fi
+            echo "Waiting for release asset workflow (attempt $attempt/60)..."
+            sleep 5
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "::error::Release asset workflow did not start."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          {
+            echo "## InputPilot ${{ steps.version.outputs.version }}"
+            echo
+            echo "Version bumped from ${{ steps.version.outputs.previous }} using Version.xcconfig."
+            echo "CI run: ${{ steps.ci.outputs.run_id }}"
+            echo "Release asset run: $run_id"
+            echo "The public release and its verified assets are complete."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary release branch
+        if: always() && steps.version.outputs.branch != ''
+        shell: bash
+        run: git push origin --delete '${{ steps.version.outputs.branch }}' || true

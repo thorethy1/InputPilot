@@ -6,7 +6,7 @@
 
 
 
-**InputPilot 0.8.16** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. Setup establishes trust by USB, then uses the same authenticated Secure Protocol v2 over Bluetooth and Wi-Fi. Older firmware is intentionally unsupported and must be reflashed over USB.
+**InputPilot** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. Setup establishes trust by USB, then uses the same authenticated Secure Protocol v2 over Bluetooth and Wi-Fi. Older firmware is intentionally unsupported and must be reflashed over USB.
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 
@@ -146,7 +146,12 @@ Signing inputs are never committed or uploaded as artifacts and are reconstructe
 
 ## Versioned release assets
 
-Creating a [GitHub Release](https://github.com/thorethy1/InputPilot/releases) with a `vMAJOR.MINOR.PATCH` tag validates all project versions and attaches application and firmware assets:
+Use **Actions → Create release → Run workflow** and choose `patch`, `minor`, or
+`major`. The worker updates the single version in `Version.xcconfig`, runs CI
+with an automatically increasing iOS build number, creates the matching tag and
+GitHub Release, and starts the verified asset workflow. App and firmware builds
+both read this shared version; their project files do not contain release-number
+copies.
 
 | Asset | Content |
 |-------|---------|
@@ -165,7 +170,7 @@ from the validated public IPA for every tagged release.
 
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 
-To repair a release whose assets were not attached (or to retry after a CI fix), run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name.
+To repair a release whose assets were not attached (or to retry after a CI fix), run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name. A manually created release remains supported when its tag matches `Version.xcconfig`.
 
 ## Development and tests
 
