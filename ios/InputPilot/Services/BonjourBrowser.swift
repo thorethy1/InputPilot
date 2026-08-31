@@ -156,7 +156,7 @@ protocol BonjourBrowserProtocol: DiscoverySource {}
 final class BonjourBrowser: BonjourBrowserProtocol {
     var onUpdate: (([DiscoveredService]) -> Void)?
 
-    private let queue = DispatchQueue(label: "com.mkflabs.inputpilot.bonjour")
+    private let queue = DispatchQueue(label: "com.thorethy.inputpilot.bonjour")
     private var browser: NWBrowser?
     private var resolveConnections: [String: NWConnection] = [:]
     private var services: [String: DiscoveredService] = [:]

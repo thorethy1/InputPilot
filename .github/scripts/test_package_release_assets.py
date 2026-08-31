@@ -85,6 +85,7 @@ class InitialFlashPackagingTests(unittest.TestCase):
         app = source["apps"][0]
         version = app["versions"][0]
         self.assertEqual(app["bundleIdentifier"], "com.thorethy.inputpilot")
+        self.assertEqual(app["developerName"], "thorethy")
         self.assertEqual((version["version"], version["buildVersion"]), ("0.8.13", "17"))
         self.assertEqual(version["size"], ipa.stat().st_size)
         self.assertEqual({item["name"] for item in app["appPermissions"]["privacy"]},

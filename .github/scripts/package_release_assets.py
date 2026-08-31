@@ -166,7 +166,7 @@ def create_altstore_source(ipa: Path, tag: str, release_date: str,
         "apps": [{
             "name": "InputPilot",
             "bundleIdentifier": bundle_id,
-            "developerName": "MKF Labs",
+            "developerName": "thorethy",
             "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
             "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
             "iconURL": f"{base}/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",

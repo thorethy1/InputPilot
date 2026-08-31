@@ -24,7 +24,7 @@
 // pins_arduino.h.
 #define HID_USB_VID          0xCAFE
 #define HID_USB_PID          0x4001
-#define HID_USB_MANUFACTURER "MKF Labs"
+#define HID_USB_MANUFACTURER "thorethy"
 #define HID_USB_PRODUCT      "InputPilot"
 
 // --- HID report IDs (composite descriptor) ---
