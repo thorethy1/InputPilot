@@ -186,9 +186,40 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
              static_cast<unsigned>(identity.pid));
     sendSecureReply(
         source, session,
-        "{\"product_name\":\"" + jsonEscape(String(identity.productName)) +
+        "{\"manufacturer_name\":\"" +
+            jsonEscape(String(identity.manufacturerName)) +
+            "\",\"product_name\":\"" + jsonEscape(String(identity.productName)) +
             "\"," + std::string(ids) + ",\"serial_number\":\"" +
             jsonEscape(String(identity.serialNumber)) + "\"}");
+    return true;
+  }
+  if (message.rfind("USB SET2 ", 0) == 0) {
+    const size_t first = message.find(' ', 9);
+    const size_t second = first == std::string::npos ? first : message.find(' ', first + 1);
+    const size_t third = second == std::string::npos ? second : message.find(' ', second + 1);
+    const size_t fourth = third == std::string::npos ? third : message.find(' ', third + 1);
+    if (first == std::string::npos || second == std::string::npos ||
+        third == std::string::npos || fourth == std::string::npos) {
+      sendSecureReply(source, session, "error invalid_usb_identity"); return true;
+    }
+    const std::string vidText = message.substr(9, first - 9);
+    const std::string pidText = message.substr(first + 1, second - first - 1);
+    char *vidEnd = nullptr; char *pidEnd = nullptr;
+    const unsigned long vid = strtoul(vidText.c_str(), &vidEnd, 16);
+    const unsigned long pid = strtoul(pidText.c_str(), &pidEnd, 16);
+    std::string manufacturer; std::string product; std::string serial;
+    const bool valid = vidEnd && !*vidEnd && pidEnd && !*pidEnd &&
+        decodeHex(message.substr(second + 1, third - second - 1), manufacturer) &&
+        decodeHex(message.substr(third + 1, fourth - third - 1), product) &&
+        decodeHex(message.substr(fourth + 1), serial) &&
+        USBIdentityConfig::save(manufacturer.c_str(), product.c_str(), vid, pid,
+                                serial.c_str());
+    if (!valid) sendSecureReply(source, session, "error invalid_usb_identity");
+    else {
+      requestReleaseAll("usb-identity-update");
+      sendSecureReply(source, session, "management restarting");
+      s_managementRebootAtMs = millis() + 750;
+    }
     return true;
   }
   if (message == "USB RESET") {
@@ -216,7 +247,8 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     const bool valid = vidEnd && !*vidEnd && pidEnd && !*pidEnd &&
         decodeHex(message.substr(second + 1, third - second - 1), product) &&
         decodeHex(message.substr(third + 1), serial) &&
-        USBIdentityConfig::save(product.c_str(), vid, pid, serial.c_str());
+        USBIdentityConfig::save(USBIdentityConfig::get().manufacturerName,
+                                product.c_str(), vid, pid, serial.c_str());
     if (!valid) sendSecureReply(source, session, "error invalid_usb_identity");
     else {
       requestReleaseAll("usb-identity-update");
@@ -436,6 +468,37 @@ void processBLEControlFrames(size_t budget = 8) {
         LOG_USB("secure BLE USB identity defaults restored; reboot scheduled");
         continue;
       }
+      if (frame.bytes[1] == 5 && frame.length >= 9) {
+        const uint16_t vid = static_cast<uint16_t>(frame.bytes[2]) |
+                             (static_cast<uint16_t>(frame.bytes[3]) << 8);
+        const uint16_t pid = static_cast<uint16_t>(frame.bytes[4]) |
+                             (static_cast<uint16_t>(frame.bytes[5]) << 8);
+        const size_t manufacturerLength = frame.bytes[6];
+        const size_t productLength = frame.bytes[7];
+        const size_t serialLength = frame.bytes[8];
+        if (manufacturerLength == 0 || manufacturerLength > USB_MANUFACTURER_NAME_MAX ||
+            productLength == 0 || productLength > USB_PRODUCT_NAME_MAX ||
+            serialLength == 0 || serialLength > USB_SERIAL_NUMBER_MAX ||
+            frame.length != 9 + manufacturerLength + productLength + serialLength) {
+          LOG_WARN("secure BLE USB identity update rejected: invalid lengths");
+          continue;
+        }
+        char manufacturer[USB_MANUFACTURER_NAME_MAX + 1]{};
+        char product[USB_PRODUCT_NAME_MAX + 1]{};
+        char serial[USB_SERIAL_NUMBER_MAX + 1]{};
+        memcpy(manufacturer, frame.bytes + 9, manufacturerLength);
+        memcpy(product, frame.bytes + 9 + manufacturerLength, productLength);
+        memcpy(serial, frame.bytes + 9 + manufacturerLength + productLength,
+               serialLength);
+        if (!USBIdentityConfig::save(manufacturer, product, vid, pid, serial)) {
+          LOG_WARN("secure BLE USB identity update failed validation");
+          continue;
+        }
+        requestReleaseAll("usb-identity-update");
+        s_managementRebootAtMs = millis() + 750;
+        LOG_USB("secure BLE USB identity saved; reboot scheduled");
+        continue;
+      }
       if (frame.bytes[1] == 3 && frame.length >= 8) {
         const uint16_t vid = static_cast<uint16_t>(frame.bytes[2]) |
                              (static_cast<uint16_t>(frame.bytes[3]) << 8);
@@ -453,7 +516,8 @@ void processBLEControlFrames(size_t budget = 8) {
         char serial[USB_SERIAL_NUMBER_MAX + 1]{};
         memcpy(product, frame.bytes + 8, productLength);
         memcpy(serial, frame.bytes + 8 + productLength, serialLength);
-        if (!USBIdentityConfig::save(product, vid, pid, serial)) {
+        if (!USBIdentityConfig::save(USBIdentityConfig::get().manufacturerName,
+                                     product, vid, pid, serial)) {
           LOG_WARN("secure BLE USB identity update failed validation");
           continue;
         }

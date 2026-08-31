@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Replace the legacy MKF Labs identity with `thorethy` in AltStore metadata,
+  USB descriptors, and internal iOS identifiers.
+- Make the USB manufacturer string readable, editable, persistent, and
+  resettable alongside product name, VID, PID, and serial number.
+
 ## [0.8.13] - 2026-08-31
 
 - Read the configured USB identity through authenticated Wi-Fi or Bluetooth and

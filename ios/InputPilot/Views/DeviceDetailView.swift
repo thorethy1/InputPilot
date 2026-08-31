@@ -11,6 +11,7 @@ struct DeviceDetailView: View {
 
     @State private var displayName: String = ""
     @State private var showDeleteConfirmation = false
+    @State private var usbManufacturerName = "thorethy"
     @State private var usbProductName = "InputPilot"
     @State private var usbVID = "0xCAFE"
     @State private var usbPID = "0x4001"
@@ -158,6 +159,10 @@ struct DeviceDetailView: View {
 
             if device.capabilities.contains("secure_usb_identity") {
                 Section("USB Identity") {
+                    TextField("Manufacturer", text: $usbManufacturerName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .disabled(!device.capabilities.contains("usb_manufacturer"))
                     TextField("Product name", text: $usbProductName)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
@@ -170,7 +175,12 @@ struct DeviceDetailView: View {
                     TextField("Serial number", text: $usbSerialNumber)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Text("VID and PID must be hexadecimal values from 0x0001 through 0xFFFF. The serial number accepts letters, numbers, period, dash, and underscore.")
+                    if !device.capabilities.contains("usb_manufacturer") {
+                        Text("Manufacturer editing requires newer InputPilot firmware.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Manufacturer and product name accept 1–31 printable ASCII characters. VID and PID must be hexadecimal values from 0x0001 through 0xFFFF; changing a VID does not grant permission to use it. The serial number accepts letters, numbers, period, dash, and underscore.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Apply and Restart InputPilot") {
@@ -302,6 +312,7 @@ struct DeviceDetailView: View {
             } else {
                 throw TransportError.unavailable
             }
+            usbManufacturerName = identity.manufacturerName ?? ""
             usbProductName = identity.productName
             usbVID = String(format: "0x%04X", identity.vid)
             usbPID = String(format: "0x%04X", identity.pid)
@@ -464,9 +475,12 @@ struct DeviceDetailView: View {
 
     @MainActor
     private func saveUSBIdentity() async {
+        let manufacturer = usbManufacturerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let product = usbProductName.trimmingCharacters(in: .whitespacesAndNewlines)
         let serial = usbSerialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isPrintableASCII(product), product.utf8.count <= 31,
+        let supportsManufacturer = device.capabilities.contains("usb_manufacturer")
+        guard (!supportsManufacturer || (isPrintableASCII(manufacturer) && manufacturer.utf8.count <= 31)),
+              isPrintableASCII(product), product.utf8.count <= 31,
               isValidUSBSerial(serial), serial.utf8.count <= 31,
               let vid = parseUSBHex(usbVID), let pid = parseUSBHex(usbPID) else {
             usbMessage = "Invalid USB identity values."
@@ -481,10 +495,18 @@ struct DeviceDetailView: View {
             }
             do {
                 if bluetooth.state == .ready {
-                    try await bluetooth.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                    if supportsManufacturer {
+                        try await bluetooth.setUSBIdentity(manufacturerName: manufacturer, productName: product, vid: vid, pid: pid, serialNumber: serial)
+                    } else {
+                        try await bluetooth.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                    }
                 } else if let host = wifiControlHost {
                     let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
-                    try await tcp.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                    if supportsManufacturer {
+                        try await tcp.setUSBIdentity(manufacturerName: manufacturer, productName: product, vid: vid, pid: pid, serialNumber: serial)
+                    } else {
+                        try await tcp.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
+                    }
                 } else { throw TransportError.unavailable }
                 usbVID = String(format: "0x%04X", vid)
                 usbPID = String(format: "0x%04X", pid)
@@ -514,6 +536,7 @@ struct DeviceDetailView: View {
                     let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
                     try await tcp.resetUSBIdentity()
                 } else { throw TransportError.unavailable }
+                usbManufacturerName = device.capabilities.contains("usb_manufacturer") ? "thorethy" : ""
                 usbProductName = "InputPilot"
                 usbVID = "0xCAFE"
                 usbPID = "0x4001"

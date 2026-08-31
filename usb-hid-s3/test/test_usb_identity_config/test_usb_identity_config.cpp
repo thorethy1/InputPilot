@@ -10,6 +10,14 @@ void test_product_name_validation() {
   TEST_ASSERT_FALSE(usbProductNameValid("InputPilot\n"));
 }
 
+void test_manufacturer_name_validation() {
+  TEST_ASSERT_TRUE(usbManufacturerNameValid("thorethy"));
+  TEST_ASSERT_TRUE(usbManufacturerNameValid("Thor Labs GmbH"));
+  TEST_ASSERT_FALSE(usbManufacturerNameValid(""));
+  TEST_ASSERT_FALSE(usbManufacturerNameValid("01234567890123456789012345678901"));
+  TEST_ASSERT_FALSE(usbManufacturerNameValid("thorethy\n"));
+}
+
 void test_serial_validation() {
   TEST_ASSERT_TRUE(usbSerialNumberValid("aabbccddeeff"));
   TEST_ASSERT_TRUE(usbSerialNumberValid("Desk-InputPilot_1.0"));
@@ -30,6 +38,7 @@ void tearDown() {}
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_product_name_validation);
+  RUN_TEST(test_manufacturer_name_validation);
   RUN_TEST(test_serial_validation);
   RUN_TEST(test_vid_pid_validation);
   return UNITY_END();

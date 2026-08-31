@@ -79,9 +79,13 @@ sender may then keep at most `window` unacknowledged bytes in flight. The
 legacy `ota ready 0` reply selects one acknowledgement per `DATA` command, so
 new and old app/firmware combinations remain interoperable.
 
-Authenticated management supports `USB GET`, which returns `product_name`,
-numeric `vid`, numeric `pid`, and `serial_number` as JSON. `USB SET` and
-`USB RESET` retain their existing restart behavior.
+Authenticated management supports `USB GET`, which returns `manufacturer_name`,
+`product_name`, numeric `vid`, numeric `pid`, and `serial_number` as JSON.
+`USB SET2` updates all five values, while legacy `USB SET` preserves the
+configured manufacturer. `USB RESET` restores every USB identity default; both
+update operations retain their existing restart behavior. Firmware advertising
+`usb_manufacturer` also accepts encrypted BLE management frame type `0x05` with
+length-prefixed manufacturer, product, and serial strings.
 
 ## Session ownership and recovery
 

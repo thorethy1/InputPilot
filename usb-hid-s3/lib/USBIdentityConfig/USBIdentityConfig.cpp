@@ -22,6 +22,10 @@ bool usbProductNameValid(const char *value) {
   return printableAscii(value, USB_PRODUCT_NAME_MAX);
 }
 
+bool usbManufacturerNameValid(const char *value) {
+  return printableAscii(value, USB_MANUFACTURER_NAME_MAX);
+}
+
 bool usbSerialNumberValid(const char *value) {
   if (!printableAscii(value, USB_SERIAL_NUMBER_MAX)) return false;
   for (const char *p = value; *p; ++p) {
@@ -45,6 +49,7 @@ bool usbVidPidValid(uint32_t value) {
 namespace {
 
 constexpr const char *kNamespace = "usb_identity";
+constexpr const char *kManufacturerKey = "manufacturer";
 constexpr const char *kProductKey = "product";
 constexpr const char *kVidKey = "vid";
 constexpr const char *kPidKey = "pid";
@@ -57,6 +62,8 @@ bool s_ready = false;
 void loadDefaults() {
   s_values.vid = HID_USB_VID;
   s_values.pid = HID_USB_PID;
+  snprintf(s_values.manufacturerName, sizeof(s_values.manufacturerName), "%s",
+           HID_USB_MANUFACTURER);
   snprintf(s_values.productName, sizeof(s_values.productName), "%s",
            HID_USB_PRODUCT);
   snprintf(s_values.serialNumber, sizeof(s_values.serialNumber), "%s",
@@ -75,11 +82,15 @@ void USBIdentityConfig::begin(const char *defaultSerialNumber) {
 
   Preferences preferences;
   if (preferences.begin(kNamespace, true)) {
+    const String manufacturer = preferences.getString(kManufacturerKey, HID_USB_MANUFACTURER);
     const String product = preferences.getString(kProductKey, HID_USB_PRODUCT);
     const uint32_t vid = preferences.getUInt(kVidKey, HID_USB_VID);
     const uint32_t pid = preferences.getUInt(kPidKey, HID_USB_PID);
     const String serial = preferences.getString(kSerialKey, s_defaultSerial);
     preferences.end();
+    if (usbManufacturerNameValid(manufacturer.c_str()))
+      snprintf(s_values.manufacturerName, sizeof(s_values.manufacturerName), "%s",
+               manufacturer.c_str());
     if (usbProductNameValid(product.c_str()))
       snprintf(s_values.productName, sizeof(s_values.productName), "%s", product.c_str());
     if (usbVidPidValid(vid)) s_values.vid = static_cast<uint16_t>(vid);
@@ -88,8 +99,9 @@ void USBIdentityConfig::begin(const char *defaultSerialNumber) {
       snprintf(s_values.serialNumber, sizeof(s_values.serialNumber), "%s", serial.c_str());
   }
   s_ready = true;
-  LOG_USB("identity loaded vid=0x%04X pid=0x%04X product=\"%s\" serial=\"%s\"",
-          s_values.vid, s_values.pid, s_values.productName, s_values.serialNumber);
+  LOG_USB("identity loaded vid=0x%04X pid=0x%04X manufacturer=\"%s\" product=\"%s\" serial=\"%s\"",
+          s_values.vid, s_values.pid, s_values.manufacturerName,
+          s_values.productName, s_values.serialNumber);
 }
 
 const USBIdentityValues &USBIdentityConfig::get() {
@@ -97,13 +109,15 @@ const USBIdentityValues &USBIdentityConfig::get() {
   return s_values;
 }
 
-bool USBIdentityConfig::save(const char *productName, uint32_t vid, uint32_t pid,
-                             const char *serialNumber) {
-  if (!usbProductNameValid(productName) || !usbVidPidValid(vid) ||
+bool USBIdentityConfig::save(const char *manufacturerName, const char *productName,
+                             uint32_t vid, uint32_t pid, const char *serialNumber) {
+  if (!usbManufacturerNameValid(manufacturerName) ||
+      !usbProductNameValid(productName) || !usbVidPidValid(vid) ||
       !usbVidPidValid(pid) || !usbSerialNumberValid(serialNumber)) return false;
   Preferences preferences;
   if (!preferences.begin(kNamespace, false)) return false;
-  const bool ok = preferences.putString(kProductKey, productName) > 0 &&
+  const bool ok = preferences.putString(kManufacturerKey, manufacturerName) > 0 &&
+                  preferences.putString(kProductKey, productName) > 0 &&
                   preferences.putUInt(kVidKey, vid) == sizeof(uint32_t) &&
                   preferences.putUInt(kPidKey, pid) == sizeof(uint32_t) &&
                   preferences.putString(kSerialKey, serialNumber) > 0;
@@ -111,6 +125,10 @@ bool USBIdentityConfig::save(const char *productName, uint32_t vid, uint32_t pid
   if (!ok) return false;
   s_values.vid = static_cast<uint16_t>(vid);
   s_values.pid = static_cast<uint16_t>(pid);
+  if (manufacturerName != s_values.manufacturerName) {
+    snprintf(s_values.manufacturerName, sizeof(s_values.manufacturerName), "%s",
+             manufacturerName);
+  }
   snprintf(s_values.productName, sizeof(s_values.productName), "%s", productName);
   snprintf(s_values.serialNumber, sizeof(s_values.serialNumber), "%s", serialNumber);
   return true;

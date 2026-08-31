@@ -15,6 +15,8 @@ void test_metadata_is_complete_and_below_gatt_limit() {
                         json.find("\"secure_wifi_setup\""));
   TEST_ASSERT_NOT_EQUAL(std::string::npos,
                         json.find("\"multiple_wifi\""));
+  TEST_ASSERT_NOT_EQUAL(std::string::npos,
+                        json.find("\"usb_manufacturer\""));
   TEST_ASSERT_EQUAL_CHAR('}', json.back());
 }
 

@@ -4,9 +4,15 @@ import XCTest
 
 final class HIDRemoteTests: XCTestCase {
     func testUSBIdentityDecodesSecureProtocolResponse() throws {
+        let data = Data(#"{"manufacturer_name":"thorethy","product_name":"InputPilot","vid":51966,"pid":16385,"serial_number":"Desk-01"}"#.utf8)
+        let identity = try JSONDecoder().decode(USBIdentity.self, from: data)
+        XCTAssertEqual(identity, USBIdentity(manufacturerName: "thorethy", productName: "InputPilot", vid: 0xCAFE, pid: 0x4001, serialNumber: "Desk-01"))
+    }
+
+    func testUSBIdentityDecodesLegacyResponseWithoutManufacturer() throws {
         let data = Data(#"{"product_name":"InputPilot","vid":51966,"pid":16385,"serial_number":"Desk-01"}"#.utf8)
         let identity = try JSONDecoder().decode(USBIdentity.self, from: data)
-        XCTAssertEqual(identity, USBIdentity(productName: "InputPilot", vid: 0xCAFE, pid: 0x4001, serialNumber: "Desk-01"))
+        XCTAssertNil(identity.manufacturerName)
     }
     private func firmwareImage(protocolVersion: Int = 2) -> Data {
         var data = Data(repeating: 0xff, count: FirmwareImageMetadata.minimumSize)

@@ -797,9 +797,9 @@ static void printBanner() {
   LOG_INFO("flash=%u bytes heap=%u min_heap=%u", (unsigned)ESP.getFlashChipSize(),
            (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
   const USBIdentityValues &usbIdentity = USBIdentityConfig::get();
-  LOG_USB("vid=0x%04X pid=0x%04X product=\"%s\" serial=\"%s\"",
-          usbIdentity.vid, usbIdentity.pid, usbIdentity.productName,
-          usbIdentity.serialNumber);
+  LOG_USB("vid=0x%04X pid=0x%04X manufacturer=\"%s\" product=\"%s\" serial=\"%s\"",
+          usbIdentity.vid, usbIdentity.pid, usbIdentity.manufacturerName,
+          usbIdentity.productName, usbIdentity.serialNumber);
   LOG_INFO("boot-ok");
 }
 
@@ -841,7 +841,7 @@ void setup() {
   USB.PID(usbIdentity.pid);
   USB.productName(usbIdentity.productName);
   USB.serialNumber(usbIdentity.serialNumber);
-  USB.manufacturerName(HID_USB_MANUFACTURER);
+  USB.manufacturerName(usbIdentity.manufacturerName);
   USB.firmwareVersion(FW_VERSION_BCD);
 
   // Mouse and Keyboard constructors already registered report descriptors 2

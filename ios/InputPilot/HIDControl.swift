@@ -118,15 +118,34 @@ enum TransportError: LocalizedError { case unavailable, encoding, failed(String)
 }
 
 struct USBIdentity: Codable, Equatable {
+    let manufacturerName: String?
     let productName: String
     let vid: Int
     let pid: Int
     let serialNumber: String
 
     enum CodingKeys: String, CodingKey {
+        case manufacturerName = "manufacturer_name"
         case productName = "product_name"
         case vid, pid
         case serialNumber = "serial_number"
+    }
+
+    init(manufacturerName: String? = nil, productName: String, vid: Int, pid: Int, serialNumber: String) {
+        self.manufacturerName = manufacturerName
+        self.productName = productName
+        self.vid = vid
+        self.pid = pid
+        self.serialNumber = serialNumber
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        manufacturerName = try values.decodeIfPresent(String.self, forKey: .manufacturerName)
+        productName = try values.decode(String.self, forKey: .productName)
+        vid = try values.decode(Int.self, forKey: .vid)
+        pid = try values.decode(Int.self, forKey: .pid)
+        serialNumber = try values.decode(String.self, forKey: .serialNumber)
     }
 }
 
@@ -410,6 +429,13 @@ final class TCPHIDControlTransport: HIDControlTransport {
         let product = Data(productName.utf8).hex
         let serial = Data(serialNumber.utf8).hex
         let reply = try await request("USB SET \(String(vid, radix: 16)) \(String(pid, radix: 16)) \(product) \(serial)")
+        guard reply == "management restarting" else { throw TransportError.failed(reply) }
+    }
+    func setUSBIdentity(manufacturerName: String, productName: String, vid: Int, pid: Int, serialNumber: String) async throws {
+        let manufacturer = Data(manufacturerName.utf8).hex
+        let product = Data(productName.utf8).hex
+        let serial = Data(serialNumber.utf8).hex
+        let reply = try await request("USB SET2 \(String(vid, radix: 16)) \(String(pid, radix: 16)) \(manufacturer) \(product) \(serial)")
         guard reply == "management restarting" else { throw TransportError.failed(reply) }
     }
     func resetUSBIdentity() async throws {
@@ -1618,6 +1644,38 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         var plaintext = Data([0xFE, 0x03, UInt8(vid & 0xFF), UInt8((vid >> 8) & 0xFF),
                               UInt8(pid & 0xFF), UInt8((pid >> 8) & 0xFF),
                               UInt8(product.count), UInt8(serial.count)])
+        plaintext.append(product)
+        plaintext.append(serial)
+        let payload = try secureChannel.sealBinary(plaintext)
+        guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+            throw TransportError.failed("USB identity exceeds the encrypted Bluetooth frame size.")
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.append(PendingWrite(
+                id: "usb-update-\(UUID().uuidString)", characteristic: commandCharacteristic,
+                payload: payload, type: .withResponse, continuation: continuation
+            ))
+            drainWrites(peripheral)
+        }
+    }
+    func setUSBIdentity(manufacturerName: String, productName: String, vid: Int, pid: Int, serialNumber: String) async throws {
+        try await waitUntilReady()
+        let manufacturer = Data(manufacturerName.utf8)
+        let product = Data(productName.utf8)
+        let serial = Data(serialNumber.utf8)
+        guard (1 ... 31).contains(manufacturer.count), (1 ... 31).contains(product.count),
+              (1 ... 31).contains(serial.count), (1 ... 0xFFFF).contains(vid),
+              (1 ... 0xFFFF).contains(pid) else {
+            throw TransportError.failed("Invalid USB identity values.")
+        }
+        guard let peripheral, let commandCharacteristic = characteristics[control],
+              commandCharacteristic.properties.contains(.write), let secureChannel else {
+            throw TransportError.failed("Changing USB identity requires secure Bluetooth pairing.")
+        }
+        var plaintext = Data([0xFE, 0x05, UInt8(vid & 0xFF), UInt8((vid >> 8) & 0xFF),
+                              UInt8(pid & 0xFF), UInt8((pid >> 8) & 0xFF),
+                              UInt8(manufacturer.count), UInt8(product.count), UInt8(serial.count)])
+        plaintext.append(manufacturer)
         plaintext.append(product)
         plaintext.append(serial)
         let payload = try secureChannel.sealBinary(plaintext)
