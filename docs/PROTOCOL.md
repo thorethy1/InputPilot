@@ -79,6 +79,14 @@ sender may then keep at most `window` unacknowledged bytes in flight. The
 legacy `ota ready 0` reply selects one acknowledgement per `DATA` command, so
 new and old app/firmware combinations remain interoperable.
 
+Starting with 0.8.16, the app adds `binary=1` to the windowed `START`. A
+supporting device replies `ota ready 0 window=32768 chunk=2048 binary=1` and
+accepts stream frames consisting of marker `0xB2`, a two-byte big-endian secure
+record length, and one Secure Protocol binary record. Its plaintext is command
+byte `0x01`, a four-byte little-endian firmware offset, then up to 2048 firmware
+bytes. ACKs and finalization remain encrypted text replies. Firmware that does
+not advertise `binary=1` continues with the 0.8.13 text flow.
+
 Authenticated management supports `USB GET`, which returns `manufacturer_name`,
 `product_name`, numeric `vid`, numeric `pid`, and `serial_number` as JSON.
 `USB SET2` updates all five values, while legacy `USB SET` preserves the

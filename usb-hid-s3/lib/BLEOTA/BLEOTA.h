@@ -13,7 +13,7 @@ class BLEOTA {
   void enqueueControl(const std::string &value);
   void enqueueData(const std::string &value);
   void processControl(size_t budget = 2);
-  void processData(size_t budget = 4);
+  void processData(size_t budget = 8);
   void notify(const char *event, const char *error = nullptr); void fail(const char *error);
   NimBLECharacteristic *status_ = nullptr;
   uint32_t lastActivityMs_ = 0, lastAck_ = 0, rebootAtMs_ = 0;

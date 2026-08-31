@@ -28,6 +28,15 @@ void test_windowed_start_parses() {
   TEST_ASSERT_TRUE(request.windowed);
 }
 
+void test_binary_windowed_start_parses() {
+  OTAStartRequest request; std::string error;
+  TEST_ASSERT_TRUE(OTAProtocol::parseStart(
+      "START protocol=2 version=0.8.16 size=100 sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa flow=windowed binary=1",
+      request, error));
+  TEST_ASSERT_TRUE(request.windowed);
+  TEST_ASSERT_TRUE(request.binary);
+}
+
 void test_offsets_must_be_exact_and_bounded() {
   TEST_ASSERT_TRUE(OTAProtocol::acceptsOffset(100, 100, 50, 200));
   TEST_ASSERT_FALSE(OTAProtocol::acceptsOffset(100, 99, 50, 200));
@@ -55,6 +64,7 @@ int main(int, char **) {
   RUN_TEST(test_start_metadata_parses);
   RUN_TEST(test_invalid_start_is_rejected);
   RUN_TEST(test_windowed_start_parses);
+  RUN_TEST(test_binary_windowed_start_parses);
   RUN_TEST(test_offsets_must_be_exact_and_bounded);
   RUN_TEST(test_windowed_acknowledgements_are_cumulative);
   RUN_TEST(test_state_names_are_stable);

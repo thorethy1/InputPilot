@@ -35,6 +35,7 @@ bool OTAProtocol::parseStart(const std::string &line, OTAStartRequest &out,
     } else if (key == "version") { out.version = value; haveVersion = !value.empty(); }
     else if (key == "sha256") { out.sha256 = value; haveHash = validSha256(value); }
     else if (key == "flow") { out.windowed = value == "windowed"; }
+    else if (key == "binary") { out.binary = value == "1"; }
   }
   if (!haveProtocol) error = "missing_protocol";
   else if (!haveSize) error = "missing_size";

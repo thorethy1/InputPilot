@@ -74,5 +74,11 @@ replace this gate.
 - Run BLE and Wi-Fi OTA five times each, alternating slots. Record negotiated
   BLE ATT payload, ACK window, queue errors, elapsed time, and throughput for
   every run; do not increase BLE queue/window constants without these results.
+- On 0.8.16 peers, confirm Wi-Fi logs `flow=binary`, completes the transfer in
+  at most five seconds on a normal local 802.11n network, and reports a final
+  cumulative ACK before verification.
+- Repeat BLE OTA with both a large (roughly 500-byte) and a smaller (roughly
+  150-byte) negotiated firmware payload. Confirm neither queue overflow nor a
+  disconnect occurs through at least five complete images.
 - Verify credentials, secure plaintext, session keys and typed content never
   appear in diagnostics exports or logs.

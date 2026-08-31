@@ -10,7 +10,6 @@
 #include "DeviceIdentity.h"
 #include "OTAEngine.h"
 #include "PairingSecretStore.h"
-extern bool deviceBleAuthenticated();
 extern bool deviceBleConnectionOwnsSession(uint16_t connectionHandle);
 extern uint16_t deviceBleSessionHandle();
 extern bool decryptBleSecureRecord(const uint8_t *, size_t, uint8_t *, size_t,
@@ -19,28 +18,44 @@ namespace {
 
 constexpr size_t BLE_OTA_MAX_PAYLOAD = 500;
 constexpr size_t BLE_OTA_FRAME_BYTES = sizeof(uint32_t) + BLE_OTA_MAX_PAYLOAD;
-constexpr size_t BLE_OTA_QUEUE_DEPTH = 12;
+constexpr size_t BLE_SECURE_RECORD_OVERHEAD = 1 + sizeof(uint64_t) + 16;
+constexpr size_t BLE_OTA_ENCRYPTED_FRAME_BYTES =
+    BLE_OTA_FRAME_BYTES + BLE_SECURE_RECORD_OVERHEAD;
+// iOS may negotiate an ATT payload around 182 bytes, leaving roughly 153
+// firmware bytes after the secure-record and offset overhead. Size the queue
+// for the advertised window at that conservative packet size, not only for the
+// ideal 500-byte payload.
+constexpr size_t BLE_OTA_MIN_EXPECTED_PAYLOAD = 128;
+constexpr size_t BLE_OTA_QUEUE_DEPTH = 36;
 constexpr size_t BLE_OTA_CONTROL_BYTES = 160;
+constexpr size_t BLE_OTA_ENCRYPTED_CONTROL_BYTES =
+    BLE_OTA_CONTROL_BYTES + BLE_SECURE_RECORD_OVERHEAD;
 constexpr size_t BLE_OTA_CONTROL_DEPTH = 4;
 
-static_assert(BLE_OTA_QUEUE_DEPTH * BLE_OTA_MAX_PAYLOAD >=
+static_assert(BLE_OTA_QUEUE_DEPTH * BLE_OTA_MIN_EXPECTED_PAYLOAD >=
                   BLE_OTA_ACK_BYTES + BLE_OTA_MAX_PAYLOAD,
               "BLE OTA queue must cover the advertised acknowledgement window");
 
 struct BLEOTAFrame {
   uint16_t length = 0;
-  uint8_t bytes[BLE_OTA_FRAME_BYTES]{};
+  uint8_t bytes[BLE_OTA_ENCRYPTED_FRAME_BYTES]{};
 };
 
 struct BLEOTAControlCommand {
   uint16_t length = 0;
-  char bytes[BLE_OTA_CONTROL_BYTES]{};
+  uint8_t bytes[BLE_OTA_ENCRYPTED_CONTROL_BYTES]{};
 };
 
 QueueHandle_t s_dataQueue = nullptr;
 QueueHandle_t s_controlQueue = nullptr;
 volatile bool s_disconnectedPending = false;
-enum class PendingAbort : uint8_t { None, InvalidChunk, QueueFull };
+enum class PendingAbort : uint8_t {
+  None,
+  InvalidChunk,
+  QueueFull,
+  InvalidControl,
+  ControlQueueFull,
+};
 volatile PendingAbort s_pendingAbort = PendingAbort::None;
 
 }  // namespace
@@ -145,20 +160,18 @@ void BLEOTA::notify(const char *event, const char *error) {
 void BLEOTA::fail(const char *error) { notify("ERROR", error); }
 
 void BLEOTA::enqueueControl(const std::string &value) {
-  uint8_t plaintext[BLE_OTA_CONTROL_BYTES];
-  size_t plaintextLength = 0;
+  // NimBLE invokes this on its host task. Keep the callback bounded to a copy;
+  // AES-GCM and OTA processing run later from the Arduino loop task.
   if (!s_controlQueue || value.empty() ||
-      !decryptBleSecureRecord(reinterpret_cast<const uint8_t *>(value.data()),
-                              value.size(), plaintext, sizeof(plaintext),
-                              plaintextLength) || plaintextLength == 0 ||
-      plaintextLength >= BLE_OTA_CONTROL_BYTES) {
-    fail("invalid_control");
+      value.size() > BLE_OTA_ENCRYPTED_CONTROL_BYTES) {
+    s_pendingAbort = PendingAbort::InvalidControl;
     return;
   }
   BLEOTAControlCommand command;
-  command.length = static_cast<uint16_t>(plaintextLength);
-  memcpy(command.bytes, plaintext, plaintextLength);
-  if (xQueueSend(s_controlQueue, &command, 0) != pdTRUE) fail("control_queue_full");
+  command.length = static_cast<uint16_t>(value.size());
+  memcpy(command.bytes, value.data(), value.size());
+  if (xQueueSend(s_controlQueue, &command, 0) != pdTRUE)
+    s_pendingAbort = PendingAbort::ControlQueueFull;
 }
 
 void BLEOTA::processControl(size_t budget) {
@@ -167,11 +180,16 @@ void BLEOTA::processControl(size_t budget) {
   for (size_t processed = 0;
        processed < budget && xQueueReceive(s_controlQueue, &command, 0) == pdTRUE;
        ++processed) {
-    const std::string value(command.bytes, command.length);
-    if (!deviceBleAuthenticated()) {
-      fail("unauthorized");
+    uint8_t plaintext[BLE_OTA_CONTROL_BYTES];
+    size_t plaintextLength = 0;
+    if (!decryptBleSecureRecord(command.bytes, command.length, plaintext,
+                                sizeof(plaintext), plaintextLength) ||
+        plaintextLength == 0 || plaintextLength >= sizeof(plaintext)) {
+      fail("invalid_control");
       continue;
     }
+    const std::string value(reinterpret_cast<const char *>(plaintext),
+                            plaintextLength);
     if (value == "ABORT") {
       if (active()) {
         g_otaEngine.abort("user_cancelled", true);
@@ -219,25 +237,16 @@ void BLEOTA::processControl(size_t budget) {
 }
 
 void BLEOTA::enqueueData(const std::string &value) {
-  uint8_t plaintext[BLE_OTA_FRAME_BYTES];
-  size_t plaintextLength = 0;
-  if (!decryptBleSecureRecord(reinterpret_cast<const uint8_t *>(value.data()),
-                              value.size(), plaintext, sizeof(plaintext),
-                              plaintextLength)) {
-    fail("unauthorized");
-    return;
-  }
-  if (g_otaEngine.owner() != OTATransportOwner::BLE || plaintextLength <= 4) {
-    fail("not_receiving");
-    return;
-  }
-  if (!s_dataQueue || plaintextLength > BLE_OTA_FRAME_BYTES) {
+  // See enqueueControl(): decryption here starves NimBLE and can overflow the
+  // host task under a sustained write-without-response burst.
+  if (!s_dataQueue || value.empty() ||
+      value.size() > BLE_OTA_ENCRYPTED_FRAME_BYTES) {
     s_pendingAbort = PendingAbort::InvalidChunk;
     return;
   }
   BLEOTAFrame frame;
-  frame.length = static_cast<uint16_t>(plaintextLength);
-  memcpy(frame.bytes, plaintext, plaintextLength);
+  frame.length = static_cast<uint16_t>(value.size());
+  memcpy(frame.bytes, value.data(), value.size());
   if (xQueueSend(s_dataQueue, &frame, 0) != pdTRUE) {
     s_pendingAbort = PendingAbort::QueueFull;
     return;
@@ -251,12 +260,23 @@ void BLEOTA::processData(size_t budget) {
   for (size_t processed = 0;
        processed < budget && xQueueReceive(s_dataQueue, &frame, 0) == pdTRUE;
        ++processed) {
-    const uint8_t *bytes = frame.bytes;
+    uint8_t plaintext[BLE_OTA_FRAME_BYTES];
+    size_t plaintextLength = 0;
+    if (!decryptBleSecureRecord(frame.bytes, frame.length, plaintext,
+                                sizeof(plaintext), plaintextLength) ||
+        plaintextLength <= sizeof(uint32_t) ||
+        g_otaEngine.owner() != OTATransportOwner::BLE) {
+      xQueueReset(s_dataQueue);
+      if (active()) g_otaEngine.abort("invalid_chunk");
+      fail("invalid_chunk");
+      return;
+    }
+    const uint8_t *bytes = plaintext;
     const uint32_t offset = static_cast<uint32_t>(bytes[0]) |
                             (static_cast<uint32_t>(bytes[1]) << 8) |
                             (static_cast<uint32_t>(bytes[2]) << 16) |
                             (static_cast<uint32_t>(bytes[3]) << 24);
-    if (!g_otaEngine.write(offset, bytes + 4, frame.length - 4)) {
+    if (!g_otaEngine.write(offset, bytes + 4, plaintextLength - 4)) {
       xQueueReset(s_dataQueue);
       fail(g_otaEngine.error());
       return;
@@ -284,8 +304,12 @@ void BLEOTA::loop() {
   const PendingAbort pendingAbort = s_pendingAbort;
   if (pendingAbort != PendingAbort::None) {
     s_pendingAbort = PendingAbort::None;
-    const char *error = pendingAbort == PendingAbort::InvalidChunk
-                            ? "invalid_chunk" : "ble_queue_full";
+    const char *error = "invalid_chunk";
+    if (pendingAbort == PendingAbort::QueueFull) error = "ble_queue_full";
+    else if (pendingAbort == PendingAbort::InvalidControl)
+      error = "invalid_control";
+    else if (pendingAbort == PendingAbort::ControlQueueFull)
+      error = "control_queue_full";
     if (active()) g_otaEngine.abort(error);
     if (s_dataQueue) xQueueReset(s_dataQueue);
     fail(error);

@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.15"
+#define FW_VERSION      "0.8.16"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0815
+#define FW_VERSION_BCD  0x0816
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
@@ -97,12 +97,14 @@
 #define BLE_OTA_CONTROL_UUID "7d9f1002-4f4d-4f56-4552-484944000001"
 #define BLE_OTA_DATA_UUID    "7d9f1003-4f4d-4f56-4552-484944000001"
 #define BLE_OTA_STATUS_UUID  "7d9f1004-4f4d-4f56-4552-484944000001"
-#define BLE_OTA_TIMEOUT_MS 15000UL
+#define BLE_OTA_TIMEOUT_MS 30000UL
 #define BLE_OTA_ACK_BYTES (4UL * 1024UL)
 
 // Secure Protocol v2 TCP transport on both Soft-AP and station networks.
 #define WIFI_CONTROL_PORT 3333
-#define WIFI_OTA_ACK_BYTES (4UL * 1024UL)
+#define WIFI_OTA_ACK_BYTES (32UL * 1024UL)
 #define WIFI_OTA_MAX_CHUNK_BYTES 128UL
+#define WIFI_OTA_BINARY_MAX_CHUNK_BYTES 2048UL
+#define WIFI_OTA_BINARY_FRAME_MARKER 0xB2
 
 #endif // CONFIG_H

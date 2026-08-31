@@ -302,17 +302,21 @@ struct DeviceDetailView: View {
             while bluetooth.state != .ready, Date() < bluetoothDeadline {
                 try await Task.sleep(for: .milliseconds(100))
             }
-            let identity: USBIdentity
+            var identity: USBIdentity?
+            var lastError: Error = TransportError.unavailable
             let includeManufacturer = device.capabilities.contains("usb_manufacturer")
             if bluetooth.state == .ready {
-                identity = try await bluetooth.usbIdentity(includeManufacturer: includeManufacturer)
-            } else if let host = wifiControlHost {
-                identity = try await InputPilotWiFiManager.session(
-                    host: host, deviceId: device.deviceId
-                ).usbIdentity(includeManufacturer: includeManufacturer)
-            } else {
-                throw TransportError.unavailable
+                do { identity = try await bluetooth.usbIdentity(includeManufacturer: includeManufacturer) }
+                catch { lastError = error }
             }
+            if identity == nil, let host = wifiControlHost {
+                do {
+                    identity = try await InputPilotWiFiManager.session(
+                        host: host, deviceId: device.deviceId
+                    ).usbIdentity(includeManufacturer: includeManufacturer)
+                } catch { lastError = error }
+            }
+            guard let identity else { throw lastError }
             usbManufacturerName = identity.manufacturerName ?? ""
             usbProductName = identity.productName
             usbVID = String(format: "0x%04X", identity.vid)
@@ -327,8 +331,21 @@ struct DeviceDetailView: View {
     @MainActor
     private func loadWiFiNetworks() async {
         guard device.capabilities.contains("multiple_wifi") else { return }
-        do { wifiNetworks = try await bluetooth.configuredWiFiNetworks() }
-        catch { wifiMessage = "Could not load Wi-Fi networks: \(error.localizedDescription)" }
+        var lastError: Error = TransportError.unavailable
+        if bluetooth.state == .ready {
+            do { wifiNetworks = try await bluetooth.configuredWiFiNetworks(); wifiMessage = nil; return }
+            catch { lastError = error }
+        }
+        if let host = wifiControlHost {
+            do {
+                wifiNetworks = try await InputPilotWiFiManager.session(
+                    host: host, deviceId: device.deviceId
+                ).configuredWiFiNetworks()
+                wifiMessage = nil
+                return
+            } catch { lastError = error }
+        }
+        wifiMessage = "Could not load Wi-Fi networks: \(lastError.localizedDescription)"
     }
 
     @MainActor

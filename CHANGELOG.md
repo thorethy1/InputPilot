@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.16] - 2026-08-31
+
+- Replace hex-expanded Wi-Fi OTA data messages with negotiated encrypted binary
+  frames, 2 KiB chunks, and a 32 KiB acknowledgement window while retaining
+  the legacy and windowed-text fallbacks for older firmware.
+- Keep AES-GCM decryption and OTA processing off the NimBLE host callback,
+  increase bounded loop-side BLE draining, negotiate a larger MTU and stable
+  low-latency connection parameters, and reconnect known peripherals directly.
+- Serialize encrypted request/response operations so concurrent management
+  reads cannot reorder secure counters or consume one another's replies.
+- Fall back to the authenticated Wi-Fi session when USB identity or configured
+  Wi-Fi network reads lose Bluetooth, and abort interrupted Wi-Fi OTA sessions
+  cleanly so the next attempt can start immediately.
+- Bump firmware and iOS to 0.8.16 (build 20).
+
 ## [0.8.15] - 2026-08-31
 
 - Prevent BLE disconnects and ESP32 instability when encrypted management

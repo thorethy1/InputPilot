@@ -13,6 +13,7 @@ struct OTAStartRequest {
   std::string version;
   std::string sha256;
   bool windowed = false;
+  bool binary = false;
 };
 
 class OTAProtocol {

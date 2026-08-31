@@ -41,8 +41,22 @@ final class HIDRemoteTests: XCTestCase {
         )
         XCTAssertEqual(parameters?.window, 4096)
         XCTAssertEqual(parameters?.chunk, 128)
+        XCTAssertEqual(parameters?.binary, false)
+        let binary = TCPHIDControlTransport.windowedParameters(
+            from: "ota ready 0 window=32768 chunk=2048 binary=1"
+        )
+        XCTAssertEqual(binary?.window, 32768)
+        XCTAssertEqual(binary?.chunk, 2048)
+        XCTAssertEqual(binary?.binary, true)
         XCTAssertNil(TCPHIDControlTransport.windowedParameters(from: "ota ready 0"))
         XCTAssertNil(TCPHIDControlTransport.windowedParameters(from: "ota ready 0 window=4096 chunk=512"))
+    }
+
+    func testBLEOTAPayloadFitsEncryptedATTWrite() {
+        XCTAssertEqual(FirmwareUpdateManager.bleFirmwarePayloadSize(advertised: 500, maximumWriteLength: 512), 483)
+        XCTAssertEqual(FirmwareUpdateManager.bleFirmwarePayloadSize(advertised: 500, maximumWriteLength: 182), 153)
+        XCTAssertNil(FirmwareUpdateManager.bleFirmwarePayloadSize(advertised: 500, maximumWriteLength: 156))
+        XCTAssertNil(FirmwareUpdateManager.bleFirmwarePayloadSize(advertised: 500, maximumWriteLength: 29))
     }
 
     @MainActor func testTransportSelectionContainsNoFallbackTransport() {

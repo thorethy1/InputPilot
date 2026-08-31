@@ -1,5 +1,6 @@
 #include "RadioManager.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <vector>
 #include <WiFi.h>
@@ -46,10 +47,11 @@ bool s_bleAuthed = false;
 BLESessionOwnership s_bleOwner(BLE_SECURE_AUTH_TIMEOUT_MS);
 bool s_tcpAuthed = false;
 bool s_wifiOtaWindowed = false;
+bool s_wifiOtaBinary = false;
 uint32_t s_wifiOtaLastAck = 0;
 WiFiServer s_tcpServer(WIFI_CONTROL_PORT);
 WiFiClient s_tcpClient;
-std::string s_tcpLineBuf;
+std::vector<uint8_t> s_tcpReceiveBuf;
 SecureSession s_bleSecureSession;
 SecureSession s_tcpSecureSession;
 
@@ -60,6 +62,11 @@ struct BLEControlFrame {
 QueueHandle_t s_bleControlQueue = nullptr;
 constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
 constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
+constexpr size_t TCP_CONTROL_TEXT_MAX = 768;
+constexpr size_t TCP_OTA_BINARY_PLAINTEXT_MAX =
+    1 + sizeof(uint32_t) + WIFI_OTA_BINARY_MAX_CHUNK_BYTES;
+constexpr size_t TCP_OTA_BINARY_RECORD_MAX =
+    TCP_OTA_BINARY_PLAINTEXT_MAX + 1 + sizeof(uint64_t) + SecureSession::TagSize;
 uint32_t s_managementRebootAtMs = 0;
 
 bool sendBleNotification(const uint8_t *value, size_t length) {
@@ -325,12 +332,16 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
           (error.empty() ? std::string(g_otaEngine.error()) : error));
     } else {
       s_wifiOtaWindowed = owner == OTATransportOwner::WiFi && request.windowed;
+      s_wifiOtaBinary = s_wifiOtaWindowed && request.binary;
       s_wifiOtaLastAck = 0;
       if (s_wifiOtaWindowed) {
         sendSecureReply(source, session,
                         "ota ready 0 window=" +
                             std::to_string(WIFI_OTA_ACK_BYTES) + " chunk=" +
-                            std::to_string(WIFI_OTA_MAX_CHUNK_BYTES));
+                            std::to_string(s_wifiOtaBinary
+                                               ? WIFI_OTA_BINARY_MAX_CHUNK_BYTES
+                                               : WIFI_OTA_MAX_CHUNK_BYTES) +
+                            (s_wifiOtaBinary ? " binary=1" : ""));
       } else {
         sendSecureReply(source, session, "ota ready 0");
       }
@@ -380,6 +391,7 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
     } else {
       sendSecureReply(source, session, "ota success");
       s_wifiOtaWindowed = false;
+      s_wifiOtaBinary = false;
       s_wifiOtaLastAck = 0;
       s_managementRebootAtMs = millis() + 750;
     }
@@ -390,10 +402,99 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
       g_otaEngine.abort("user_cancelled", true);
     sendSecureReply(source, session, "ota cancelled");
     s_wifiOtaWindowed = false;
+    s_wifiOtaBinary = false;
     s_wifiOtaLastAck = 0;
     return true;
   }
   return false;
+}
+
+void dispatchControlLine(const std::string &line, const char *source,
+                         bool *authed);
+
+void dispatchTcpBinaryOTARecord(const uint8_t *record, size_t recordLength) {
+  static uint8_t plaintext[TCP_OTA_BINARY_PLAINTEXT_MAX];
+  size_t plaintextLength = 0;
+  if (!s_tcpAuthed || !s_wifiOtaBinary ||
+      g_otaEngine.owner() != OTATransportOwner::WiFi ||
+      !s_tcpSecureSession.decryptBinary(record, recordLength, plaintext,
+                                        sizeof(plaintext), plaintextLength) ||
+      plaintextLength <= 1 + sizeof(uint32_t) || plaintext[0] != 0x01) {
+    if (s_tcpAuthed)
+      sendSecureReply("wifi", s_tcpSecureSession, "error invalid_binary_data");
+    return;
+  }
+  const uint8_t *offsetBytes = plaintext + 1;
+  const uint32_t offset = static_cast<uint32_t>(offsetBytes[0]) |
+                          (static_cast<uint32_t>(offsetBytes[1]) << 8) |
+                          (static_cast<uint32_t>(offsetBytes[2]) << 16) |
+                          (static_cast<uint32_t>(offsetBytes[3]) << 24);
+  const uint8_t *payload = plaintext + 1 + sizeof(uint32_t);
+  const size_t payloadLength = plaintextLength - 1 - sizeof(uint32_t);
+  if (!g_otaEngine.write(offset, payload, payloadLength)) {
+    sendSecureReply("wifi", s_tcpSecureSession,
+                    "error " + std::string(g_otaEngine.error()));
+    return;
+  }
+  if (OTAProtocol::shouldAcknowledge(
+          g_otaEngine.received(), s_wifiOtaLastAck, g_otaEngine.total(), true,
+          WIFI_OTA_ACK_BYTES)) {
+    s_wifiOtaLastAck = g_otaEngine.received();
+    sendSecureReply("wifi", s_tcpSecureSession,
+                    "ota ack " + std::to_string(g_otaEngine.received()));
+  }
+}
+
+void processTcpReceiveBuffer() {
+  size_t consumed = 0;
+  while (consumed < s_tcpReceiveBuf.size()) {
+    if (s_tcpReceiveBuf[consumed] == WIFI_OTA_BINARY_FRAME_MARKER) {
+      if (s_tcpReceiveBuf.size() - consumed < 3) break;
+      const size_t recordLength =
+          (static_cast<size_t>(s_tcpReceiveBuf[consumed + 1]) << 8) |
+          static_cast<size_t>(s_tcpReceiveBuf[consumed + 2]);
+      if (recordLength < 1 + sizeof(uint64_t) + SecureSession::TagSize ||
+          recordLength > TCP_OTA_BINARY_RECORD_MAX) {
+        LOG_WARN("invalid TCP OTA record length=%u",
+                 static_cast<unsigned>(recordLength));
+        s_tcpClient.stop();
+        s_tcpReceiveBuf.clear();
+        return;
+      }
+      if (s_tcpReceiveBuf.size() - consumed < 3 + recordLength) break;
+      dispatchTcpBinaryOTARecord(s_tcpReceiveBuf.data() + consumed + 3,
+                                 recordLength);
+      consumed += 3 + recordLength;
+      continue;
+    }
+    const auto begin = s_tcpReceiveBuf.begin() + consumed;
+    const auto newline = std::find(begin, s_tcpReceiveBuf.end(), '\n');
+    if (newline == s_tcpReceiveBuf.end()) {
+      if (s_tcpReceiveBuf.size() - consumed > TCP_CONTROL_TEXT_MAX) {
+        LOG_WARN("oversized TCP control line rejected");
+        s_tcpClient.stop();
+        s_tcpReceiveBuf.clear();
+        return;
+      }
+      break;
+    }
+    const size_t lineLength = static_cast<size_t>(newline - begin);
+    if (lineLength > TCP_CONTROL_TEXT_MAX) {
+      LOG_WARN("oversized TCP control line rejected length=%u",
+               static_cast<unsigned>(lineLength));
+      s_tcpClient.stop();
+      s_tcpReceiveBuf.clear();
+      return;
+    }
+    std::string line(reinterpret_cast<const char *>(s_tcpReceiveBuf.data() + consumed),
+                     lineLength);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (!line.empty()) dispatchControlLine(line, "wifi", &s_tcpAuthed);
+    consumed += lineLength + 1;
+  }
+  if (consumed)
+    s_tcpReceiveBuf.erase(s_tcpReceiveBuf.begin(),
+                          s_tcpReceiveBuf.begin() + consumed);
 }
 
 void dispatchControlLine(const std::string &line, const char *source,
@@ -432,19 +533,6 @@ void dispatchControlLine(const std::string &line, const char *source,
     }
   } else {
     LOG_INFO("unauthenticated or invalid secure record rejected src=%s", source);
-  }
-}
-
-// Split incoming bytes into lines and dispatch each.
-void feedControlLines(std::string &buf, const std::string &incoming,
-                      const char *source, bool *authed) {
-  buf += incoming;
-  size_t nl;
-  while ((nl = buf.find('\n')) != std::string::npos) {
-    std::string line = buf.substr(0, nl);
-    buf.erase(0, nl + 1);
-    if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (!line.empty()) dispatchControlLine(line, source, authed);
   }
 }
 
@@ -674,6 +762,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     if (claim == BLESessionOwnership::ClaimResult::AlreadyOwner) return;
     s_bleSecureSession.reset();
     s_bleAuthed = false;
+    // Ask iOS for a low-latency, zero-slave-latency link. The peer remains free
+    // to choose compatible values; these bounds improve sustained OTA writes
+    // without making reconnection depend on an aggressive single interval.
+    server->updateConnParams(handle, 12, 24, 0, 400);
     LOG_BLE("central connected handle=%u secure authentication deadline=%lums",
             handle, static_cast<unsigned long>(BLE_SECURE_AUTH_TIMEOUT_MS));
   }
@@ -909,7 +1001,12 @@ void RadioManager::stopWifiServices() {
   g_wifiConfig.stop();
   s_tcpClient.stop();
   s_tcpServer.stop();
-  s_tcpLineBuf.clear();
+  s_tcpReceiveBuf.clear();
+  if (g_otaEngine.owner() == OTATransportOwner::WiFi && g_otaEngine.active())
+    g_otaEngine.abort("connection_lost");
+  s_wifiOtaWindowed = false;
+  s_wifiOtaBinary = false;
+  s_wifiOtaLastAck = 0;
   s_tcpAuthed = false;
   s_tcpSecureSession.reset();
 }
@@ -961,6 +1058,7 @@ void RadioManager::startBle() {
       LOG_BLE("init failed");
       return;
     }
+    NimBLEDevice::setMTU(517);
     LOG_BLE("initialized");
     s_bleServer = NimBLEDevice::createServer();
     if (!s_bleServer) {
@@ -1110,28 +1208,41 @@ void RadioManager::loop() {
   if (!hadTcpClient) {
     WiFiClient nc = s_tcpServer.accept();
     if (nc) {
+      nc.setNoDelay(true);
       s_tcpClient = nc;
-      s_tcpLineBuf.clear();
+      s_tcpReceiveBuf.clear();
+      s_tcpReceiveBuf.reserve(TCP_OTA_BINARY_RECORD_MAX * 2);
       s_tcpSecureSession.reset();
       s_tcpAuthed = false;
+      s_wifiOtaWindowed = false;
+      s_wifiOtaBinary = false;
+      s_wifiOtaLastAck = 0;
       LOG_WIFI("control client connected");
     }
   }
   if (s_tcpClient && s_tcpClient.connected()) {
+    uint8_t incoming[1024];
     while (s_tcpClient.available()) {
-      char ch = (char)s_tcpClient.read();
-      if (ch == '\r') continue;
-      if (ch == '\n') {
-        if (!s_tcpLineBuf.empty()) {
-          dispatchControlLine(s_tcpLineBuf, "wifi", &s_tcpAuthed);
-        }
-        s_tcpLineBuf.clear();
-      } else if (s_tcpLineBuf.size() < 768) {
-        s_tcpLineBuf.push_back(ch);
-      }
+      const int available = s_tcpClient.available();
+      const size_t wanted = std::min(sizeof(incoming),
+                                     static_cast<size_t>(available));
+      const int received = s_tcpClient.read(incoming, wanted);
+      if (received <= 0) break;
+      s_tcpReceiveBuf.insert(s_tcpReceiveBuf.end(), incoming,
+                             incoming + received);
+      processTcpReceiveBuffer();
+      if (!s_tcpClient.connected()) break;
     }
   } else {
-    if (s_tcpAuthed) requestReleaseAll("tcp-disconnect");
+    if (s_tcpAuthed) {
+      requestReleaseAll("tcp-disconnect");
+      if (g_otaEngine.owner() == OTATransportOwner::WiFi && g_otaEngine.active())
+        g_otaEngine.abort("connection_lost");
+    }
+    s_tcpReceiveBuf.clear();
+    s_wifiOtaWindowed = false;
+    s_wifiOtaBinary = false;
+    s_wifiOtaLastAck = 0;
     s_tcpAuthed = false;
     s_tcpSecureSession.reset();
   }
