@@ -10,6 +10,17 @@ enum AddDeviceWizardStep: Equatable {
 
 @MainActor
 final class AddDeviceWizardViewModel: ObservableObject {
+    private struct SecureWiFiStatus: Decodable {
+        let state: String
+        let ip: String
+        let deviceId: String
+
+        enum CodingKeys: String, CodingKey {
+            case state, ip
+            case deviceId = "device_id"
+        }
+    }
+
     @Published private(set) var step: AddDeviceWizardStep = .choosePath
     @Published private(set) var candidates: [DiscoveredService] = []
     @Published private(set) var isSaving = false
@@ -122,32 +133,120 @@ final class AddDeviceWizardViewModel: ObservableObject {
         try await bluetooth.setWiFi(ssid: ssid, password: homeWifiPassword)
         startBrowsing()
 
+        // The authenticated BLE session provides a direct, identity-bound
+        // handoff to the station IP. Bonjour remains active as a fallback, but
+        // setup no longer depends on the router forwarding multicast DNS.
+        let directHost = await waitForSecureWiFiAddress(
+            bluetooth: bluetooth,
+            expectedDeviceId: metadata.deviceId,
+            timeout: 20
+        )
+        // The firmware intentionally owns one secure TCP session. Remove stale
+        // managers from an earlier setup/control attempt before verification.
+        await InputPilotWiFiManager.removeSessions(deviceId: metadata.deviceId)
+
         let deadline = Date().addingTimeInterval(45)
         var verified: (DeviceStatus, DiscoveredService)?
+        var sawMatchingDiscovery = false
+        var sawValidDiscoveryMetadata = false
+        var lastVerificationFailure: String?
+        var loggedFailures = Set<String>()
         while Date() < deadline, verified == nil {
-            for candidate in candidates where candidate.deviceId?.lowercased() == metadata.deviceId.lowercased() {
-                guard let baseURL = DeviceEndpointResolver.baseURL(host: candidate.host, port: candidate.port),
-                      let status = try? await apiClient.status(baseURL: baseURL),
-                      status.deviceId?.lowercased() == metadata.deviceId.lowercased(),
+            var verificationCandidates = candidates
+            if let directHost {
+                verificationCandidates.append(DiscoveredService(
+                    id: "secure-ble-handoff-\(metadata.deviceId)",
+                    deviceId: metadata.deviceId,
+                    name: metadata.deviceName,
+                    host: directHost,
+                    port: 80
+                ))
+            }
+            for candidate in BonjourDiscoveryFilter.deduplicate(verificationCandidates) where
+                candidate.deviceId?.lowercased() == metadata.deviceId.lowercased() {
+                sawMatchingDiscovery = true
+                guard let baseURL = DeviceEndpointResolver.baseURL(host: candidate.host, port: candidate.port) else {
+                    lastVerificationFailure = "The discovered network address was invalid."
+                    continue
+                }
+                let status: DeviceStatus
+                do {
+                    status = try await apiClient.status(baseURL: baseURL)
+                } catch {
+                    lastVerificationFailure = "Discovery metadata could not be read: \(error.localizedDescription)"
+                    if loggedFailures.insert(lastVerificationFailure!).inserted {
+                        AppLog.shared.write(.errors, "Setup Wi-Fi verification: \(lastVerificationFailure!) host=\(candidate.host)")
+                    }
+                    continue
+                }
+                guard status.deviceId?.lowercased() == metadata.deviceId.lowercased(),
                       status.protocolVersion == 2,
-                      status.capabilities.contains("secure_protocol_v2") else { continue }
+                      status.capabilities.contains("secure_protocol_v2") else {
+                    lastVerificationFailure = "The rediscovered endpoint did not present the paired secure identity."
+                    continue
+                }
+                sawValidDiscoveryMetadata = true
                 let tcp = InputPilotWiFiManager.session(host: candidate.host, deviceId: metadata.deviceId)
                 do {
                     try await tcp.waitUntilReady(timeout: 5)
                     verified = (status, candidate)
-                } catch {}
+                } catch {
+                    lastVerificationFailure = "Secure Wi-Fi authentication failed: \(error.localizedDescription)"
+                    if loggedFailures.insert(lastVerificationFailure!).inserted {
+                        AppLog.shared.write(.errors, "Setup Wi-Fi verification: \(lastVerificationFailure!) host=\(candidate.host)")
+                    }
+                }
             }
             if verified == nil { try? await Task.sleep(for: .milliseconds(500)) }
         }
 
         guard let (status, candidate) = verified else {
-            errorMessage = "Wi-Fi was saved, but the same device could not be authenticated on the home network. Check the credentials and retry."
+            if !sawMatchingDiscovery {
+                errorMessage = "Wi-Fi was saved, but this InputPilot did not reappear on the home network. Check the network credentials and mDNS/local-network access, then retry."
+            } else if !sawValidDiscoveryMetadata {
+                errorMessage = "InputPilot reappeared on Wi-Fi, but its secure identity metadata could not be verified. Open Diagnostics for the recorded cause."
+            } else {
+                errorMessage = "InputPilot reappeared on Wi-Fi, but Secure Protocol authentication failed. Reconnect USB trust and retry. Details were saved in Diagnostics."
+            }
+            if let lastVerificationFailure {
+                AppLog.shared.write(.errors, "Setup Wi-Fi verification exhausted: \(lastVerificationFailure)")
+            }
             return
         }
         let repository = DeviceRepository(context: context)
         _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
         _ = try await repository.addFromDiscovery(status: status, fallbackHost: candidate.host, displayName: trimmedName)
         browser.stopBrowsing()
+    }
+
+    private func waitForSecureWiFiAddress(
+        bluetooth: BLEHIDControlTransport,
+        expectedDeviceId: String,
+        timeout: TimeInterval
+    ) async -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            do {
+                let reply = try await bluetooth.request("WIFI STATUS", timeout: 2)
+                let status = try JSONDecoder().decode(SecureWiFiStatus.self, from: Data(reply.utf8))
+                guard status.deviceId.lowercased() == expectedDeviceId.lowercased() else {
+                    AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned a different device identity")
+                    return nil
+                }
+                if status.state == "connected", !status.ip.isEmpty {
+                    AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(status.ip)")
+                    return DeviceEndpointResolver.sanitizeHost(status.ip)
+                }
+                if status.state == "soft_ap" {
+                    AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned to Soft-AP; STA join failed")
+                    return nil
+                }
+            } catch {
+                AppLog.shared.write(.errors, "BLE Wi-Fi handoff status failed: \(error.localizedDescription)")
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return nil
     }
 
     private func startBrowsing() {

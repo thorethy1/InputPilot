@@ -15,9 +15,11 @@ replace this gate.
    Confirm iOS creates no system bond and the UI remains “Authenticating” until
    the server proof verifies.
 5. Send home SSID/password over the encrypted BLE management record. Confirm
-   neither value appears in app, serial or firmware logs.
+   neither value appears in app, serial or firmware logs. Confirm BLE remains
+   authenticated and responsive throughout the non-blocking STA join.
 6. Wait for mDNS rediscovery on the home LAN. Verify exact device-ID match and a
-   fresh Secure Protocol handshake over TCP before setup completes.
+   fresh Secure Protocol handshake over TCP before setup completes. Repeat with
+   mDNS blocked and verify the secure BLE-to-STA-address handoff still succeeds.
 7. Exercise mouse/trackpad, keyboard/layout input, presets/macros, Keep Awake,
    diagnostics, device settings, USB identity and reboot over BLE and Wi-Fi
    wherever the UI offers both.

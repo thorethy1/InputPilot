@@ -57,9 +57,14 @@ private:
   void stopBle();
   void startSoftAp();
   void startSta(const String &ssid, const String &pass);
+  void finishStaConnection();
+  void serviceStaConnection();
+  void stopWifiServices();
 
   RadioMode mode_ = RadioMode::None;
   bool softAp_ = false;
+  bool staConnecting_ = false;
+  uint32_t staConnectStartedMs_ = 0;
   char status_[64] = "none";
 };
 

@@ -106,6 +106,24 @@ bool dispatchSecureProtocolMessage(const std::string &message, const char *sourc
                                          : g_bleDiagnostics.infoJson());
     return true;
   }
+  if (message == "WIFI STATUS") {
+    const char *state = "disconnected";
+    String ip;
+    if (g_radio.isSoftAp()) {
+      state = "soft_ap";
+    } else if (WiFi.status() == WL_CONNECTED) {
+      state = "connected";
+      ip = WiFi.localIP().toString();
+    } else if (g_radio.wifiEnabled()) {
+      state = "connecting";
+    }
+    const std::string response =
+        "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
+        std::string(ip.c_str()) + "\",\"device_id\":\"" +
+        std::string(DeviceIdentity::deviceId()) + "\"}";
+    sendSecureReply(source, session, response);
+    return true;
+  }
   if (message.rfind("DIAGNOSTICS NEXT ", 0) == 0) {
     const std::string cursorText = message.substr(17);
     char *end = nullptr;
@@ -555,6 +573,7 @@ bool RadioManager::setMode(RadioMode m) {
 // WiFi (STA with NVS creds, or Soft-AP setup portal)
 // ---------------------------------------------------------------------------
 void RadioManager::startSoftAp() {
+  staConnecting_ = false;
   softAp_ = true;
   DeviceIdentity::begin();
   WiFi.mode(WIFI_AP);
@@ -583,36 +602,45 @@ void RadioManager::startSta(const String &ssid, const String &pass) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
   LOG_WIFI("connecting to %s ...", ssid.c_str());
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         (millis() - start) < WIFI_CONNECT_TIMEOUT_MS) {
-    delay(200);
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    DeviceIdentity::begin();
-    s_tcpServer.begin();
-    s_tcpServer.setNoDelay(true);
-    g_wifiConfig.begin();  // read-only discovery on :80
-    const char *mdnsHost = DeviceIdentity::mdnsHostname();
-    if (MDNS.begin(mdnsHost)) {
-      MDNS.addService("http", "tcp", WIFI_HTTP_PORT);
-      MDNS.addServiceTxt("http", "tcp", "path", "/api/status");
-      MDNS.addServiceTxt("http", "tcp", "id", DeviceIdentity::deviceId());
-      MDNS.addServiceTxt("http", "tcp", "fw", FW_VERSION);
-      LOG_WIFI("mDNS started as %s (http :%d)", DeviceIdentity::mdnsFqdn(),
-               WIFI_HTTP_PORT);
-    } else {
-      LOG_WIFI("mDNS start failed");
-    }
-    snprintf(status_, sizeof(status_), "wifi:%s", WiFi.localIP().toString().c_str());
-    LOG_WIFI("connected ip=%s secure-port=%d discovery=:%d mdns=%s",
-             WiFi.localIP().toString().c_str(), WIFI_CONTROL_PORT, WIFI_HTTP_PORT,
-             DeviceIdentity::mdnsFqdn());
+  staConnecting_ = true;
+  staConnectStartedMs_ = millis();
+  snprintf(status_, sizeof(status_), "wifi:connecting");
+}
+
+void RadioManager::finishStaConnection() {
+  staConnecting_ = false;
+  DeviceIdentity::begin();
+  s_tcpServer.begin();
+  s_tcpServer.setNoDelay(true);
+  g_wifiConfig.begin();  // read-only discovery on :80
+  const char *mdnsHost = DeviceIdentity::mdnsHostname();
+  if (MDNS.begin(mdnsHost)) {
+    MDNS.addService("http", "tcp", WIFI_HTTP_PORT);
+    MDNS.addServiceTxt("http", "tcp", "path", "/api/status");
+    MDNS.addServiceTxt("http", "tcp", "id", DeviceIdentity::deviceId());
+    MDNS.addServiceTxt("http", "tcp", "fw", FW_VERSION);
+    LOG_WIFI("mDNS started as %s (http :%d)", DeviceIdentity::mdnsFqdn(),
+             WIFI_HTTP_PORT);
   } else {
-    LOG_WIFI("connect timeout; returning to Soft-AP discovery");
-    WiFi.disconnect(true);
-    startSoftAp();
+    LOG_WIFI("mDNS start failed");
   }
+  snprintf(status_, sizeof(status_), "wifi:%s", WiFi.localIP().toString().c_str());
+  LOG_WIFI("connected ip=%s secure-port=%d discovery=:%d mdns=%s",
+           WiFi.localIP().toString().c_str(), WIFI_CONTROL_PORT, WIFI_HTTP_PORT,
+           DeviceIdentity::mdnsFqdn());
+}
+
+void RadioManager::serviceStaConnection() {
+  if (!staConnecting_) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    finishStaConnection();
+    return;
+  }
+  if (millis() - staConnectStartedMs_ < WIFI_CONNECT_TIMEOUT_MS) return;
+  LOG_WIFI("connect timeout; returning to Soft-AP discovery");
+  staConnecting_ = false;
+  WiFi.disconnect(false, false);
+  startSoftAp();
 }
 
 void RadioManager::startWifi() {
@@ -625,13 +653,20 @@ void RadioManager::startWifi() {
   startSta(c.ssid, c.pass);
 }
 
-void RadioManager::stopWifi() {
+void RadioManager::stopWifiServices() {
   MDNS.end();
   g_wifiConfig.stop();
-  softAp_ = false;
   s_tcpClient.stop();
   s_tcpServer.stop();
   s_tcpLineBuf.clear();
+  s_tcpAuthed = false;
+  s_tcpSecureSession.reset();
+}
+
+void RadioManager::stopWifi() {
+  stopWifiServices();
+  staConnecting_ = false;
+  softAp_ = false;
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
@@ -643,9 +678,14 @@ void RadioManager::applyWifiCredentials() {
     LOG_WIFI("credentials updated (will apply on next radio wifi)");
     return;
   }
-  LOG_WIFI("applying credentials; restarting WiFi");
-  stopWifi();
-  startWifi();
+  // Provisioning arrives through the live BLE Secure Session. Do not turn the
+  // shared Wi-Fi/BLE controller fully off or block the main loop while joining
+  // the home network. Keep BLE responsive and advance STA setup from loop().
+  LOG_WIFI("applying credentials; transitioning to STA asynchronously");
+  stopWifiServices();
+  WiFi.disconnect(false, false);
+  const WifiCreds credentials = WifiCredentials::get();
+  startSta(credentials.ssid, credentials.pass);
   LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
 }
 
@@ -808,6 +848,9 @@ void RadioManager::loop() {
     esp_restart();
   }
   if (!wifiEnabled()) return;
+
+  serviceStaConnection();
+  if (staConnecting_) return;
 
   // Plain HTTP is discovery-only. Setup and management use the secure TCP port.
   g_wifiConfig.loop();

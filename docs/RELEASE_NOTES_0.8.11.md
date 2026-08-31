@@ -19,6 +19,13 @@ compatibility with older firmware.
 - A BLE connection has 15 seconds to authenticate. The first connection owns
   the session exclusively; another central cannot reset it, submit control or
   OTA writes, or receive session notifications.
+- Wi-Fi provisioning now changes from Soft-AP to STA asynchronously while BLE
+  remains responsive. The authenticated BLE session reports the assigned STA
+  address, allowing the app to verify Secure Protocol over TCP even when a
+  router delays or filters mDNS.
+- Public BLE metadata discovery now completes its CoreBluetooth disconnect
+  before handing the device to the secure connection manager, preventing two
+  app-owned centrals from racing for the firmware's single session owner.
 - Public BLE discovery metadata is bounded below the 512-byte GATT value limit.
 
 Devices running older firmware must be reflashed over USB before they can be

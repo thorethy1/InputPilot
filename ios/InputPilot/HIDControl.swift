@@ -528,6 +528,7 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var selected: CBPeripheral?
     private var completion: ((Result<BLEDeviceMetadata, Error>) -> Void)?
+    private var resultPendingDisconnect: Result<BLEDeviceMetadata, Error>?
     private var metadataTimeoutWork: DispatchWorkItem?
     private let otaService = CBUUID(string: "7D9F1001-4F4D-4F56-4552-484944000001")
     private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
@@ -553,7 +554,7 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         return try await withCheckedThrowingContinuation { continuation in
             completion = { continuation.resume(with: $0) }
             central.connect(peripheral)
-            startMetadataTimeout(peripheral)
+            startMetadataTimeout()
         }
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -573,6 +574,11 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         finish(.failure(error ?? TransportError.unavailable))
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        if let pending = resultPendingDisconnect {
+            resultPendingDisconnect = nil
+            complete(pending)
+            return
+        }
         guard completion != nil else { return }
         finish(.failure(error ?? TransportError.failed("Bluetooth disconnected during metadata setup.")))
     }
@@ -592,21 +598,28 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         }
         finish(.success(metadata))
     }
-    private func startMetadataTimeout(_ peripheral: CBPeripheral) {
+    private func startMetadataTimeout() {
         metadataTimeoutWork?.cancel()
-        let timeout = DispatchWorkItem { [weak self, weak peripheral] in
+        let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.completion != nil else { return }
             self.finish(.failure(TransportError.failed("Bluetooth pairing or metadata request timed out.")))
-            if let peripheral { self.central.cancelPeripheralConnection(peripheral) }
         }
         metadataTimeoutWork = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
     }
     private func finish(_ result: Result<BLEDeviceMetadata, Error>) {
         metadataTimeoutWork?.cancel(); metadataTimeoutWork = nil
+        if let selected, selected.state != .disconnected {
+            resultPendingDisconnect = result
+            central.cancelPeripheralConnection(selected)
+            return
+        }
+        complete(result)
+    }
+    private func complete(_ result: Result<BLEDeviceMetadata, Error>) {
         let callback = completion; completion = nil
+        selected = nil
         callback?(result)
-        if let selected { central.cancelPeripheralConnection(selected) }; selected = nil
     }
 }
 

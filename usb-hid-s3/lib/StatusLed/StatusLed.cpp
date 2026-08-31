@@ -30,7 +30,7 @@ void StatusLed::loop() {
   const uint32_t now = millis();
 
   // 1) Soft-AP setup mode
-  if (g_radio.mode() == RadioMode::Wifi && g_radio.isSoftAp()) {
+  if (g_radio.wifiEnabled() && g_radio.isSoftAp()) {
     // Magenta slow blink ~1 Hz
     const bool on = ((now / 500) % 2) == 0;
     if (on) show(peak, 0, peak);
@@ -39,7 +39,7 @@ void StatusLed::loop() {
   }
 
   // 2) WiFi not connected (radio off, BLE, STA connecting/failed)
-  const bool staUp = (g_radio.mode() == RadioMode::Wifi && !g_radio.isSoftAp() &&
+  const bool staUp = (g_radio.wifiEnabled() && !g_radio.isSoftAp() &&
                       WiFi.status() == WL_CONNECTED);
   if (!staUp) {
     show(peak, 0, 0);  // solid red
