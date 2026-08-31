@@ -6,10 +6,10 @@
  * Values the test suite reads back (FW_VERSION) live here.
  */
 
-#define FW_VERSION      "0.8.13"
+#define FW_VERSION      "0.8.14"
 #define FW_NAME         "InputPilot-Firmware"
 // USB bcdDevice reported to the host.
-#define FW_VERSION_BCD  0x0813
+#define FW_VERSION_BCD  0x0814
 #ifndef FW_GIT_COMMIT
 #define FW_GIT_COMMIT   "unknown"
 #endif
