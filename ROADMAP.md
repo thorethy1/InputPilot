@@ -1,40 +1,5 @@
 InputPilot Roadmap
 
-✅ 0.8.x — Firmware, OTA & Reliability Foundation
-
-Goal: Build a reliable technical foundation before focusing on UX and the first stable release.
-
-Completed
-
-* BLE firmware OTA
-* Wi-Fi / firmware update infrastructure
-* Dual-slot OTA firmware layout
-* Firmware compatibility validation
-* Firmware diagnostics
-* Transport diagnostics
-* BLE / HID reliability improvements
-* E2E test infrastructure
-* Native iOS tab navigation
-* BLE as first-class InputPilot transport
-* Release artifacts and firmware manifests
-
-Completed in 0.8.3
-
-* Replaced the incorrect capability-derived “Bluetooth Available” status with live Bluetooth radio, discovery, connection, authentication, and readiness state.
-* Saved devices now begin in a checking state and clearly become ready, online via Wi-Fi, reconnecting, authentication failed, setup required, or offline from live transport information.
-- [x] Improve Connection UX & Transport State
-  - Clearly distinguish Available / Connected / Active / Reconnecting
-  - Always show which transport is currently used
-  - Make Automatic transport fallback understandable
-  - Do not show "Reconnecting" when another transport is actively working
-  - Add clear connection error states and recovery actions
-  - Transport state must stay consistent across Device, Control and Settings
-* Removed the pointer-jiggle switch from device rows; reworked it as the explanatory “Keep Awake” device-management setting and disabled it without the Wi-Fi connection its API requires.
-* Removed ambiguous “Ready to Move” and “Moving” terminology from iOS and Android, plus generic OTA “Available” terminology from the iOS firmware UI.
-* Firmware management now distinguishes installed/latest firmware, update available, up to date, installed newer, incompatible firmware, app update required, and unavailable release information.
-* Fixed stale Bluetooth connection attempts and prevented ordinary disconnects from creating false OTA failures.
-
-⸻
 
 🎨 0.9.0 — Native iOS Polish & Control Experience
 
