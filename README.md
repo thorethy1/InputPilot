@@ -10,42 +10,55 @@
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
 
-| Name | Where you see it |
-|------|------------------|
-| **InputPilot** | Product and GitHub repository |
-| **usb-hid-s3** | Firmware folder / USB product family name |
-| **inputpilot** | mDNS hostname prefix (`inputpilot-xxxx.local`; suffix from device MAC) |
 
 ## Getting started
 
 ### 1. Hardware
 
 Supported board: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 4 MB flash,
-WS2812 on GPIO21).
+WS2812).
 
 <p align="center">
   <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
 </p>
 
-- Buy example: [Aliexpress listing](https://a.aliexpress.com/_ExnnLN0)
-- Details: [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md)
+- [Aliexpress listing](https://a.aliexpress.com/_ExnnLN0)
+- [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md)
 
-### 2. Build & flash
+2. Build & Flash
 
 ```bash
-cd usb-hid-s3
-cp include/wifi_secrets.h.example include/wifi_secrets.h   # optional STA seed
-cp config.env.example config.env                             # set ESP_PORT
-# Enter download mode: hold BOOT, tap RESET, release BOOT
-pio run -e esp32s3 -t upload
-# Power-cycle the USB cable so the app enumerates as VID 0xCAFE
-curl http://inputpilot-XXXX.local/api/status   # XXXX = device suffix from /api/status
+# Install dependencies
+sudo apt update
+sudo apt install python3 python3-pip python3-venv git
+# (Optional) Create and activate a virtual environment
+python3 -m venv ~/esptool-env
+source ~/esptool-env/bin/activate
+# Install esptool
+pip install esptool
+# Connect the ESP32-S3 via USB and identify its serial port
+ls /dev/ttyACM* /dev/ttyUSB*
+# Enter download mode:
+# Hold BOOT, press and release RESET, then release BOOT
+# Erase the existing flash contents
+esptool --chip esp32s3 \
+  --port /dev/ttyACM0 \
+  erase-flash
+# Flash the complete InputPilot image
+# initial-flash.bin contains the bootloader, partition table,
+# OTA boot data, and InputPilot firmware.
+esptool --chip esp32s3 \
+  --port /dev/ttyACM0 \
+  --baud 460800 \
+  write-flash 0x0 initial-flash.bin
+# Disconnect and reconnect the USB cable.
 ```
 
-Full commands and the LED legend: [`usb-hid-s3/README.md`](usb-hid-s3/README.md).
-Secure protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+Note: Replace /dev/ttyACM0 with the serial port assigned to your ESP32-S3 if necessary.
 
-### 3. Companions (optional)
+### 3. Companions
+
+After flashing, sideload the InputPilot iOS companion app and securely pair it with the InputPilot device via USB.
 
 - **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; secure setup, trackpad, keyboard, presets, macros, diagnostics and OTA. Secure Protocol v2 firmware is required.
 
@@ -62,13 +75,12 @@ Secure protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Native unit tests (`pio test -e native`) | Linux / macOS / CI |
 | Firmware compile (`pio run -e esp32s3`) | Linux / macOS / CI |
 | iOS companion (`xcodebuild test`) | **macOS with Xcode 26+** / CI (`macos-26`) |
-| On-device pytest (serial / HID E2E / WiFi / BLE / mDNS) | **macOS + board** only |
 
 ## Layout
 
 | Folder | Purpose |
 |--------|---------|
-| [`usb-hid-s3/`](usb-hid-s3/) | ESP32-S3 firmware (USB HID + Secure Protocol v2 + discovery) |
+| [`usb-hid-s3/`](usb-hid-s3/) | InputPilot firmware (USB HID + Secure Protocol v2 + discovery) |
 | [`ios/`](ios/) | **InputPilot** iOS companion (SwiftUI) |
 
 ## CI
@@ -202,6 +214,7 @@ Current checked-in screenshots document the retained device list/detail flow. Ne
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — BLE, TCP and REST HID control protocol
 - [`docs/UBUNTU_HARDWARE_TEST.md`](docs/UBUNTU_HARDWARE_TEST.md) — automated headless Ubuntu REST/TCP-to-USB proof
 - [`docs/IOS_CICD.md`](docs/IOS_CICD.md) — signing and IPA builds without a local Mac
+
 ## Secrets
 
 Do **not** commit:
