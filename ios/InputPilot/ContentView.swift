@@ -763,12 +763,14 @@ private struct StatusLEDMatrixView: View {
         }
 
         private func opacity(at time: TimeInterval) -> Double {
+            if reduceMotion, case let .solid(opacity) = pattern { return opacity }
             if reduceMotion { return 1 }
             switch pattern {
-            case let .solid(opacity): opacity
-            case let .blinking(period): time.truncatingRemainder(dividingBy: period) < period / 2 ? 1 : 0.08
+            case let .solid(opacity): return opacity
+            case let .blinking(period):
+                return time.truncatingRemainder(dividingBy: period) < period / 2 ? 1 : 0.08
             case let .breathing(period):
-                0.2 + 0.8 * ((sin((time / period) * 2 * .pi) + 1) / 2)
+                return 0.2 + 0.8 * ((sin((time / period) * 2 * Double.pi) + 1) / 2)
             }
         }
     }

@@ -50,11 +50,11 @@ enum AppAccent: String, CaseIterable, Identifiable {
     static func resolve(_ storedValue: String) -> Self {
         if let accent = Self(rawValue: storedValue) { return accent }
         switch storedValue {
-        case "Blue": .coolBlue
-        case "Indigo": .peculiar
-        case "Teal": .veryPeculiar
-        case "Orange": .clock
-        default: .inputPilot
+        case "Blue": return .coolBlue
+        case "Indigo": return .peculiar
+        case "Teal": return .veryPeculiar
+        case "Orange": return .clock
+        default: return .inputPilot
         }
     }
 }

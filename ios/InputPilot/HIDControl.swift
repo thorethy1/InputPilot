@@ -2094,7 +2094,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
 }
 
-@MainActor enum InputPilotWiFiManager {
+enum InputPilotWiFiManager {
     private static var sessions: [String: TCPHIDControlTransport] = [:]
     static func session(host: String, deviceId: String) -> TCPHIDControlTransport {
         let normalizedHost = DeviceEndpointResolver.sanitizeHost(host).lowercased()
