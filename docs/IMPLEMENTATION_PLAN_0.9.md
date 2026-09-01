@@ -47,6 +47,30 @@ current concentration of control UI, transport code and models in `HIDControl.sw
 each milestone should extract only the area it actively changes so that refactoring
 does not become a parallel rewrite.
 
+## Milestone progress
+
+### M0: Foundation
+
+- [x] Shared spacing/radius tokens and semantic status colors.
+- [x] System, Light and Dark appearance choices.
+- [x] User-selectable accent colors that do not redefine status or destructive meaning.
+
+### M1: Devices and connection
+
+Started early on 2026-09-01 after the beta release channel became operational.
+
+- [x] Remember and reconcile one active device across Devices, Control, Firmware and Settings.
+- [x] Mark the active device in the saved-device list and provide native swipe/context switching actions.
+- [x] Use one high-level Connected/Connecting/Offline/Attention Required presentation in normal UI.
+- [x] Offer retry, app-permission and USB-trust recovery from the shared connection banner.
+- [x] Move technical device/build/log/export information behind Diagnostics & Advanced.
+- [ ] Verify Bluetooth-denied, Bluetooth-off, Wi-Fi-only and automatic-fallback states on physical hardware.
+- [ ] Audit unexpected disconnect paths and prove held keyboard/mouse input is released.
+- [ ] Complete VoiceOver, Dynamic Type, Light/Dark and Reduce Motion review for all M1 screens.
+
+The manual gate for this slice is tracked in
+[M1 Device and Connection Checklist](M1_DEVICE_CONNECTION_CHECKLIST.md).
+
 ## Cross-cutting definition of done
 
 For every user-triggered asynchronous action:

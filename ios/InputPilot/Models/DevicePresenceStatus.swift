@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 enum WiFiReachabilityState: Equatable, Sendable {
@@ -23,15 +24,12 @@ enum DevicePresenceStatus: Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .checking: "Checking availability…"
+        case .checking: "Checking…"
         case .offline: "Offline"
-        case .setup: "Setup required"
-        case .bluetoothDiscovered: "Nearby via Bluetooth"
-        case .connecting: "Connecting…"
-        case .reconnecting: "Reconnecting…"
-        case .authenticating: "Authenticating…"
-        case .authenticationFailed: "Authentication failed"
-        case .readyBoth, .readyBluetooth, .readyWiFi: "Online"
+        case .setup, .authenticationFailed: "Attention Required"
+        case .bluetoothDiscovered: "Available"
+        case .connecting, .reconnecting, .authenticating: "Connecting…"
+        case .readyBoth, .readyBluetooth, .readyWiFi: "Connected"
         }
     }
 
@@ -54,6 +52,18 @@ enum DevicePresenceStatus: Equatable, Sendable {
     var isUsable: Bool {
         self == .readyBoth || self == .readyBluetooth || self == .readyWiFi
     }
+
+    var canRetry: Bool {
+        switch self {
+        case .offline, .setup, .bluetoothDiscovered, .reconnecting:
+            true
+        case .checking, .connecting, .authenticating, .authenticationFailed,
+             .readyBoth, .readyBluetooth, .readyWiFi:
+            false
+        }
+    }
+
+    var needsUSBTrustRecovery: Bool { self == .authenticationFailed }
 
     var color: Color {
         switch self {
@@ -103,5 +113,20 @@ enum DevicePresenceStatus: Equatable, Sendable {
         case .ready:
             return .readyBluetooth
         }
+    }
+}
+
+/// Keeps every tab on one remembered device while safely recovering when a
+/// saved selection no longer exists (for example after deleting that device).
+enum ActiveDeviceSelection {
+    static func resolve(savedID: String, availableIDs: [String]) -> String? {
+        guard let first = availableIDs.first else { return nil }
+        return availableIDs.first {
+            $0.caseInsensitiveCompare(savedID) == .orderedSame
+        } ?? first
+    }
+
+    static func reconciled(savedID: String, availableIDs: [String]) -> String {
+        resolve(savedID: savedID, availableIDs: availableIDs) ?? ""
     }
 }

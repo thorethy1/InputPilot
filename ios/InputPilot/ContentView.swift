@@ -8,6 +8,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \StoredDevice.displayName) private var storedDevices: [StoredDevice]
     @StateObject private var viewModel = HomeViewModel()
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
 
     @State private var showAddWizard = false
 
@@ -45,6 +46,7 @@ struct ContentView: View {
         }
         .environmentObject(viewModel)
         .task(id: storedDevices.map(\.deviceId)) {
+            reconcileActiveDevice()
             viewModel.monitorBonjour(devices: storedDevices, context: modelContext)
             while !Task.isCancelled {
                 await viewModel.refreshQuietly(devices: storedDevices, context: modelContext)
@@ -55,16 +57,49 @@ struct ContentView: View {
     }
 
     private var deviceList: some View {
-        List(storedDevices) { device in
-            NavigationLink {
-                DeviceDetailView(device: device)
-            } label: {
-                DeviceRowView(
-                    device: device,
-                    wifiState: viewModel.wifiState(for: device.deviceId)
-                )
+        List {
+            ForEach(storedDevices) { device in
+                NavigationLink {
+                    DeviceDetailView(device: device)
+                } label: {
+                    DeviceRowView(
+                        device: device,
+                        wifiState: viewModel.wifiState(for: device.deviceId),
+                        isActive: selectedDeviceId == device.deviceId
+                    )
+                }
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    if selectedDeviceId != device.deviceId {
+                        Button {
+                            selectedDeviceId = device.deviceId
+                        } label: {
+                            Label("Make Active", systemImage: "checkmark.circle")
+                        }
+                        .tint(.accentColor)
+                    }
+                }
+                .contextMenu {
+                    Button {
+                        selectedDeviceId = device.deviceId
+                    } label: {
+                        Label(
+                            selectedDeviceId == device.deviceId ? "Active Device" : "Make Active",
+                            systemImage: selectedDeviceId == device.deviceId
+                                ? "checkmark.circle.fill" : "checkmark.circle"
+                        )
+                    }
+                    .disabled(selectedDeviceId == device.deviceId)
+                }
             }
         }
+    }
+
+    private func reconcileActiveDevice() {
+        let resolved = ActiveDeviceSelection.reconciled(
+            savedID: selectedDeviceId,
+            availableIDs: storedDevices.map(\.deviceId)
+        )
+        if selectedDeviceId != resolved { selectedDeviceId = resolved }
     }
 
     private var emptyState: some View {
@@ -103,11 +138,13 @@ struct ContentView: View {
 private struct DeviceRowView: View {
     let device: StoredDevice
     let wifiState: WiFiReachabilityState
+    let isActive: Bool
     @ObservedObject private var bluetooth: BLEHIDControlTransport
 
-    init(device: StoredDevice, wifiState: WiFiReachabilityState) {
+    init(device: StoredDevice, wifiState: WiFiReachabilityState, isActive: Bool) {
         self.device = device
         self.wifiState = wifiState
+        self.isActive = isActive
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
@@ -119,8 +156,18 @@ private struct DeviceRowView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(device.displayName)
-                    .font(.headline)
+                HStack(spacing: AppTheme.Spacing.compact) {
+                    Text(device.displayName)
+                        .font(.headline)
+                    if isActive {
+                        Text("Active")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    }
+                }
                 Text(presence.title)
                     .font(.subheadline)
                     .foregroundStyle(presence.color)
@@ -130,7 +177,7 @@ private struct DeviceRowView: View {
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(device.displayName), \(presence.title), \(presence.detail)")
+            .accessibilityLabel("\(device.displayName), \(isActive ? "active device, " : "")\(presence.title), \(presence.detail)")
         }
         .padding(.vertical, 2)
         .task { await bluetooth.connect() }
@@ -145,13 +192,17 @@ private struct DeviceRowView: View {
     }
 }
 
-private struct LiveDeviceStatusView: View {
+struct DeviceConnectionBanner: View {
     let device: StoredDevice
+    var showsRecoveryActions = true
     @EnvironmentObject private var viewModel: HomeViewModel
+    @Environment(\.modelContext) private var modelContext
     @ObservedObject private var bluetooth: BLEHIDControlTransport
+    @State private var isRetrying = false
 
-    init(device: StoredDevice) {
+    init(device: StoredDevice, showsRecoveryActions: Bool = true) {
         self.device = device
+        self.showsRecoveryActions = showsRecoveryActions
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
@@ -164,42 +215,131 @@ private struct LiveDeviceStatusView: View {
     }
 
     var body: some View {
-        HStack {
-            Label(presence.title, systemImage: presence.systemImage)
-                .foregroundStyle(presence.color)
-            Spacer()
-            Text(presence.detail).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+            HStack(alignment: .firstTextBaseline, spacing: AppTheme.Spacing.compact) {
+                Label(presence.title, systemImage: presence.systemImage)
+                    .font(.headline)
+                    .foregroundStyle(presence.color)
+                Spacer()
+                if isRetrying { ProgressView().controlSize(.small) }
+            }
+            Text(presence.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if showsRecoveryActions {
+                recoveryActions
+            }
         }
+        .accessibilityElement(children: .contain)
         .task { await bluetooth.connect() }
+    }
+
+    @ViewBuilder
+    private var recoveryActions: some View {
+        if bluetooth.radioState == .unauthorized && !presence.isUsable {
+            Label("Bluetooth access is disabled for InputPilot.", systemImage: "bluetooth.slash")
+                .font(.caption)
+                .foregroundStyle(AppColors.attention)
+            Button("Open InputPilot Settings") { openAppSettings() }
+        } else if bluetooth.radioState == .poweredOff && !presence.isUsable {
+            Label("Bluetooth is off. Turn it on in Control Center or Settings.", systemImage: "bluetooth.slash")
+                .font(.caption)
+                .foregroundStyle(AppColors.attention)
+        } else if presence.needsUSBTrustRecovery {
+            NavigationLink("Restore USB Trust") { SecureLifecycleGuideView() }
+        } else if presence.canRetry {
+            Button("Try Again") { Task { await retry() } }
+                .disabled(isRetrying)
+        }
+    }
+
+    @MainActor
+    private func retry() async {
+        guard !isRetrying else { return }
+        isRetrying = true
+        defer { isRetrying = false }
+        async let bluetoothRetry: Void = bluetooth.connect()
+        await viewModel.refreshDevice(device, context: modelContext)
+        await bluetoothRetry
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+}
+
+struct ActiveDevicePicker: View {
+    let devices: [StoredDevice]
+    @Binding var selection: String
+
+    var body: some View {
+        Picker("Active Device", selection: $selection) {
+            ForEach(devices) { device in
+                Text(device.displayName).tag(device.deviceId)
+            }
+        }
+        .accessibilityHint("Changes the device used by Control, Firmware, and Settings.")
     }
 }
 
 private struct ControlRootView: View {
     let devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
-    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
     var body: some View {
         Group {
             if let selected {
                 List {
-                    Section("Active device") { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
-                    Section("Connection") { LiveDeviceStatusView(device: selected) }
+                    Section("Active Device") { ActiveDevicePicker(devices: devices, selection: $selectedDeviceId) }
+                    Section("Connection") { DeviceConnectionBanner(device: selected) }
                     Section { NavigationLink { HIDControlView(device: selected) } label: { Label("Open Trackpad, Keyboard, Presets & Macros", systemImage: "computermouse") } }
                 }
             } else { ContentUnavailableView("Select an InputPilot device", systemImage: "computermouse", description: Text("Add a device in the Devices tab first.")) }
-        }.navigationTitle("Control").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+        }
+        .navigationTitle("Control")
+        .task(id: devices.map(\.deviceId)) { reconcileSelection() }
+    }
+
+    private func reconcileSelection() {
+        selectedDeviceId = ActiveDeviceSelection.reconciled(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        )
     }
 }
 
 private struct FirmwareRootView: View {
     let devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
-    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
     var body: some View {
         Group {
             if let selected { FirmwareDeviceView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) }
             else { ContentUnavailableView("Select an InputPilot device", systemImage: "arrow.triangle.2.circlepath", description: Text("Select an InputPilot device to view firmware information and updates.")) }
-        }.navigationTitle("Firmware").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+        }
+        .navigationTitle("Firmware")
+        .task(id: devices.map(\.deviceId)) { reconcileSelection() }
+    }
+
+    private func reconcileSelection() {
+        selectedDeviceId = ActiveDeviceSelection.reconciled(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        )
     }
 }
 
@@ -230,9 +370,9 @@ private struct FirmwareDeviceView: View {
     var body: some View {
         Form {
             Section("Firmware") {
-                Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } }
+                ActiveDevicePicker(devices: devices, selection: $selection)
                 LabeledContent("Update channel", value: updateChannel.rawValue)
-                LiveDeviceStatusView(device: device)
+                DeviceConnectionBanner(device: device)
                 LabeledContent("Installed firmware", value: device.firmwareVersion ?? "Unknown")
                 LabeledContent("Latest firmware", value: releaseSource.manifest?.version ?? "Not checked")
                 LabeledContent("Update status", value: releaseSource.status.title)
@@ -393,12 +533,23 @@ private struct ConnectionSettingsView: View {
     @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
     @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
-    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
     private let appVersion = AppVersionInfo.read()
     var body: some View {
         Form {
+            if let selected {
+                Section("Active Device") {
+                    ActiveDevicePicker(devices: devices, selection: $selectedDeviceId)
+                    DeviceConnectionBanner(device: selected)
+                }
+            }
             Section("Connection") {
-                if let selected { LiveDeviceStatusView(device: selected) }
                 Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
             }
@@ -426,25 +577,16 @@ private struct ConnectionSettingsView: View {
                     NavigationLink("Secure lifecycle") { SecureLifecycleGuideView() }
                 }
             }
-            Section("Diagnostics") {
+            Section("Support") {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
-                NavigationLink("Secure Lifecycle Guide") { SecureLifecycleGuideView() }
-                if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
-                else { LabeledContent("Firmware Logs", value: "Add a device first") }
-                NavigationLink("App Logs") { AppLogsView() }
-                if let selected { NavigationLink("Export Diagnostics") { DiagnosticsExportView(device: selected) } }
+                NavigationLink("Diagnostics & Advanced") {
+                    DiagnosticsSettingsView(devices: devices, selection: $selectedDeviceId)
+                }
             }
             Section("About") {
                 LabeledContent("App Version", value: appVersion.version)
                 LabeledContent("Build", value: appVersion.build)
                 LabeledContent("App Commit", value: appVersion.commit)
-                if let selected {
-                    if devices.count > 1 { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
-                    LabeledContent("Firmware", value: selected.firmwareVersion ?? "Unknown")
-                    LabeledContent("Secure Protocol", value: "v\(selected.protocolVersion)")
-                    LabeledContent("OTA Schema", value: String(selected.otaSchema))
-                    if let lastSeen = selected.lastSeen { LabeledContent("Last seen", value: lastSeen.formatted(date: .abbreviated, time: .shortened)) }
-                }
             }
             Section("Appearance") {
                 Picker("Interface", selection: $appearanceName) {
@@ -463,10 +605,89 @@ private struct ConnectionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+        }
+        .navigationTitle("Settings")
+        .task(id: devices.map(\.deviceId)) {
+            selectedDeviceId = ActiveDeviceSelection.reconciled(
+                savedID: selectedDeviceId,
+                availableIDs: devices.map(\.deviceId)
+            )
+        }
     }
     private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
+}
+
+private struct DiagnosticsSettingsView: View {
+    let devices: [StoredDevice]
+    @Binding var selection: String
+    @AppStorage("connectionMode") private var connectionMode = ConnectionMode.automatic.rawValue
+    private let appVersion = AppVersionInfo.read()
+
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selection,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
+
+    var body: some View {
+        Form {
+            if let selected {
+                Section("Device") {
+                    ActiveDevicePicker(devices: devices, selection: $selection)
+                    DeviceConnectionBanner(device: selected)
+                    LabeledContent("Device ID", value: selected.deviceId)
+                    LabeledContent("Firmware", value: selected.firmwareVersion ?? "Unknown")
+                    LabeledContent("Secure Protocol", value: "v\(selected.protocolVersion)")
+                    LabeledContent("OTA Schema", value: String(selected.otaSchema))
+                    LabeledContent("Connection Mode", value: connectionMode)
+                    if let lastSeen = selected.lastSeen {
+                        LabeledContent(
+                            "Last Seen",
+                            value: lastSeen.formatted(date: .abbreviated, time: .shortened)
+                        )
+                    }
+                }
+
+                Section("Device Diagnostics") {
+                    NavigationLink("Firmware Logs") {
+                        FirmwareLogsView(
+                            device: selected,
+                            devices: devices,
+                            selection: $selection
+                        )
+                        .id(selected.deviceId)
+                    }
+                    NavigationLink("Export Diagnostics") {
+                        DiagnosticsExportView(device: selected)
+                    }
+                }
+            } else {
+                Section {
+                    ContentUnavailableView(
+                        "No Device Selected",
+                        systemImage: "wrench.and.screwdriver",
+                        description: Text("Add a device to inspect connection and firmware diagnostics.")
+                    )
+                }
+            }
+
+            Section("App Diagnostics") {
+                NavigationLink("App Logs") { AppLogsView() }
+                NavigationLink("Secure Lifecycle Guide") { SecureLifecycleGuideView() }
+            }
+
+            Section("App Build") {
+                LabeledContent("Version", value: appVersion.version)
+                LabeledContent("Build", value: appVersion.build)
+                LabeledContent("Commit", value: appVersion.commit)
+            }
+        }
+        .navigationTitle("Diagnostics")
+        .navigationBarTitleDisplayMode(.inline)
+    }
 }
 
 struct USBPairingInputTestView: View {
@@ -630,7 +851,7 @@ private struct FirmwareLogsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                if devices.count > 1 { Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
+                if devices.count > 1 { ActiveDevicePicker(devices: devices, selection: $selection) }
                 LabeledContent("Connection", value: manager.status)
                 if let metadata = manager.metadata { LabeledContent("Firmware Commit", value: metadata.firmwareCommit ?? "Unknown"); LabeledContent("Reset Reason", value: metadata.resetReason ?? "Unknown") }
                 Picker("Filter", selection: $filter) { ForEach(FirmwareLogFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu)

@@ -2270,8 +2270,21 @@ struct HIDControlView: View {
     init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Circle().fill(manager.connectionSummary.hasPrefix("Active") || manager.connectionSummary.hasPrefix("Ready") ? .green : .orange).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }
+            DeviceConnectionBanner(device: device, showsRecoveryActions: false)
                 .padding(.horizontal)
+                .padding(.bottom, AppTheme.Spacing.compact)
+            HStack {
+                Label(manager.connectionSummary, systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                Picker("Connection", selection: $manager.mode) {
+                    ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .labelsHidden()
+            }
+            .padding(.horizontal)
             Picker("Control", selection: $section) { ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
             Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager); case .macros: MacrosView(manager: manager, controller: macros) } }
         }

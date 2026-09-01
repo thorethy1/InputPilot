@@ -1,6 +1,5 @@
 import SwiftData
 import SwiftUI
-import UIKit
 
 struct DeviceDetailView: View {
     @Bindable var device: StoredDevice
@@ -8,6 +7,7 @@ struct DeviceDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var viewModel: HomeViewModel
     @ObservedObject private var bluetooth: BLEHIDControlTransport
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
 
     @State private var displayName: String = ""
     @State private var showDeleteConfirmation = false
@@ -45,32 +45,17 @@ struct DeviceDetailView: View {
     var body: some View {
         Form {
             Section("Live Connection") {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(presence.color)
-                        .frame(width: 10, height: 10)
-                        .accessibilityHidden(true)
-                    Text(presence.title)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Status \(presence.title)")
-                Text(presence.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if bluetooth.radioState == .unauthorized {
-                    Label("Bluetooth access is disabled for InputPilot", systemImage: "bluetooth.slash")
-                        .foregroundStyle(AppColors.warning)
-                    Button("Open InputPilot Settings") {
-                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                        UIApplication.shared.open(url)
+                if selectedDeviceId == device.deviceId {
+                    Label("Active Device", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                } else {
+                    Button {
+                        selectedDeviceId = device.deviceId
+                    } label: {
+                        Label("Make Active Device", systemImage: "checkmark.circle")
                     }
-                } else if bluetooth.radioState == .poweredOff {
-                    Label("Bluetooth is off", systemImage: "bluetooth.slash")
-                        .foregroundStyle(AppColors.warning)
-                    Text("Turn on Bluetooth in Control Center or Settings. Wi-Fi remains available when the device is connected to the local network.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+                DeviceConnectionBanner(device: device)
             }
 
             Section("Control") {
@@ -281,14 +266,6 @@ struct DeviceDetailView: View {
         } message: {
             Text("InputPilot will continue to work over Bluetooth.")
         }
-    }
-
-    private var presence: DevicePresenceStatus {
-        DevicePresenceStatus.resolve(
-            wifi: viewModel.wifiState(for: device.deviceId),
-            bluetooth: bluetooth.state,
-            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).isEmpty
-        )
     }
 
     private let keepAwakeIntervals = [5_000, 10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000]
@@ -519,6 +496,7 @@ struct DeviceDetailView: View {
 
     private func deleteDevice() {
         let deviceId = device.deviceId
+        if selectedDeviceId == deviceId { selectedDeviceId = "" }
         let repository = DeviceRepository(context: modelContext)
         try? repository.delete(device)
         Task { await InputPilotBluetoothManager.removeSession(deviceId: deviceId) }

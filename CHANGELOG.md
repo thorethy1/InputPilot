@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Start the 0.9 M1 device and connection experience with one remembered active
+  device across Devices, Control, Firmware and Settings; native list actions
+  for fast switching; a shared Connected/Connecting/Offline/Attention Required
+  banner with retry, permission and USB-trust recovery; and a dedicated
+  Diagnostics & Advanced screen for technical connection details.
 - Add aligned Stable/Beta app and firmware update channels, semantic beta
   firmware versions, a dedicated beta release workflow, versioned GitHub
   prereleases and a fixed rolling AltStore beta feed.

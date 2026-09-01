@@ -19,7 +19,7 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyWiFi)
-        XCTAssertEqual(status.title, "Online")
+        XCTAssertEqual(status.title, "Connected")
         XCTAssertEqual(status.detail, "Online via Wi-Fi only")
     }
 
@@ -30,7 +30,7 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyBluetooth)
-        XCTAssertEqual(status.title, "Online")
+        XCTAssertEqual(status.title, "Connected")
         XCTAssertEqual(status.detail, "Online via Bluetooth only")
     }
 
@@ -50,7 +50,7 @@ final class DevicePresenceStatusTests: XCTestCase {
             hasConfiguredWiFi: true
         )
         XCTAssertEqual(status, .readyBoth)
-        XCTAssertEqual(status.title, "Online")
+        XCTAssertEqual(status.title, "Connected")
         XCTAssertEqual(status.detail, "Online via Wi-Fi and Bluetooth")
     }
 
@@ -89,5 +89,43 @@ final class DevicePresenceStatusTests: XCTestCase {
             XCTAssertFalse(state.systemImage.isEmpty, "Missing symbol for \(state)")
             XCTAssertFalse(state.title.isEmpty, "Missing title for \(state)")
         }
+    }
+
+    func testWorkingTransportNeverOffersRetry() {
+        XCTAssertFalse(DevicePresenceStatus.readyBluetooth.canRetry)
+        XCTAssertFalse(DevicePresenceStatus.readyWiFi.canRetry)
+        XCTAssertFalse(DevicePresenceStatus.readyBoth.canRetry)
+    }
+
+    func testOfflineAndRecoverableStatesOfferRetry() {
+        XCTAssertTrue(DevicePresenceStatus.offline.canRetry)
+        XCTAssertTrue(DevicePresenceStatus.reconnecting.canRetry)
+        XCTAssertTrue(DevicePresenceStatus.bluetoothDiscovered.canRetry)
+        XCTAssertFalse(DevicePresenceStatus.authenticationFailed.canRetry)
+        XCTAssertTrue(DevicePresenceStatus.authenticationFailed.needsUSBTrustRecovery)
+    }
+
+    func testActiveDeviceSelectionKeepsExistingSelection() {
+        XCTAssertEqual(
+            ActiveDeviceSelection.resolve(
+                savedID: "AABBCCDDEEFF",
+                availableIDs: ["112233445566", "aabbccddeeff"]
+            ),
+            "aabbccddeeff"
+        )
+    }
+
+    func testActiveDeviceSelectionFallsBackAfterDeletion() {
+        XCTAssertEqual(
+            ActiveDeviceSelection.reconciled(
+                savedID: "deleted-device",
+                availableIDs: ["desk", "travel"]
+            ),
+            "desk"
+        )
+        XCTAssertEqual(
+            ActiveDeviceSelection.reconciled(savedID: "deleted-device", availableIDs: []),
+            ""
+        )
     }
 }
