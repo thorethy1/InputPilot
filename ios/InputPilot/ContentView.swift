@@ -354,6 +354,7 @@ private struct FirmwareDeviceView: View {
     @State private var selectedData: Data?
     @State private var selectedName = ""
     @State private var targetVersion = ""
+    @State private var selectedExpectedSHA256: String?
     @State private var manualValidationError: String?
     private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
@@ -387,13 +388,13 @@ private struct FirmwareDeviceView: View {
                     Label("The installed firmware does not provide a supported update transport.", systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning)
                 } else {
                     Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion, channel: updateChannel) } }
-                    if releaseSource.status.canDownload { Button("Download Firmware \(releaseSource.manifest?.version ?? "")") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
+                    if releaseSource.status.canDownload { Button("Download Firmware \(releaseSource.manifest?.version ?? "")") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; selectedExpectedSHA256 = releaseSource.manifest?.sha256; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
                     if let error = releaseSource.errorMessage { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     if let selectedData { LabeledContent("File", value: selectedName); LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file)) }
                     if let manualValidationError { Label(manualValidationError, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     Button("Choose Firmware File") { importing = true }
                     if selectedData != nil { TextField("Firmware version", text: $targetVersion).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                    if let selectedData { Button("Update Firmware") { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: releaseSource.manifest?.version == targetVersion ? releaseSource.manifest?.sha256 : nil) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
+                    if let selectedData { Button("Update Firmware") { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: selectedExpectedSHA256) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
                 }
             }
             if updater.state != .idle {
@@ -417,7 +418,7 @@ private struct FirmwareDeviceView: View {
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
             guard let data = try? Data(contentsOf: url) else { return }
-            selectedData = data; selectedName = url.lastPathComponent
+            selectedData = data; selectedName = url.lastPathComponent; selectedExpectedSHA256 = nil
             do { targetVersion = try FirmwareImageMetadata.parseAndValidate(data).version; manualValidationError = nil }
             catch { targetVersion = ""; manualValidationError = error.localizedDescription }
         }
