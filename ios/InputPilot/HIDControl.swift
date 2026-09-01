@@ -159,6 +159,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var receiveBuffer = Data()
     private var receiving = false
     private var authTimeoutWork: DispatchWorkItem?
+    private var reconnectWork: DispatchWorkItem?
     private let authTimeout: TimeInterval
     private struct PendingReply {
         let id: UUID
@@ -174,6 +175,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
     init(host: String, deviceId: String, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout }
     func connect() async {
         shouldReconnect = true
+        reconnectWork?.cancel(); reconnectWork = nil
         if connection != nil { return }
         state = state == .offline ? .connecting : .reconnecting
         let conn = NWConnection(host: host, port: 3333, using: .tcp); connection = conn
@@ -181,6 +183,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
             guard let self, let conn, self.connection === conn else { return }
             switch state {
             case .ready:
+                appLog(.tcp, "connected host=\(self.host) deviceId=\(self.deviceId); authenticating")
                 self.startReceiveLoop(on: conn)
                 if let secret = PairingKeyStore.load(deviceId: self.deviceId),
                    let channel = try? SecureChannel(deviceId: deviceId, secret: secret) {
@@ -193,10 +196,20 @@ final class TCPHIDControlTransport: HIDControlTransport {
                     })
                 } else { self.failAuthentication(on: conn) }
             case .failed, .cancelled:
+                appLog(.tcp, "connection ended host=\(self.host) state=\(String(describing: state)) reconnect=\(self.shouldReconnect)")
                 self.authTimeoutWork?.cancel(); self.authTimeoutWork = nil; self.receiving = false; self.receiveBuffer.removeAll(); self.secureChannel = nil; self.isAvailable = false; self.connection = nil; self.failPendingReplies(TransportError.unavailable)
                 let authFailed = self.state == .authenticationFailed
                 self.state = authFailed ? .authenticationFailed : (self.shouldReconnect ? .reconnecting : .offline)
-                if self.shouldReconnect && !authFailed { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
+                if self.shouldReconnect && !authFailed {
+                    self.reconnectWork?.cancel()
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self, self.shouldReconnect else { return }
+                        Task { await self.connect() }
+                    }
+                    self.reconnectWork = work
+                    appLog(.tcp, "reconnect scheduled host=\(self.host) delay=2s")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+                }
             default: self.isAvailable = false
             }
         }
@@ -594,7 +607,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
             appLog(.tcp, "id=\(eid) delivered")
         } catch { appLog(.errors, "TCP id=\(eid) error=\(error.localizedDescription)"); isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
     }
-    func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); failPendingReplies(TransportError.unavailable); isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); reconnectWork = nil; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); failPendingReplies(TransportError.unavailable); isAvailable = false; state = .offline }
 }
 
 enum FirmwareUpdateState: Equatable {
@@ -2081,7 +2094,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
 }
 
-enum InputPilotWiFiManager {
+@MainActor enum InputPilotWiFiManager {
     private static var sessions: [String: TCPHIDControlTransport] = [:]
     static func session(host: String, deviceId: String) -> TCPHIDControlTransport {
         let normalizedHost = DeviceEndpointResolver.sanitizeHost(host).lowercased()

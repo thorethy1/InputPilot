@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Keep the optional fallback Soft-AP and its authenticated control services
+  stable while an iPhone is attached; background station retries are deferred
+  for active AP clients and otherwise run without tearing the AP down.
+- Replace the Wi-Fi-centric status LED rules with transport-neutral OTA,
+  fallback, Keep Awake, controller, ready and unavailable states, and animate
+  matching blink/breathe patterns in the iOS status matrix.
+- Add a pastel accent palette, a custom color picker and a rounded interface
+  style, apply the selected accent consistently, and remove the redundant
+  Secure Lifecycle Guide.
+- Cancel stale queued TCP reconnects when the iOS transport is disconnected to
+  prevent reconnect churn while endpoints or connection modes change.
 - Prepare 0.9.0 Beta 2 with a CoreBluetooth direct-reconnect timeout that
   cancels stuck cached peripherals and forces a real advertisement scan before
   cached reconnect is allowed again.

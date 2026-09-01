@@ -203,6 +203,24 @@ final class HIDRemoteTests: XCTestCase {
             .queryItems?.first(where: { $0.name == "cache_bust" })?.value)
     }
 
+    @MainActor func testLegacyAccentNamesMigrateToPastelPalette() {
+        XCTAssertEqual(AppAccent.resolve("Blue"), .coolBlue)
+        XCTAssertEqual(AppAccent.resolve("Indigo"), .peculiar)
+        XCTAssertEqual(AppAccent.resolve("Orange"), .clock)
+        XCTAssertEqual(AppAccent.resolve("InputPilot Red"), .inputPilot)
+    }
+
+    @MainActor func testCustomAccentHexRoundTrips() {
+        XCTAssertEqual(
+            AccentColorCodec.hex(from: AccentColorCodec.color(from: "#7A91E8")),
+            "#7A91E8"
+        )
+        XCTAssertEqual(
+            AccentColorCodec.hex(from: AccentColorCodec.color(from: "not-a-color")),
+            AccentColorCodec.defaultCustomHex
+        )
+    }
+
     @MainActor func testStableReleaseSelectionRejectsPrerelease() {
         let data = Data(#"{"tag_name":"v0.9.0-beta.1","draft":false,"prerelease":true,"assets":[]}"#.utf8)
         XCTAssertThrowsError(try GitHubFirmwareSource.selectRelease(from: data, channel: .stable))

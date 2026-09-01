@@ -247,7 +247,7 @@ struct DeviceConnectionBanner: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.attention)
         } else if presence.needsUSBTrustRecovery {
-            NavigationLink("Restore USB Trust") { SecureLifecycleGuideView() }
+            NavigationLink("Restore USB Trust") { USBPairingInputTestView() }
         } else if presence.canRetry {
             Button("Try Again") { Task { await retry() } }
                 .disabled(isRetrying)
@@ -552,6 +552,8 @@ private struct ConnectionSettingsView: View {
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
     @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
     @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+    @AppStorage("appInterfaceStyle") private var interfaceStyleName = AppInterfaceStyle.standard.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
     private var selected: StoredDevice? {
         guard let selectedID = ActiveDeviceSelection.resolve(
@@ -594,7 +596,7 @@ private struct ConnectionSettingsView: View {
                 Section("Security") {
                     Label("\(selected.displayName) cannot be used until USB trust is restored.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(AppColors.warning)
-                    NavigationLink("Secure lifecycle") { SecureLifecycleGuideView() }
+                    NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
                 }
             }
             Section("Support") {
@@ -615,12 +617,23 @@ private struct ConnectionSettingsView: View {
                         Text(appearance.rawValue).tag(appearance.rawValue)
                     }
                 }
-                Picker("Accent color", selection: $accentName) {
-                    ForEach(AppAccent.allCases) { accent in
-                        Label(accent.rawValue, systemImage: accent == .inputPilot ? "app.fill" : "circle.fill")
-                            .foregroundStyle(accent.color)
-                            .tag(accent.rawValue)
+                .pickerStyle(.segmented)
+                Picker("Style", selection: $interfaceStyleName) {
+                    ForEach(AppInterfaceStyle.allCases) { style in
+                        Text(style.rawValue).tag(style.rawValue)
                     }
+                }
+                .pickerStyle(.segmented)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 10)], spacing: 10) {
+                    ForEach(AppAccent.allCases) { accent in
+                        accentButton(accent)
+                    }
+                }
+                if selectedAccent == .custom {
+                    ColorPicker("Custom accent color", selection: customAccentBinding, supportsOpacity: false)
+                    Text(customAccentHex)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
                 }
                 Label("Status and destructive colors keep their meaning when the accent changes.", systemImage: "paintpalette")
                     .font(.caption)
@@ -636,22 +649,78 @@ private struct ConnectionSettingsView: View {
         }
     }
     private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
+    private var selectedAccent: AppAccent { AppAccent.resolve(accentName) }
+    private var customAccentBinding: Binding<Color> {
+        Binding(
+            get: { AccentColorCodec.color(from: customAccentHex) },
+            set: {
+                customAccentHex = AccentColorCodec.hex(from: $0)
+                accentName = AppAccent.custom.rawValue
+            }
+        )
+    }
+    private func accentButton(_ accent: AppAccent) -> some View {
+        let color = accent.color(customHex: customAccentHex)
+        let selected = selectedAccent == accent
+        return Button {
+            accentName = accent.rawValue
+        } label: {
+            VStack(spacing: 7) {
+                Circle()
+                    .fill(color)
+                    .shadow(color: color.opacity(0.45), radius: 3)
+                    .frame(width: 28, height: 28)
+                    .overlay {
+                        if selected {
+                            Image(systemName: "checkmark")
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                Text(accent.rawValue)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity, minHeight: 76)
+            .padding(.horizontal, 4)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(selected ? color : .clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accent.rawValue)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+    }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
 }
 
 private struct StatusLEDMatrixView: View {
+    private enum LEDPattern {
+        case solid(opacity: Double)
+        case blinking(period: TimeInterval)
+        case breathing(period: TimeInterval)
+    }
+
     private struct LEDState: Identifiable {
         let id: String
         let color: Color
-        let pattern: String
+        let pattern: LEDPattern
+        let patternDescription: String
         let meaning: String
     }
 
     private let states = [
-        LEDState(id: "Setup", color: .purple, pattern: "Magenta · blinking", meaning: "Fallback access point is active for setup or recovery."),
-        LEDState(id: "Disconnected", color: .red, pattern: "Red · solid", meaning: "Wi-Fi is unavailable, connecting, or the device is running in Bluetooth-only mode."),
-        LEDState(id: "Keep Awake", color: .cyan, pattern: "Cyan · breathing", meaning: "Wi-Fi is connected and automatic pointer movement is enabled."),
-        LEDState(id: "Ready", color: .green, pattern: "Green · dim solid", meaning: "Wi-Fi is connected and InputPilot is idle.")
+        LEDState(id: "Firmware Update", color: .orange, pattern: .blinking(period: 0.36), patternDescription: "Amber · fast blinking", meaning: "An OTA firmware update is active."),
+        LEDState(id: "Fallback AP", color: .purple, pattern: .blinking(period: 1.0), patternDescription: "Magenta · slow blinking", meaning: "The optional fallback network is active because configured Wi-Fi is unavailable."),
+        LEDState(id: "Keep Awake", color: .cyan, pattern: .breathing(period: 1.2), patternDescription: "Cyan · breathing", meaning: "Automatic pointer movement or clicking is enabled, independent of the active transport."),
+        LEDState(id: "Controller Connected", color: .blue, pattern: .solid(opacity: 1), patternDescription: "Blue · solid", meaning: "An authenticated iOS control session is connected over Bluetooth or Wi-Fi."),
+        LEDState(id: "Ready", color: .green, pattern: .solid(opacity: 0.45), patternDescription: "Green · dim solid", meaning: "At least one control transport is ready, including Bluetooth-only operation."),
+        LEDState(id: "Unavailable", color: .red, pattern: .blinking(period: 1.5), patternDescription: "Red · slow blinking", meaning: "No Bluetooth or Wi-Fi control path is currently ready.")
     ]
 
     var body: some View {
@@ -659,26 +728,49 @@ private struct StatusLEDMatrixView: View {
             Section {
                 ForEach(states) { state in
                     HStack(alignment: .top, spacing: 12) {
-                        Circle()
-                            .fill(state.color)
-                            .shadow(color: state.color.opacity(0.55), radius: 4)
-                            .frame(width: 18, height: 18)
+                        AnimatedLED(color: state.color, pattern: state.pattern)
                             .padding(.top, 3)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(state.id).font(.headline)
-                            Text(state.pattern).font(.subheadline).foregroundStyle(.secondary)
+                            Text(state.patternDescription).font(.subheadline).foregroundStyle(.secondary)
                             Text(state.meaning).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     .accessibilityElement(children: .combine)
                 }
             } footer: {
-                Text("Bluetooth advertising recovery is automatic and is recorded in Diagnostics; it does not use a separate LED pattern.")
+                Text("The fallback AP stays active while an iPhone is connected. Bluetooth advertising recovery is automatic and uses no separate LED pattern.")
             }
         }
         .navigationTitle("Status LED Matrix")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private struct AnimatedLED: View {
+        let color: Color
+        let pattern: LEDPattern
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                Circle()
+                    .fill(color)
+                    .opacity(opacity(at: context.date.timeIntervalSinceReferenceDate))
+                    .shadow(color: color.opacity(0.55), radius: 4)
+                    .frame(width: 18, height: 18)
+            }
+        }
+
+        private func opacity(at time: TimeInterval) -> Double {
+            if reduceMotion { return 1 }
+            switch pattern {
+            case let .solid(opacity): opacity
+            case let .blinking(period): time.truncatingRemainder(dividingBy: period) < period / 2 ? 1 : 0.08
+            case let .breathing(period):
+                0.2 + 0.8 * ((sin((time / period) * 2 * .pi) + 1) / 2)
+            }
+        }
     }
 }
 
@@ -740,7 +832,6 @@ private struct DiagnosticsSettingsView: View {
 
             Section("App Diagnostics") {
                 NavigationLink("App Logs") { AppLogsView() }
-                NavigationLink("Secure Lifecycle Guide") { SecureLifecycleGuideView() }
             }
 
             Section("App Build") {
@@ -832,35 +923,6 @@ struct USBPairingInputTestView: View {
         } catch {
             result = .storageFailed
         }
-    }
-}
-
-struct SecureLifecycleGuideView: View {
-    var body: some View {
-        List {
-            Section("Requirements") {
-                Label("Install current Secure Protocol v2 firmware by USB flash.", systemImage: "1.circle")
-                Label("Older firmware is intentionally not compatible with this app.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(AppColors.warning)
-            }
-            Section("Trust") {
-                Label("Connect InputPilot directly to the iPhone by USB.", systemImage: "2.circle")
-                Label("Focus Secure Pairing, then hold BOOT for two seconds.", systemImage: "3.circle")
-                Label("The 128-bit secret is stored in Keychain. A new code invalidates every previous session.", systemImage: "4.circle")
-            }
-            Section("After pairing") {
-                Label("Bluetooth and Wi-Fi carry the same authenticated encrypted protocol.", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(AppColors.success)
-                Label("Setup, controls, diagnostics, management, and OTA never use plaintext endpoints.", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(AppColors.success)
-                Text("If the key is lost, create a new pairing code over USB. Pair every iPhone again because the old code becomes invalid.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
-                NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
-            }
-        }
-        .navigationTitle("Secure Lifecycle")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

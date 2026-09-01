@@ -134,8 +134,10 @@ Secure Protocol v2 session as its automatic fallback.
 Firmware stores up to five networks. Saving a network through the encrypted BLE
 management frame adds or updates it and moves it to the front of the connection
 order. On startup (or after a credentials change), station mode tries each saved
-network before exposing the setup Soft-AP. Passwords are never returned to the
-app.
+network before exposing the fallback Soft-AP. While a phone is attached to that
+AP, automatic station retries are deferred so the local no-router control path
+stays connected. Without AP clients, retries preserve fallback HTTP/TCP until a
+station connection succeeds. Passwords are never returned to the app.
 
 Authenticated text command `WIFI LIST` returns `{"count":2}`. The app then
 requests each bounded entry with `WIFI GET 0`, `WIFI GET 1`, and so on; the

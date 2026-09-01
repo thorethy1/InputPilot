@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 enum AppAppearance: String, CaseIterable, Identifiable {
     case system = "System"
@@ -18,22 +19,82 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 }
 
 enum AppAccent: String, CaseIterable, Identifiable {
-    case inputPilot = "InputPilot Red"
-    case blue = "Blue"
-    case indigo = "Indigo"
-    case teal = "Teal"
-    case orange = "Orange"
+    case berry = "Berry"
+    case coolBlue = "Cool Blue"
+    case fuchsia = "Fuchsia"
+    case protokolle = "Protokolle"
+    case inputPilot = "Aidoku (InputPilot Red)"
+    case clock = "Clock"
+    case peculiar = "Peculiar"
+    case veryPeculiar = "Very Peculiar"
+    case emily = "Emily"
+    case custom = "Custom"
 
     var id: Self { self }
 
-    var color: Color {
+    func color(customHex: String = AccentColorCodec.defaultCustomHex) -> Color {
         switch self {
+        case .berry: Color(red: 1.00, green: 0.48, blue: 0.55)
+        case .coolBlue: Color(red: 0.49, green: 0.58, blue: 0.95)
+        case .fuchsia: Color(red: 0.87, green: 0.43, blue: 0.88)
+        case .protokolle: Color(red: 0.67, green: 0.52, blue: 0.83)
         case .inputPilot: Color("AccentColor")
-        case .blue: .blue
-        case .indigo: .indigo
-        case .teal: .teal
-        case .orange: .orange
+        case .clock: Color(red: 1.00, green: 0.58, blue: 0.15)
+        case .peculiar: Color(red: 0.31, green: 0.39, blue: 0.88)
+        case .veryPeculiar: Color(red: 0.30, green: 0.59, blue: 0.95)
+        case .emily: Color(red: 0.85, green: 0.49, blue: 0.66)
+        case .custom: AccentColorCodec.color(from: customHex)
         }
+    }
+
+    static func resolve(_ storedValue: String) -> Self {
+        if let accent = Self(rawValue: storedValue) { return accent }
+        switch storedValue {
+        case "Blue": .coolBlue
+        case "Indigo": .peculiar
+        case "Teal": .veryPeculiar
+        case "Orange": .clock
+        default: .inputPilot
+        }
+    }
+}
+
+enum AppInterfaceStyle: String, CaseIterable, Identifiable {
+    case standard = "Standard"
+    case rounded = "Rounded"
+
+    var id: Self { self }
+    var fontDesign: Font.Design { self == .rounded ? .rounded : .default }
+    var controlRadius: CGFloat { self == .rounded ? 22 : 12 }
+}
+
+enum AccentColorCodec {
+    static let defaultCustomHex = "#8E8CD8"
+
+    static func color(from value: String) -> Color {
+        let hex = value.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard hex.count == 6, let rgb = UInt64(hex, radix: 16) else {
+            return color(from: defaultCustomHex)
+        }
+        return Color(
+            red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255,
+            blue: Double(rgb & 0xff) / 255
+        )
+    }
+
+    static func hex(from color: Color) -> String {
+        let resolved = UIColor(color)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return defaultCustomHex
+        }
+        return String(
+            format: "#%02X%02X%02X",
+            Int((red * 255).rounded()),
+            Int((green * 255).rounded()),
+            Int((blue * 255).rounded())
+        )
     }
 }
 
@@ -91,7 +152,7 @@ enum AppTheme {
 }
 
 enum AppColors {
-    static let primary = Color("AccentColor")
+    static let primary = Color.accentColor
     static let primaryForeground = Color.white
     static let success = Color.green
     static let warning = Color.orange
@@ -109,6 +170,8 @@ enum AppColors {
 struct InputPilotApp: App {
     @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
     @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+    @AppStorage("appInterfaceStyle") private var interfaceStyleName = AppInterfaceStyle.standard.rawValue
 
     private let container: ModelContainer = {
         let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self])
@@ -118,8 +181,10 @@ struct InputPilotApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .tint(accent.color)
+                .tint(accent.color(customHex: customAccentHex))
                 .preferredColorScheme(appearance.colorScheme)
+                .fontDesign(interfaceStyle.fontDesign)
+                .buttonBorderShape(.roundedRectangle(radius: interfaceStyle.controlRadius))
         }
         .modelContainer(container)
     }
@@ -129,6 +194,10 @@ struct InputPilotApp: App {
     }
 
     private var accent: AppAccent {
-        AppAccent(rawValue: accentName) ?? .inputPilot
+        AppAccent.resolve(accentName)
+    }
+
+    private var interfaceStyle: AppInterfaceStyle {
+        AppInterfaceStyle(rawValue: interfaceStyleName) ?? .standard
     }
 }

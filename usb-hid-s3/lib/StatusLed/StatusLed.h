@@ -6,11 +6,13 @@
 /**
  * Onboard WS2812 status LED (Waveshare ESP32-S3 Mini/Zero, GPIO21).
  *
- * Priority (highest first):
- *   1) Soft-AP setup     → magenta, slow blink
- *   2) WiFi disconnected → red, solid
- *   3) STA + jiggle on   → cyan, breathing pulse
- *   4) STA + jiggle off  → green, solid dim
+ * Transport-neutral priority (highest first):
+ *   1) OTA active             → amber, fast blink
+ *   2) Fallback AP active     → magenta, slow blink
+ *   3) Keep Awake active      → cyan, breathing pulse
+ *   4) Secure controller      → blue, solid
+ *   5) BLE/Wi-Fi ready        → green, dim solid
+ *   6) No control radio ready → red, slow blink
  */
 
 class StatusLed {

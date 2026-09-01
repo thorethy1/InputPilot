@@ -18,6 +18,7 @@
 #include "Logging.h"
 #include "HIDProtocol.h"
 #include "WifiCredentials.h"
+#include "WifiFallbackPolicy.h"
 #include "WifiConfigServer.h"
 #include "BLEOTA.h"
 #include "BLEDiagnostics.h"
@@ -963,6 +964,7 @@ bool RadioManager::setMode(RadioMode m) {
 // ---------------------------------------------------------------------------
 void RadioManager::startSoftAp() {
   staConnecting_ = false;
+  staRetryPreservesSoftAp_ = false;
   softAp_ = true;
   softApStartedMs_ = millis();
   if (provisioningState_ == "connecting") {
@@ -992,21 +994,27 @@ void RadioManager::startSoftAp() {
 }
 
 void RadioManager::startSta(const String &ssid, const String &pass,
-                            size_t credentialIndex) {
-  softAp_ = false;
+                            size_t credentialIndex, bool preserveSoftAp) {
+  staRetryPreservesSoftAp_ = preserveSoftAp && softAp_;
+  if (!staRetryPreservesSoftAp_) softAp_ = false;
   staCredentialIndex_ = credentialIndex;
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(staRetryPreservesSoftAp_ ? WIFI_AP_STA : WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
-  LOG_WIFI("connecting to %s (candidate %u/%u) ...", ssid.c_str(),
+  LOG_WIFI("connecting to %s (candidate %u/%u ap_preserved=%s) ...", ssid.c_str(),
            static_cast<unsigned>(credentialIndex + 1),
-           static_cast<unsigned>(WifiCredentials::count()));
+           static_cast<unsigned>(WifiCredentials::count()),
+           staRetryPreservesSoftAp_ ? "yes" : "no");
   staConnecting_ = true;
   staConnectStartedMs_ = millis();
-  snprintf(status_, sizeof(status_), "wifi:connecting");
+  snprintf(status_, sizeof(status_), staRetryPreservesSoftAp_
+                                        ? "wifi:ap+connecting"
+                                        : "wifi:connecting");
 }
 
 void RadioManager::finishStaConnection() {
+  const bool hadPreservedSoftAp = staRetryPreservesSoftAp_;
   staConnecting_ = false;
+  staRetryPreservesSoftAp_ = false;
   staAttempts_ = 0;
   staDisconnectedSinceMs_ = 0;
   if (provisioningSsid_.length() > 0 && WiFi.SSID() == provisioningSsid_) {
@@ -1014,6 +1022,15 @@ void RadioManager::finishStaConnection() {
     provisioningError_ = "";
   }
   DeviceIdentity::begin();
+  if (hadPreservedSoftAp) {
+    // The infrastructure network is available again, so the fallback AP has
+    // fulfilled its purpose. TCP/HTTP servers stay alive and continue serving
+    // on the station interface; only the AP interface is removed.
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    softAp_ = false;
+    LOG_WIFI("station recovered; fallback Soft-AP stopped");
+  }
   s_tcpServer.begin();
   s_tcpServer.setNoDelay(true);
   g_wifiConfig.begin();  // read-only discovery on :80
@@ -1038,16 +1055,28 @@ void RadioManager::serviceStaConnection() {
   if (!staConnecting_) {
     if (softAp_) {
       const size_t count = WifiCredentials::count();
-      if (count == 0 || millis() - softApStartedMs_ < WIFI_RETRY_INTERVAL_MS)
+      const bool intervalElapsed =
+          millis() - softApStartedMs_ >= WIFI_RETRY_INTERVAL_MS;
+      const size_t apClients = WiFi.softAPgetStationNum();
+      const WifiFallbackPolicy::RetryDecision decision =
+          WifiFallbackPolicy::decide(count, intervalElapsed, apClients);
+      if (decision == WifiFallbackPolicy::RetryDecision::Wait) return;
+      if (decision ==
+          WifiFallbackPolicy::RetryDecision::DeferForActiveClient) {
+        // Never destabilize the no-router control path while an iPhone is
+        // attached. Reconsider after another full retry interval.
+        softApStartedMs_ = millis();
+        LOG_WIFI("Soft-AP station retry deferred; active_clients=%u",
+                 static_cast<unsigned>(apClients));
         return;
+      }
       // SoftAP is a fallback state, not a terminal state. Periodically run a
-      // fresh asynchronous STA pass so restoring the router recovers without
-      // rebooting and without touching BLE.
-      LOG_WIFI("Soft-AP retry interval elapsed; retrying configured networks");
-      stopWifiServices();
+      // fresh asynchronous STA pass. Keep AP services alive throughout the
+      // pass so discovery and authenticated TCP are not torn down.
+      LOG_WIFI("Soft-AP retry interval elapsed; retrying configured networks without stopping AP services");
       staAttempts_ = 0;
       const WifiCreds candidate = WifiCredentials::get(0);
-      startSta(candidate.ssid, candidate.pass, 0);
+      startSta(candidate.ssid, candidate.pass, 0, true);
       return;
     }
     if (WiFi.status() == WL_CONNECTED) {
@@ -1092,10 +1121,19 @@ void RadioManager::serviceStaConnection() {
   if (staAttempts_ < count) {
     const size_t next = (staCredentialIndex_ + 1) % count;
     const WifiCreds candidate = WifiCredentials::get(next);
-    startSta(candidate.ssid, candidate.pass, next);
+    startSta(candidate.ssid, candidate.pass, next, staRetryPreservesSoftAp_);
     return;
   }
-  LOG_WIFI("all configured networks unavailable; returning to Soft-AP discovery");
+  if (staRetryPreservesSoftAp_) {
+    staRetryPreservesSoftAp_ = false;
+    staConnecting_ = false;
+    softAp_ = true;
+    softApStartedMs_ = millis();
+    snprintf(status_, sizeof(status_), "wifi:ap");
+    LOG_WIFI("all configured networks unavailable; preserved Soft-AP remains active");
+    return;
+  }
+  LOG_WIFI("all configured networks unavailable; starting Soft-AP fallback");
   startSoftAp();
 }
 
@@ -1103,6 +1141,7 @@ void RadioManager::startWifi() {
   staCredentialIndex_ = 0;
   staAttempts_ = 0;
   staDisconnectedSinceMs_ = 0;
+  staRetryPreservesSoftAp_ = false;
   WifiCreds c = WifiCredentials::get(0);
   if (c.ssid.length() == 0) {
     LOG_WIFI("no STA credentials in NVS; starting Soft-AP setup");
@@ -1129,6 +1168,7 @@ void RadioManager::stopWifiServices() {
 void RadioManager::stopWifi() {
   stopWifiServices();
   staConnecting_ = false;
+  staRetryPreservesSoftAp_ = false;
   softAp_ = false;
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true);
@@ -1146,7 +1186,18 @@ void RadioManager::applyWifiCredentials(const String &provisionedSsid) {
   }
   // Provisioning arrives through the live BLE Secure Session. Do not turn the
   // shared Wi-Fi/BLE controller fully off or block the main loop while joining
-  // the home network. Keep BLE responsive and advance STA setup from loop().
+  // the home network. When setup happens from the fallback AP, preserve that
+  // AP and its authenticated TCP session until STA has actually succeeded.
+  if (softAp_) {
+    const WifiCreds candidate = WifiCredentials::get(0);
+    if (candidate.ssid.length() > 0) {
+      LOG_WIFI("applying credentials; trying STA while preserving fallback AP");
+      staAttempts_ = 0;
+      startSta(candidate.ssid, candidate.pass, 0, true);
+      LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
+      return;
+    }
+  }
   LOG_WIFI("applying credentials; transitioning to STA asynchronously");
   stopWifiServices();
   WiFi.disconnect(false, false);
@@ -1297,6 +1348,10 @@ bool RadioManager::isBleConnected() const {
   return s_bleOwner.connected() || (s_bleServer && s_bleServer->getConnectedCount() > 0);
 }
 
+bool RadioManager::isControlSessionConnected() const {
+  return bleSessionEstablished() || s_tcpSecureSession.established();
+}
+
 void RadioManager::serviceBleAdvertising() {
   const uint32_t now = millis();
   if (now - lastBleAdvertisingCheckMs_ < BLE_ADVERTISING_CHECK_INTERVAL_MS) return;
@@ -1378,7 +1433,9 @@ void RadioManager::loop() {
   if (!wifiEnabled()) return;
 
   serviceStaConnection();
-  if (staConnecting_) return;
+  // A background STA retry from AP_STA must not pause the fallback portal or
+  // its authenticated TCP control session.
+  if (staConnecting_ && !softAp_) return;
 
   // Plain HTTP is discovery-only. Setup and management use the secure TCP port.
   g_wifiConfig.loop();

@@ -42,6 +42,7 @@ public:
   // never inferred from the absence of a connection.
   bool isBleAdvertising() const;
   bool isBleConnected() const;
+  bool isControlSessionConnected() const;
   uint32_t bleAdvertisingRecoveryCount() const { return bleAdvertisingRecoveryCount_; }
   uint32_t bleAdvertisingRecoveryFailureCount() const { return bleAdvertisingRecoveryFailureCount_; }
 
@@ -66,7 +67,8 @@ private:
   void stopBle();
   void serviceBleAdvertising();
   void startSoftAp();
-  void startSta(const String &ssid, const String &pass, size_t credentialIndex);
+  void startSta(const String &ssid, const String &pass, size_t credentialIndex,
+                bool preserveSoftAp = false);
   void finishStaConnection();
   void serviceStaConnection();
   void stopWifiServices();
@@ -79,6 +81,7 @@ private:
   size_t staAttempts_ = 0;
   uint32_t staDisconnectedSinceMs_ = 0;
   uint32_t softApStartedMs_ = 0;
+  bool staRetryPreservesSoftAp_ = false;
   String provisioningSsid_;
   String provisioningState_ = "idle";
   String provisioningError_;

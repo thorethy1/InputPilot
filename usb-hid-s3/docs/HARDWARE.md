@@ -83,7 +83,9 @@ Do not decode against a different build: addresses and stacks will not match.
 
 | Appearance | Meaning |
 |------------|---------|
-| Solid red | WiFi down / not associated |
-| Magenta blink | Soft-AP setup (friendly MAC-derived name, e.g. `InputPilot-Dupe9`) |
-| Dim solid green | STA up, jiggle off |
-| Cyan breathing | STA up, jiggle on |
+| Fast amber blink | OTA firmware update active |
+| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Dupe9`) |
+| Cyan breathing | Keep Awake movement or clicking enabled |
+| Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
+| Dim solid green | At least one BLE/Wi-Fi control path is ready |
+| Slow red blink | No control radio is currently ready |

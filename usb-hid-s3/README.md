@@ -72,17 +72,23 @@ Optional Soft-AP WPA protection (compile-time, via `wifi_secrets.h`):
 #define WIFI_AP_PASS "setup-secret"       // Soft-AP WPA (8+ chars)
 ```
 
-The Soft-AP is a bootstrap network only. Wi-Fi credentials and all other
-sensitive data are accepted exclusively through Secure Protocol v2.
+The Soft-AP is an optional fallback whenever every configured infrastructure
+network is unavailable. It remains active while a phone is attached, and
+periodic station retries never tear down its HTTP/TCP services. When the router
+becomes reachable again, InputPilot returns to station mode. Wi-Fi credentials
+and all other sensitive data are accepted exclusively through Secure Protocol
+v2.
 
 ### Status LED (onboard WS2812, GPIO21)
 
 | Appearance | Meaning |
 |------------|---------|
-| Solid red | WiFi disconnected (radio off / not associated) |
-| Magenta blink | Soft-AP setup mode (for example `InputPilot-Dupe9`) |
-| Dim solid green | STA connected, jiggle **off** |
-| Cyan breathing | STA connected, jiggle **on** |
+| Fast amber blink | OTA firmware update active |
+| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Dupe9`) |
+| Cyan breathing | Keep Awake movement or clicking enabled |
+| Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
+| Dim solid green | At least one BLE/Wi-Fi control path is ready |
+| Slow red blink | No control radio is currently ready |
 
 Protocol and hardware validation: [`../docs/SECURE_PROTOCOL_V2.md`](../docs/SECURE_PROTOCOL_V2.md)
 
