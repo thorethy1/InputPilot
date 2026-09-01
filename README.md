@@ -27,6 +27,7 @@ WS2812).
 
 2. Build & Flash
 
+```bash
 # Install dependencies
 sudo apt update
 sudo apt install python3 python3-pip python3-venv git
@@ -51,6 +52,7 @@ esptool --chip esp32s3 \
   --baud 460800 \
   write-flash 0x0 initial-flash.bin
 # Disconnect and reconnect the USB cable.
+```
 
 Note: Replace /dev/ttyACM0 with the serial port assigned to your ESP32-S3 if necessary.
 
