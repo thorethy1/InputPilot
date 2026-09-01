@@ -71,35 +71,91 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Start CI for release commit
-        shell: bash
-        run: >-
-          gh workflow run ci.yml
-          --ref '${{ steps.version.outputs.branch }}'
-          --repo "$GITHUB_REPOSITORY"
-
-      - name: Require successful CI
+      - name: Reuse or start CI for release commit
         id: ci
         shell: bash
         run: |
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
+          release_ref='${{ steps.version.outputs.branch }}'
           run_id=""
-          for attempt in $(seq 1 60); do
-            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-              --commit "$sha" --event workflow_dispatch --limit 10 \
-              --json databaseId,status,conclusion,url)"
-            run_id="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
-            if [[ -n "$run_id" ]]; then break; fi
-            echo "Waiting for CI run on $sha (attempt $attempt/60)..."
-            sleep 5
-          done
+          reused="false"
+
+          has_required_artifacts() {
+            local candidate="$1"
+            local artifacts
+            artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100")"
+            jq -e \
+              --arg firmware "InputPilot-Firmware-$sha" \
+              --arg ios "InputPilot-unsigned-$sha" '
+                [.artifacts[] | select(.expired == false) | .name] as $names |
+                ($names | index($firmware)) != null and
+                ($names | index($ios)) != null
+              ' <<<"$artifacts" >/dev/null
+          }
+
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --commit "$sha" --limit 30 \
+            --json databaseId,status,conclusion,url)"
+
+          while read -r candidate; do
+            if has_required_artifacts "$candidate"; then
+              run_id="$candidate"
+              reused="true"
+              echo "Reusing successful CI run $run_id for exact commit $sha."
+              break
+            fi
+          done < <(jq -r '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId' <<<"$runs")
+
           if [[ -z "$run_id" ]]; then
-            echo "::error::CI did not start for $sha."
-            exit 1
+            active_id="$(jq -r '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")][0].databaseId // empty' <<<"$runs")"
+            if [[ -n "$active_id" ]]; then
+              echo "Waiting for existing CI run $active_id on exact commit $sha."
+              if gh run watch "$active_id" --repo "$GITHUB_REPOSITORY" --exit-status && has_required_artifacts "$active_id"; then
+                run_id="$active_id"
+                reused="true"
+                echo "Reusing completed CI run $run_id."
+              else
+                echo "Existing CI run $active_id failed or did not retain all release artifacts; starting a fallback run."
+              fi
+            fi
           fi
+
+          if [[ -z "$run_id" ]]; then
+            declare -A previous_runs=()
+            while read -r existing_id; do previous_runs["$existing_id"]=1; done \
+              < <(jq -r '.[].databaseId' <<<"$runs")
+
+            echo "No reusable CI run with release artifacts exists; dispatching CI for $sha."
+            gh workflow run ci.yml --ref "$release_ref" --repo "$GITHUB_REPOSITORY"
+
+            for attempt in $(seq 1 60); do
+              dispatched="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+                --commit "$sha" --event workflow_dispatch --limit 30 \
+                --json databaseId,status,conclusion,url)"
+              while read -r candidate; do
+                if [[ -z "${previous_runs[$candidate]:-}" ]]; then
+                  run_id="$candidate"
+                  break
+                fi
+              done < <(jq -r '.[].databaseId' <<<"$dispatched")
+              if [[ -n "$run_id" ]]; then break; fi
+              echo "Waiting for dispatched CI run on $sha (attempt $attempt/60)..."
+              sleep 5
+            done
+            if [[ -z "$run_id" ]]; then
+              echo "::error::CI did not start for $sha."
+              exit 1
+            fi
+            gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+            if ! has_required_artifacts "$run_id"; then
+              echo "::error::CI run $run_id did not produce both required release artifacts."
+              exit 1
+            fi
+          fi
+
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          echo "reused=$reused" >> "$GITHUB_OUTPUT"
 
       - name: Tag and publish release
         shell: bash
@@ -145,6 +201,7 @@ jobs:
             echo
             echo "Stable version prepared from ${{ steps.version.outputs.previous }} using Version.xcconfig."
             echo "CI run: ${{ steps.ci.outputs.run_id }}"
+            echo "Existing CI reused: ${{ steps.ci.outputs.reused }}"
             echo "Release asset run: $run_id"
             echo "The public release and its verified assets are complete."
           } >> "$GITHUB_STEP_SUMMARY"

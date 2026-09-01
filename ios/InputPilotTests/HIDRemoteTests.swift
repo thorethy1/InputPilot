@@ -178,6 +178,31 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(release.tagName, "v0.9.0-beta.2")
     }
 
+    @MainActor func testBetaReleaseSelectionUsesHighestVersionRegardlessOfAPIOrder() throws {
+        let data = Data(#"""
+        [
+          {"tag_name":"v0.9.0-beta.1","draft":false,"prerelease":true,"assets":[
+            {"name":"firmware-manifest.json","browser_download_url":"https://example.com/beta1/manifest"},
+            {"name":"firmware.bin","browser_download_url":"https://example.com/beta1/firmware"}
+          ]},
+          {"tag_name":"v0.9.0-beta.2","draft":false,"prerelease":true,"assets":[
+            {"name":"firmware-manifest.json","browser_download_url":"https://example.com/beta2/manifest"},
+            {"name":"firmware.bin","browser_download_url":"https://example.com/beta2/firmware"}
+          ]}
+        ]
+        """#.utf8)
+        let release = try GitHubFirmwareSource.selectRelease(from: data, channel: .beta)
+        XCTAssertEqual(release.tagName, "v0.9.0-beta.2")
+    }
+
+    @MainActor func testFirmwareReleaseRequestBypassesCaches() {
+        let request = GitHubFirmwareSource.releaseRequest(for: .beta)
+        XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-cache")
+        XCTAssertNotNil(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "cache_bust" })?.value)
+    }
+
     @MainActor func testStableReleaseSelectionRejectsPrerelease() {
         let data = Data(#"{"tag_name":"v0.9.0-beta.1","draft":false,"prerelease":true,"assets":[]}"#.utf8)
         XCTAssertThrowsError(try GitHubFirmwareSource.selectRelease(from: data, channel: .stable))

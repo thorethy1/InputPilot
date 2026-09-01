@@ -443,7 +443,7 @@ private struct FirmwareDeviceView: View {
     func check(installed: String?, deviceOTASchema: Int, appVersion: String, channel: UpdateChannel = .stable) async {
         errorMessage = nil; manifest = nil; firmwareURL = nil; status = .checking
         do {
-            var request = URLRequest(url: channel.releaseAPIURL); request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            let request = Self.releaseRequest(for: channel)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
             let release = try Self.selectRelease(from: data, channel: channel)
@@ -507,6 +507,21 @@ struct GitHubReleaseDescriptor: Codable, Equatable, Sendable {
 }
 
 extension GitHubFirmwareSource {
+    static func releaseRequest(for channel: UpdateChannel) -> URLRequest {
+        var components = URLComponents(url: channel.releaseAPIURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = (components?.queryItems ?? []) + [
+            URLQueryItem(name: "cache_bust", value: UUID().uuidString)
+        ]
+        var request = URLRequest(
+            url: components?.url ?? channel.releaseAPIURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 15
+        )
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
     static func selectRelease(from data: Data, channel: UpdateChannel) throws -> GitHubReleaseDescriptor {
         let decoder = JSONDecoder()
         switch channel {
@@ -516,10 +531,15 @@ extension GitHubFirmwareSource {
             return release
         case .beta:
             let releases = try decoder.decode([GitHubReleaseDescriptor].self, from: data)
-            guard let release = releases.first(where: {
+            let eligible = releases.filter {
                 !$0.draft && $0.prerelease && $0.isVersionedBeta &&
                 $0.assetURL(named: manifestAssetName) != nil &&
                 $0.assetURL(named: firmwareAssetName) != nil
+            }
+            guard let release = eligible.max(by: {
+                guard let lhs = SemanticVersion(String($0.tagName.dropFirst())),
+                      let rhs = SemanticVersion(String($1.tagName.dropFirst())) else { return false }
+                return lhs < rhs
             }) else { throw URLError(.resourceUnavailable) }
             return release
         }
