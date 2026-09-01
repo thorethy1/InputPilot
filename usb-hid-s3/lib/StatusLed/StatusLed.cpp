@@ -21,9 +21,9 @@ void StatusLed::show(uint8_t r, uint8_t g, uint8_t b) {
   lastR_ = r;
   lastG_ = g;
   lastB_ = b;
-  // Waveshare ESP32-S3-Zero/Mini WS2812 is wired RGB (Arduino core default is
-  // GRB, which swaps red↔green on this board — STA-idle green looked red).
-  rgbLedWriteOrdered(STATUS_LED_PIN, LED_COLOR_ORDER_RGB, r, g, b);
+  // Waveshare ESP32-S3-Zero/Mini onboard WS2812 uses GRB channel order.
+  // Keep logical r/g/b values here and let the driver reorder them for the LED.
+  rgbLedWriteOrdered(STATUS_LED_PIN, LED_COLOR_ORDER_GRB, r, g, b);
 }
 
 void StatusLed::loop() {
