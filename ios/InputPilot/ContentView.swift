@@ -46,11 +46,13 @@ struct ContentView: View {
         .tint(AppColors.primary)
         .environmentObject(viewModel)
         .task(id: storedDevices.map(\.deviceId)) {
+            viewModel.monitorBonjour(devices: storedDevices, context: modelContext)
             while !Task.isCancelled {
                 await viewModel.refreshQuietly(devices: storedDevices, context: modelContext)
                 try? await Task.sleep(nanoseconds: HomeViewModel.presencePollNanoseconds)
             }
         }
+        .onDisappear { viewModel.stopBonjourMonitoring() }
     }
 
     private var deviceList: some View {

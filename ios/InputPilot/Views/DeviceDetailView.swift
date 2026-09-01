@@ -32,16 +32,19 @@ struct DeviceDetailView: View {
     init(device: StoredDevice) {
         _device = Bindable(wrappedValue: device)
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
+        _displayName = State(initialValue: device.displayName)
+        let identity = device.cachedUSBIdentity
+        _usbManufacturerName = State(initialValue: identity?.manufacturerName ?? "thorethy")
+        _usbProductName = State(initialValue: identity?.productName ?? "InputPilot")
+        _usbVID = State(initialValue: identity.map { String(format: "0x%04X", $0.vid) } ?? "0xCAFE")
+        _usbPID = State(initialValue: identity.map { String(format: "0x%04X", $0.pid) } ?? "0x4001")
+        _usbSerialNumber = State(initialValue: identity?.serialNumber ?? "")
+        _wifiNetworks = State(initialValue: device.cachedWiFiNetworks)
     }
 
     var body: some View {
         Form {
-            Section("Friendly name") {
-                TextField("Name", text: $displayName)
-                    .onSubmit { saveDisplayName() }
-            }
-
-            Section("Status") {
+            Section("Live Connection") {
                 HStack(spacing: 8) {
                     Circle()
                         .fill(presence.color)
@@ -70,7 +73,7 @@ struct DeviceDetailView: View {
                 }
             }
 
-            Section("Remote Control") {
+            Section("Control") {
                 NavigationLink {
                     HIDControlView(device: device)
                 } label: {
@@ -78,7 +81,37 @@ struct DeviceDetailView: View {
                 }
             }
 
+            Section("Keep Awake") {
+                Toggle("Move pointer periodically", isOn: moveEnabledBinding)
+                    .disabled(!canConfigureKeepAwake || keepAwakeBusy)
+                Picker("Movement interval", selection: moveIntervalBinding) {
+                    ForEach(keepAwakeIntervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
+                }
+                .disabled(!device.jiggleEnabled || !canConfigureKeepAwake || keepAwakeBusy)
+                Toggle("Click periodically", isOn: clickEnabledBinding)
+                    .disabled(!canConfigureKeepAwake || keepAwakeBusy)
+                Picker("Click interval", selection: clickIntervalBinding) {
+                    ForEach(keepAwakeIntervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
+                }
+                .disabled(!device.clickEnabled || !canConfigureKeepAwake || keepAwakeBusy)
+                HStack {
+                    Button("Test movement") { Task { await testKeepAwake(.mouseMove(8, 0)) } }
+                    Spacer()
+                    Button("Test click") { Task { await testKeepAwake(.click(.left)) } }
+                }
+                .disabled(!canConfigureKeepAwake || keepAwakeBusy)
+                if keepAwakeBusy { ProgressView() }
+                if let keepAwakeMessage {
+                    Text(keepAwakeMessage).font(.caption).foregroundStyle(.secondary)
+                }
+                Text("InputPilot stores both schedules in firmware and continues running them after the phone disconnects.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Device") {
+                TextField("Friendly Name", text: $displayName)
+                    .onSubmit { saveDisplayName() }
                 LabeledContent("Device ID", value: device.deviceId)
                 LabeledContent("USB Serial Number", value: usbSerialNumber.isEmpty ? "Unavailable" : usbSerialNumber)
                 LabeledContent("Hostname", value: device.mdnsHost)
@@ -94,24 +127,15 @@ struct DeviceDetailView: View {
                 LabeledContent("Secure Protocol", value: "v\(device.protocolVersion)")
                 LabeledContent("OTA Schema", value: String(device.otaSchema))
                 LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
-                let transports = [device.capabilities.contains("wifi_transport") ? "Wi-Fi" : nil, device.capabilities.contains("ble_transport") ? "Bluetooth" : nil].compactMap { $0 }
-                LabeledContent("Connection", value: transports.isEmpty ? "Unknown" : transports.joined(separator: " + "))
-            }
-
-            Section("Management") {
-                Button("Restart InputPilot") { Task { await rebootDevice() } }
-                    .disabled(managementBusy || !hasPairingKey)
-                if managementBusy { ProgressView() }
-                if let managementMessage {
-                    Text(managementMessage).font(.caption).foregroundStyle(.secondary)
-                }
             }
 
             if device.capabilities.contains("secure_wifi_setup") {
                 Section {
                     if device.capabilities.contains("multiple_wifi") {
                         if wifiNetworks.isEmpty {
-                            Text("No Wi-Fi networks configured")
+                            Text(device.wifiNetworksUpdatedAt == nil
+                                ? "Wi-Fi networks have not been loaded yet"
+                                : "No Wi-Fi networks configured")
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(wifiNetworks, id: \.self) { ssid in
@@ -212,32 +236,13 @@ struct DeviceDetailView: View {
                 }
             }
 
-            Section("Keep Awake") {
-                Toggle("Move pointer periodically", isOn: moveEnabledBinding)
-                    .disabled(!canConfigureKeepAwake || keepAwakeBusy)
-                Picker("Movement interval", selection: moveIntervalBinding) {
-                    ForEach(keepAwakeIntervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
+            Section("Management") {
+                Button("Restart InputPilot") { Task { await rebootDevice() } }
+                    .disabled(managementBusy || !hasPairingKey)
+                if managementBusy { ProgressView() }
+                if let managementMessage {
+                    Text(managementMessage).font(.caption).foregroundStyle(.secondary)
                 }
-                .disabled(!device.jiggleEnabled || !canConfigureKeepAwake || keepAwakeBusy)
-                Toggle("Click periodically", isOn: clickEnabledBinding)
-                    .disabled(!canConfigureKeepAwake || keepAwakeBusy)
-                Picker("Click interval", selection: clickIntervalBinding) {
-                    ForEach(keepAwakeIntervals, id: \.self) { Text(intervalLabel($0)).tag($0) }
-                }
-                .disabled(!device.clickEnabled || !canConfigureKeepAwake || keepAwakeBusy)
-                HStack {
-                    Button("Test movement") { Task { await testKeepAwake(.mouseMove(8, 0)) } }
-                    Spacer()
-                    Button("Test click") { Task { await testKeepAwake(.click(.left)) } }
-                }
-                .disabled(!canConfigureKeepAwake || keepAwakeBusy)
-                if keepAwakeBusy { ProgressView() }
-                if let keepAwakeMessage {
-                    Text(keepAwakeMessage).font(.caption).foregroundStyle(.secondary)
-                }
-                Text("InputPilot stores both schedules in firmware and continues running them after the phone disconnects.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -252,6 +257,7 @@ struct DeviceDetailView: View {
             async let bluetoothConnection: Void = bluetooth.connect()
             await viewModel.refreshDevice(device, context: modelContext)
             await bluetoothConnection
+            await loadDeviceMetadata()
             await loadUSBIdentity()
             await loadWiFiNetworks()
         }
@@ -293,6 +299,39 @@ struct DeviceDetailView: View {
     private var hasPairingKey: Bool { PairingKeyStore.load(deviceId: device.deviceId) != nil }
 
     @MainActor
+    private func loadDeviceMetadata() async {
+        guard hasPairingKey else { return }
+        var metadata: DiagnosticsMetadata?
+        if bluetooth.state == .ready {
+            if let data = try? await bluetooth.diagnosticsInfo() {
+                metadata = try? JSONDecoder().decode(DiagnosticsMetadata.self, from: data)
+            }
+        }
+        if metadata?.runningPartition == nil,
+           viewModel.wifiState(for: device.deviceId) == .reachable,
+           let host = wifiControlHost {
+            metadata = (try? await InputPilotWiFiManager.session(
+                host: host, deviceId: device.deviceId
+            ).diagnosticsInfo()).flatMap {
+                try? JSONDecoder().decode(DiagnosticsMetadata.self, from: $0)
+            } ?? metadata
+        }
+        guard let metadata,
+              metadata.deviceId.caseInsensitiveCompare(device.deviceId) == .orderedSame else { return }
+        device.firmwareVersion = metadata.firmware
+        device.protocolVersion = metadata.protocolVersion
+        device.otaSchema = metadata.otaSchema
+        if let runningPartition = metadata.runningPartition {
+            device.runningPartition = runningPartition
+        }
+        if let bootPartition = metadata.bootPartition {
+            device.bootPartition = bootPartition
+        }
+        device.lastSeen = Date()
+        try? modelContext.save()
+    }
+
+    @MainActor
     private func loadUSBIdentity() async {
         guard hasPairingKey, device.capabilities.contains("secure_usb_identity") else { return }
         usbBusy = true
@@ -317,14 +356,12 @@ struct DeviceDetailView: View {
                 } catch { lastError = error }
             }
             guard let identity else { throw lastError }
-            usbManufacturerName = identity.manufacturerName ?? ""
-            usbProductName = identity.productName
-            usbVID = String(format: "0x%04X", identity.vid)
-            usbPID = String(format: "0x%04X", identity.pid)
-            usbSerialNumber = identity.serialNumber
+            applyUSBIdentity(identity)
             usbMessage = nil
         } catch {
-            usbMessage = "Could not load USB identity: \(error.localizedDescription)"
+            usbMessage = device.cachedUSBIdentity == nil
+                ? "Could not load USB identity: \(error.localizedDescription)"
+                : "Showing the last known USB identity. Refresh failed: \(error.localizedDescription)"
         }
     }
 
@@ -333,19 +370,43 @@ struct DeviceDetailView: View {
         guard device.capabilities.contains("multiple_wifi") else { return }
         var lastError: Error = TransportError.unavailable
         if bluetooth.state == .ready {
-            do { wifiNetworks = try await bluetooth.configuredWiFiNetworks(); wifiMessage = nil; return }
+            do {
+                applyWiFiNetworks(try await bluetooth.configuredWiFiNetworks())
+                wifiMessage = nil
+                return
+            }
             catch { lastError = error }
         }
         if let host = wifiControlHost {
             do {
-                wifiNetworks = try await InputPilotWiFiManager.session(
+                applyWiFiNetworks(try await InputPilotWiFiManager.session(
                     host: host, deviceId: device.deviceId
-                ).configuredWiFiNetworks()
+                ).configuredWiFiNetworks())
                 wifiMessage = nil
                 return
             } catch { lastError = error }
         }
-        wifiMessage = "Could not load Wi-Fi networks: \(lastError.localizedDescription)"
+        wifiMessage = device.wifiNetworksUpdatedAt == nil
+            ? "Could not load Wi-Fi networks: \(lastError.localizedDescription)"
+            : "Showing the last known Wi-Fi networks. Refresh failed: \(lastError.localizedDescription)"
+    }
+
+    @MainActor
+    private func applyUSBIdentity(_ identity: USBIdentity) {
+        usbManufacturerName = identity.manufacturerName ?? device.usbManufacturerName ?? ""
+        usbProductName = identity.productName
+        usbVID = String(format: "0x%04X", identity.vid)
+        usbPID = String(format: "0x%04X", identity.pid)
+        usbSerialNumber = identity.serialNumber
+        device.cacheUSBIdentity(identity)
+        try? modelContext.save()
+    }
+
+    @MainActor
+    private func applyWiFiNetworks(_ networks: [String]) {
+        wifiNetworks = networks
+        device.cacheWiFiNetworks(networks)
+        try? modelContext.save()
     }
 
     @MainActor
@@ -358,7 +419,10 @@ struct DeviceDetailView: View {
             try await bluetooth.setWiFi(ssid: ssid, password: newWifiPassword)
             newWifiSSID = ""; newWifiPassword = ""
             wifiMessage = "Wi-Fi network saved."
-            if device.capabilities.contains("multiple_wifi") { await loadWiFiNetworks() }
+            if device.capabilities.contains("multiple_wifi") {
+                applyWiFiNetworks([ssid] + wifiNetworks.filter { $0 != ssid })
+                await loadWiFiNetworks()
+            }
         } catch { wifiMessage = error.localizedDescription }
     }
 
@@ -368,7 +432,7 @@ struct DeviceDetailView: View {
         defer { wifiBusy = false }
         do {
             try await bluetooth.removeWiFi(ssid: ssid)
-            wifiNetworks.removeAll { $0 == ssid }
+            applyWiFiNetworks(wifiNetworks.filter { $0 != ssid })
             wifiMessage = "Wi-Fi network removed."
         } catch { wifiMessage = error.localizedDescription }
     }
@@ -379,7 +443,7 @@ struct DeviceDetailView: View {
         defer { wifiBusy = false }
         do {
             try await bluetooth.clearWiFiNetworks()
-            wifiNetworks = []
+            applyWiFiNetworks([])
             wifiMessage = "All Wi-Fi networks removed. Bluetooth remains available."
         } catch { wifiMessage = error.localizedDescription }
     }
@@ -528,6 +592,13 @@ struct DeviceDetailView: View {
                 } else { throw TransportError.unavailable }
                 usbVID = String(format: "0x%04X", vid)
                 usbPID = String(format: "0x%04X", pid)
+                applyUSBIdentity(USBIdentity(
+                    manufacturerName: supportsManufacturer ? manufacturer : nil,
+                    productName: product,
+                    vid: vid,
+                    pid: pid,
+                    serialNumber: serial
+                ))
                 usbMessage = "Saved securely. InputPilot is restarting with the new USB identity."
                 return
             } catch {
@@ -559,6 +630,13 @@ struct DeviceDetailView: View {
                 usbVID = "0xCAFE"
                 usbPID = "0x4001"
                 usbSerialNumber = device.deviceId
+                applyUSBIdentity(USBIdentity(
+                    manufacturerName: device.capabilities.contains("usb_manufacturer") ? "thorethy" : nil,
+                    productName: "InputPilot",
+                    vid: 0xCAFE,
+                    pid: 0x4001,
+                    serialNumber: device.deviceId
+                ))
                 usbMessage = "Defaults restored securely. InputPilot is restarting."
                 return
             } catch {

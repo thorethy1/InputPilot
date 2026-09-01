@@ -21,6 +21,17 @@ enum DeviceEndpointResolver {
         return urls
     }
 
+    /// Returns a canonical IPv4 address only when Bonjour resolved to a direct
+    /// address. Hostnames are deliberately excluded from the last-known IP
+    /// cache so that the cache remains useful when mDNS is unavailable.
+    static func directIPv4Address(from host: String) -> String? {
+        let parts = sanitizeHost(host).split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let octets = parts.compactMap { UInt8($0) }
+        guard octets.count == 4 else { return nil }
+        return octets.map(String.init).joined(separator: ".")
+    }
+
     /// Keeps the address that actually answered a manual/direct probe. The
     /// device-reported STA address may be unreachable across a VPN.
     static func directAddress(reportedSTAIP: String?, fallbackHost: String) -> String? {

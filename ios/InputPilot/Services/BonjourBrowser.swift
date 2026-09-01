@@ -135,11 +135,7 @@ enum BonjourDiscoveryFilter {
     }
 
     private static func ipv4Host(_ host: String) -> String? {
-        let sanitized = DeviceEndpointResolver.sanitizeHost(host)
-        let parts = sanitized.split(separator: ".")
-        guard parts.count == 4,
-              parts.allSatisfy({ UInt8($0) != nil }) else { return nil }
-        return sanitized
+        DeviceEndpointResolver.directIPv4Address(from: host)
     }
 
 }
@@ -223,20 +219,18 @@ final class BonjourBrowser: BonjourBrowserProtocol {
         }
 
         let key = serviceKey(for: result)
-        if services[key] != nil {
-            return
-        }
-
         let deviceId = txt["id"]
-        let placeholder = DiscoveredService(
-            id: key,
-            deviceId: deviceId,
-            name: name,
-            host: provisionalHost,
-            port: 80,
-            txt: txt
-        )
-        services[key] = placeholder
+        if services[key] == nil {
+            services[key] = DiscoveredService(
+                id: key,
+                deviceId: deviceId,
+                name: name,
+                host: provisionalHost,
+                port: 80,
+                txt: txt
+            )
+        }
+        guard resolveConnections[key] == nil else { return }
         resolveEndpoint(result, key: key, name: name, domain: domain, txt: txt, deviceId: deviceId)
     }
 

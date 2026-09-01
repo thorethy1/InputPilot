@@ -18,6 +18,14 @@ final class StoredDevice {
     var otaSchema: Int = 0
     var runningPartition: String?
     var bootPartition: String?
+    var usbManufacturerName: String?
+    var usbProductName: String?
+    var usbVendorID: Int?
+    var usbProductID: Int?
+    var usbSerialNumber: String?
+    var usbIdentityUpdatedAt: Date?
+    var cachedWiFiNetworks: [String] = []
+    var wifiNetworksUpdatedAt: Date?
     var bluetoothDiscovered: Bool = false
     var lastCapabilitiesUpdate: Date?
 
@@ -54,6 +62,14 @@ final class StoredDevice {
         self.otaSchema = otaSchema
         self.runningPartition = nil
         self.bootPartition = nil
+        self.usbManufacturerName = nil
+        self.usbProductName = nil
+        self.usbVendorID = nil
+        self.usbProductID = nil
+        self.usbSerialNumber = nil
+        self.usbIdentityUpdatedAt = nil
+        self.cachedWiFiNetworks = []
+        self.wifiNetworksUpdatedAt = nil
         self.bluetoothDiscovered = bluetoothDiscovered
     }
 
@@ -92,6 +108,36 @@ final class StoredDevice {
             capabilities: capabilities,
             otaSchema: otaSchema
         )
+    }
+
+    var cachedUSBIdentity: USBIdentity? {
+        guard let productName = usbProductName,
+              let vid = usbVendorID,
+              let pid = usbProductID,
+              let serialNumber = usbSerialNumber else { return nil }
+        return USBIdentity(
+            manufacturerName: usbManufacturerName,
+            productName: productName,
+            vid: vid,
+            pid: pid,
+            serialNumber: serialNumber
+        )
+    }
+
+    func cacheUSBIdentity(_ identity: USBIdentity, at date: Date = Date()) {
+        if let manufacturerName = identity.manufacturerName {
+            usbManufacturerName = manufacturerName
+        }
+        usbProductName = identity.productName
+        usbVendorID = identity.vid
+        usbProductID = identity.pid
+        usbSerialNumber = identity.serialNumber
+        usbIdentityUpdatedAt = date
+    }
+
+    func cacheWiFiNetworks(_ networks: [String], at date: Date = Date()) {
+        cachedWiFiNetworks = Array(networks.prefix(5))
+        wifiNetworksUpdatedAt = date
     }
 }
 

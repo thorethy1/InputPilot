@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Prefer each device's last confirmed IP for immediate and VPN-safe access,
+  while using background Bonjour discovery only to validate and cache address
+  changes for the matching secure device identity.
+- Reorder device details around live connection and primary controls, remove
+  the capability-derived connection label, cache the last confirmed USB
+  identity and configured SSID names on iOS, and refresh/display the running
+  firmware partition through secure diagnostics.
 - Share Wi-Fi credential validation, persistence results, acknowledgements and
   deferred radio application between BLE binary and textual protocol commands;
   keep static transport capabilities compatible while reporting the current

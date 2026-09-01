@@ -47,12 +47,13 @@ std::string BLEDiagnostics::infoJson() const {
 std::string BLEDiagnostics::compactInfoJson() const {
   // Keep the encrypted text record below the 512-byte GATT value limit.
   char json[224];
+  const esp_partition_t *running = esp_ota_get_running_partition();
   snprintf(json, sizeof(json),
            "{\"product\":\"%s\",\"firmware\":\"%s\",\"board\":\"%s\"," 
            "\"protocol\":2,\"otaSchema\":1,\"deviceId\":\"%s\"," 
-           "\"resetReason\":\"%s\"}",
+           "\"resetReason\":\"%s\",\"runningPartition\":\"%s\"}",
            FW_PRODUCT, FW_VERSION, FW_BOARD, DeviceIdentity::deviceId(),
-           deviceResetReason());
+           deviceResetReason(), running ? running->label : "unknown");
   return std::string(json);
 }
 
