@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include "BLEDiscoveryMetadata.h"
+#include "ProtocolCapabilities.h"
 
 void test_metadata_is_complete_and_below_gatt_limit() {
   const std::string json = BLEDiscoveryMetadata::build(
@@ -27,9 +28,21 @@ void test_oversized_name_is_rejected_instead_of_truncated() {
   TEST_ASSERT_TRUE(BLEDiscoveryMetadata::build("aabbccddeeff", name.c_str()).empty());
 }
 
+void test_radio_mode_is_distinct_from_supported_capabilities() {
+  TEST_ASSERT_EQUAL_STRING("\"none\"",
+                           ProtocolCapabilities::radioModeJson(false, false));
+  TEST_ASSERT_EQUAL_STRING("\"ble\"",
+                           ProtocolCapabilities::radioModeJson(true, false));
+  TEST_ASSERT_EQUAL_STRING("\"wifi\"",
+                           ProtocolCapabilities::radioModeJson(false, true));
+  TEST_ASSERT_EQUAL_STRING("\"wifi+ble\"",
+                           ProtocolCapabilities::radioModeJson(true, true));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_metadata_is_complete_and_below_gatt_limit);
   RUN_TEST(test_oversized_name_is_rejected_instead_of_truncated);
+  RUN_TEST(test_radio_mode_is_distinct_from_supported_capabilities);
   return UNITY_END();
 }

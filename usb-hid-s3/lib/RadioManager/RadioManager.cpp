@@ -25,9 +25,11 @@
 #include "OTAEngine.h"
 #include "KeyMap.h"
 #include "PairingSecretStore.h"
+#include "ProtocolCapabilities.h"
 #include "SecureSession.h"
 #include "SecureReplySizing.h"
 #include "USBIdentityConfig.h"
+#include "WifiManagement.h"
 
 RadioManager g_radio;
 
@@ -173,6 +175,38 @@ std::string jsonEscape(const String &value) {
   return escaped;
 }
 
+class FirmwareWifiManagementBackend final : public WifiManagement::Backend {
+ public:
+  bool save(const std::string &ssid, const std::string &password) override {
+    return WifiCredentials::save(String(ssid.c_str()), String(password.c_str()));
+  }
+
+  bool remove(const std::string &ssid) override {
+    return WifiCredentials::remove(String(ssid.c_str()));
+  }
+
+  bool clear() override { return WifiCredentials::clear(); }
+
+  void apply(const std::string &provisionedSsid) override {
+    g_radio.applyWifiCredentials(String(provisionedSsid.c_str()));
+  }
+};
+
+FirmwareWifiManagementBackend s_wifiManagementBackend;
+
+void finishWifiManagement(const char *source, SecureSession &session,
+                          const WifiManagement::Result &result) {
+  if (!result.accepted()) {
+    sendSecureReply(source, session, WifiManagement::errorReply(result.error));
+    return;
+  }
+  // The acknowledgement must leave through the still-live secure transport
+  // before Wi-Fi services and their TCP session are transitioned.
+  sendSecureReply(source, session,
+                  WifiManagement::acceptedReply(result.operation));
+  WifiManagement::apply(s_wifiManagementBackend, result);
+}
+
 // Common InputPilot command router. `source` selects only response framing and
 // transport-scoped OTA ownership; it does not select a feature implementation.
 bool dispatchProtocolCommand(const std::string &message, const char *source,
@@ -211,48 +245,28 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     const size_t separator = message.find(' ', 12);
     std::string ssid;
     std::string password;
-    const bool valid = separator != std::string::npos &&
+    const bool decoded = separator != std::string::npos &&
         decodeHex(message.substr(12, separator - 12), ssid) &&
         (message.substr(separator + 1) == "-" ||
-         decodeHex(message.substr(separator + 1), password)) &&
-        !ssid.empty() && ssid.size() <= 32 && password.size() <= 63 &&
-        ssid.find('\0') == std::string::npos &&
-        password.find('\0') == std::string::npos;
-    if (!valid) {
-      sendSecureReply(source, session, "error invalid_wifi_credentials");
-    } else if (!WifiCredentials::save(
-                   String(ssid.c_str()), String(password.c_str()))) {
-      sendSecureReply(source, session, "error wifi_storage_failed");
-    } else {
-      const String target(ssid.c_str());
-      sendSecureReply(source, session,
-                      "{\"operation\":\"wifi_set\",\"status\":\"accepted\"}");
-      g_radio.applyWifiCredentials(target);
-    }
+         decodeHex(message.substr(separator + 1), password));
+    finishWifiManagement(
+        source, session,
+        decoded ? WifiManagement::set(s_wifiManagementBackend, ssid, password)
+                : WifiManagement::invalid(WifiManagement::Operation::Set));
     return true;
   }
   if (message.rfind("WIFI REMOVEHEX ", 0) == 0) {
     std::string ssid;
-    if (!decodeHex(message.substr(15), ssid) || ssid.empty() || ssid.size() > 32 ||
-        ssid.find('\0') != std::string::npos) {
-      sendSecureReply(source, session, "error invalid_wifi_credentials");
-    } else if (!WifiCredentials::remove(String(ssid.c_str()))) {
-      sendSecureReply(source, session, "error wifi_network_not_found");
-    } else {
-      sendSecureReply(source, session,
-                      "{\"operation\":\"wifi_remove\",\"status\":\"accepted\"}");
-      g_radio.applyWifiCredentials();
-    }
+    const bool decoded = decodeHex(message.substr(15), ssid);
+    finishWifiManagement(
+        source, session,
+        decoded ? WifiManagement::remove(s_wifiManagementBackend, ssid)
+                : WifiManagement::invalid(WifiManagement::Operation::Remove));
     return true;
   }
   if (message == "WIFI CLEAR") {
-    if (!WifiCredentials::clear()) {
-      sendSecureReply(source, session, "error wifi_storage_failed");
-    } else {
-      sendSecureReply(source, session,
-                      "{\"operation\":\"wifi_clear\",\"status\":\"accepted\"}");
-      g_radio.applyWifiCredentials();
-    }
+    finishWifiManagement(source, session,
+                         WifiManagement::clear(s_wifiManagementBackend));
     return true;
   }
   if (message.rfind("DIAGNOSTICS NEXT ", 0) == 0) {
@@ -720,34 +734,24 @@ void processBLEControlFrames(size_t budget = 8) {
       if (frame.length < 4 || frame.bytes[1] != 1) {
         if (frame.length >= 3 && frame.bytes[1] == 4) {
           const size_t ssidLength = frame.bytes[2];
-          if (ssidLength == 0 || ssidLength > 32 || frame.length != 3 + ssidLength) {
+          if (frame.length != 3 + ssidLength) {
             LOG_WARN("secure BLE Wi-Fi removal rejected: invalid length");
-            sendSecureReply("ble", s_bleSecureSession,
-                            "error invalid_wifi_credentials");
+            finishWifiManagement(
+                "ble", s_bleSecureSession,
+                WifiManagement::invalid(WifiManagement::Operation::Remove));
             continue;
           }
-          const String ssid(reinterpret_cast<const char *>(frame.bytes + 3), ssidLength);
-          if (!WifiCredentials::remove(ssid)) {
-            LOG_WARN("secure BLE Wi-Fi removal failed ssid=\"%s\"", ssid.c_str());
-            sendSecureReply("ble", s_bleSecureSession,
-                            "error wifi_network_not_found");
-            continue;
-          }
-          sendSecureReply("ble", s_bleSecureSession,
-                          "{\"operation\":\"wifi_remove\",\"status\":\"accepted\"}");
-          g_radio.applyWifiCredentials();
+          const std::string ssid(
+              reinterpret_cast<const char *>(frame.bytes + 3), ssidLength);
+          finishWifiManagement(
+              "ble", s_bleSecureSession,
+              WifiManagement::remove(s_wifiManagementBackend, ssid));
           continue;
         }
         if (frame.length == 2 && frame.bytes[1] == 5) {
-          if (!WifiCredentials::clear()) {
-            LOG_WARN("secure BLE Wi-Fi clear failed");
-            sendSecureReply("ble", s_bleSecureSession,
-                            "error wifi_storage_failed");
-            continue;
-          }
-          sendSecureReply("ble", s_bleSecureSession,
-                          "{\"operation\":\"wifi_clear\",\"status\":\"accepted\"}");
-          g_radio.applyWifiCredentials();
+          finishWifiManagement(
+              "ble", s_bleSecureSession,
+              WifiManagement::clear(s_wifiManagementBackend));
           continue;
         }
         LOG_WARN("secure BLE management frame rejected: invalid type");
@@ -757,26 +761,21 @@ void processBLEControlFrames(size_t budget = 8) {
       }
       const size_t ssidLength = frame.bytes[2];
       const size_t passwordLength = frame.bytes[3];
-      if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
-          frame.length != 4 + ssidLength + passwordLength) {
+      if (frame.length != 4 + ssidLength + passwordLength) {
         LOG_WARN("secure BLE Wi-Fi setup rejected: invalid lengths");
-        sendSecureReply("ble", s_bleSecureSession,
-                        "error invalid_wifi_credentials");
+        finishWifiManagement(
+            "ble", s_bleSecureSession,
+            WifiManagement::invalid(WifiManagement::Operation::Set));
         continue;
       }
-      const String ssid(reinterpret_cast<const char *>(frame.bytes + 4), ssidLength);
-      const String password(reinterpret_cast<const char *>(frame.bytes + 4 + ssidLength),
-                            passwordLength);
-      if (!WifiCredentials::save(ssid, password)) {
-        LOG_WARN("secure BLE Wi-Fi setup failed");
-        sendSecureReply("ble", s_bleSecureSession,
-                        "error wifi_storage_failed");
-        continue;
-      }
-      LOG_WIFI("secure BLE Wi-Fi setup saved ssid=\"%s\"", ssid.c_str());
-      sendSecureReply("ble", s_bleSecureSession,
-                      "{\"operation\":\"wifi_set\",\"status\":\"accepted\"}");
-      g_radio.applyWifiCredentials(ssid);
+      const std::string ssid(
+          reinterpret_cast<const char *>(frame.bytes + 4), ssidLength);
+      const std::string password(
+          reinterpret_cast<const char *>(frame.bytes + 4 + ssidLength),
+          passwordLength);
+      finishWifiManagement(
+          "ble", s_bleSecureSession,
+          WifiManagement::set(s_wifiManagementBackend, ssid, password));
       continue;
     }
     HIDMessage message;
@@ -887,6 +886,10 @@ ServerCallbacks s_serverCallbacks;
 bool deviceBleAuthenticated() {
   return bleSessionEstablished();
 }
+
+bool deviceBleTransportEnabled() { return g_radio.bleEnabled(); }
+
+bool deviceWifiTransportEnabled() { return g_radio.wifiEnabled(); }
 
 bool deviceBleConnectionOwnsSession(uint16_t connectionHandle) {
   return s_bleOwner.owns(connectionHandle);
@@ -1152,7 +1155,9 @@ std::string RadioManager::wifiStatusJson() const {
   return "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
          std::string(ip.c_str()) + "\",\"device_id\":\"" +
          std::string(DeviceIdentity::deviceId()) +
-         "\",\"provisioning\":{\"state\":\"" +
+         "\",\"radio_mode\":" +
+         ProtocolCapabilities::radioModeJson(bleEnabled(), wifiEnabled()) +
+         ",\"provisioning\":{\"state\":\"" +
          std::string(provisioningState_.c_str()) + "\",\"error\":\"" +
          jsonEscape(provisioningError_) + "\"}}";
 }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Share Wi-Fi credential validation, persistence results, acknowledgements and
+  deferred radio application between BLE binary and textual protocol commands;
+  keep static transport capabilities compatible while reporting the current
+  radio mode separately through optional `radio_mode` metadata.
 - Make BLE and Wi-Fi independent Secure Protocol transports backed by the same
   command router, capability contract, device identity, and authentication
   rules; Wi-Fi transitions now reset only the Wi-Fi/TCP session.

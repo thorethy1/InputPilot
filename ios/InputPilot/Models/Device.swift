@@ -75,6 +75,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let mdns: String?
     let protocolVersion: Int
     let capabilities: [String]
+    let radioMode: String?
     let otaSchema: Int
 
     enum CodingKeys: String, CodingKey {
@@ -90,6 +91,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case mdns
         case protocolVersion = "protocol_version"
         case capabilities
+        case radioMode = "radio_mode"
         case otaSchema = "ota_schema"
     }
 
@@ -106,6 +108,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         mdns: String? = nil,
         protocolVersion: Int = 0,
         capabilities: [String] = [],
+        radioMode: String? = nil,
         otaSchema: Int = 0
     ) {
         self.ok = ok
@@ -120,6 +123,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.mdns = mdns
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
+        self.radioMode = radioMode
         self.otaSchema = otaSchema
     }
 
@@ -137,6 +141,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         mdns = try container.decodeIfPresent(String.self, forKey: .mdns)
         protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
+        radioMode = try container.decodeIfPresent(String.self, forKey: .radioMode)
         otaSchema = try container.decodeIfPresent(Int.self, forKey: .otaSchema) ?? 0
     }
 }

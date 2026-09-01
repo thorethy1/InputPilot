@@ -7,6 +7,9 @@
 #include "Logging.h"
 #include "ProtocolCapabilities.h"
 
+extern bool deviceBleTransportEnabled();
+extern bool deviceWifiTransportEnabled();
+
 WifiConfigServer g_wifiConfig;
 
 namespace {
@@ -25,6 +28,9 @@ String statusJson() {
   json += "true";
   json += ",\"capabilities\":";
   json += ProtocolCapabilities::jsonArray();
+  json += ",\"radio_mode\":";
+  json += ProtocolCapabilities::radioModeJson(
+      deviceBleTransportEnabled(), deviceWifiTransportEnabled());
   json += "}";
   return json;
 }

@@ -160,3 +160,12 @@ The same command core is available to TCP sessions with `WIFI SETHEX
 state plus a `provisioning` object with `state` and `error`. A failed
 join is therefore reported as `network_unreachable` without changing the
 authentication state of the transport used to query it.
+
+The `capabilities` array describes protocol features and transports supported
+by this firmware/device; `ble_transport` and `wifi_transport` remain static for
+backward compatibility. Wi-Fi discovery metadata and `WIFI STATUS`
+additionally report the current `radio_mode` as `none`, `ble`, `wifi`, or
+`wifi+ble`. This value describes configuration, not authentication or endpoint
+reachability, and is optional so older app/firmware combinations remain valid.
+The size-constrained BLE GATT discovery record keeps its existing capability
+contract; an authenticated BLE session obtains the mode through `WIFI STATUS`.

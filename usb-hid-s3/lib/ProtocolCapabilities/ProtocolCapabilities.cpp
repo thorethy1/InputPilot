@@ -12,4 +12,11 @@ const char *jsonArray() {
          "\"release_all\"]";
 }
 
+const char *radioModeJson(bool bleEnabled, bool wifiEnabled) {
+  if (bleEnabled && wifiEnabled) return "\"wifi+ble\"";
+  if (bleEnabled) return "\"ble\"";
+  if (wifiEnabled) return "\"wifi\"";
+  return "\"none\"";
+}
+
 }  // namespace ProtocolCapabilities

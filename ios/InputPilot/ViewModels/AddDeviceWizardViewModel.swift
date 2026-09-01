@@ -18,10 +18,12 @@ final class AddDeviceWizardViewModel: ObservableObject {
         let ip: String
         let deviceId: String
         let provisioning: Provisioning?
+        let radioMode: String?
 
         enum CodingKeys: String, CodingKey {
             case state, ip, provisioning
             case deviceId = "device_id"
+            case radioMode = "radio_mode"
         }
     }
 
