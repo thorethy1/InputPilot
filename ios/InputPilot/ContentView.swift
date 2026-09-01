@@ -509,9 +509,9 @@ struct GitHubReleaseDescriptor: Codable, Equatable, Sendable {
 extension GitHubFirmwareSource {
     static func releaseRequest(for channel: UpdateChannel) -> URLRequest {
         var components = URLComponents(url: channel.releaseAPIURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = (components?.queryItems ?? []) + [
-            URLQueryItem(name: "cache_bust", value: UUID().uuidString)
-        ]
+        var queryItems = components?.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "cache_bust", value: UUID().uuidString))
+        components?.queryItems = queryItems
         var request = URLRequest(
             url: components?.url ?? channel.releaseAPIURL,
             cachePolicy: .reloadIgnoringLocalCacheData,
