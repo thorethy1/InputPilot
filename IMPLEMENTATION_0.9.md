@@ -1,754 +1,512 @@
 # InputPilot 0.9 Implementation Plan
 
-## Purpose
+This document defines the implementation strategy for the InputPilot 0.9 generation.
 
-This document defines the implementation direction for the InputPilot 0.9 generation.
+`ROADMAP.md` defines the product scope and desired result. This document defines the implementation order, architecture, verification strategy and release gate.
 
-It complements `ROADMAP.md`.
+0.9 is primarily an iOS experience, automation and reliability release. Existing working functionality should be hardened rather than rebuilt without reason. Protocol or firmware changes are appropriate when required for safe input release, transport reliability, compatibility enforcement, OTA safety or capabilities that cannot be implemented correctly in the app alone.
 
-The roadmap defines **what InputPilot 0.9 should become**.
+Development should continue through the existing beta/prerelease workflow. See [Stable and Beta Release Channels](RELEASE_CHANNELS.md).
 
-This document defines **how to approach the work without unnecessarily constraining implementation decisions**.
+## Engineering principles
 
-Codex/engineering should inspect the existing architecture before making changes and is explicitly encouraged to improve architecture where this reduces duplication, improves reliability, or makes future development easier.
+Work is organized by product feature rather than artificial calendar milestones. Each feature should include its UI states, accessibility, failure behavior, automated coverage where practical and a short manual verification checklist.
 
-Do not blindly preserve existing architecture when a small redesign produces a substantially cleaner result.
+For every user-triggered asynchronous action:
 
-At the same time, avoid unnecessary rewrites.
+- define normal, loading, disabled, success and failure behavior
+- prevent unsafe duplicate execution
+- provide a short actionable error where recovery exists
+- support useful VoiceOver labels and appropriate interaction targets
+- consider Dynamic Type, Reduce Motion, Light Mode and Dark Mode
+- guarantee held keyboard/mouse input cleanup after relevant disconnect, cancellation and failure paths
+- never log or unnecessarily persist sensitive input
 
----
-
-# Core Principle
-
-InputPilot 0.9 is primarily an application-quality milestone.
-
-The desired transition is:
-
-`functional developer-oriented application`
-
-→
-
-`polished native iOS product`
-
-The existing working transport and firmware functionality should remain stable while the app around it becomes significantly better.
+Existing completed work remains completed. Checked items below reflect work already implemented by Codex and should not be reopened without a concrete regression or architectural reason.
 
 ---
 
-# Suggested 0.9 Development Stages
+# 1. Foundation & Native UI
 
-## Stage 1 — Architecture & Current-State Review
+## Goal
 
-Before implementing major UI changes:
+Make InputPilot feel like a polished native iOS application and establish shared visual foundations for the remaining 0.9 work.
 
-1. Inspect the current iOS architecture.
-2. Inspect transport handling.
-3. Inspect device state management.
-4. Inspect keyboard/mouse execution.
-5. Inspect existing Shortcuts.
-6. Inspect Presets and Macros.
-7. Inspect SwiftData models.
-8. Inspect firmware compatibility logic.
-9. Inspect existing tests.
+## Completed
 
-Identify:
+- [x] Shared spacing/radius tokens and semantic status colors.
+- [x] System, Light and Dark appearance choices.
+- [x] User-selectable accent colors that do not redefine status or destructive meaning.
 
-- duplicated action execution
-- duplicated transport logic
-- inconsistent state models
-- UI state leaking into transport logic
-- unsafe held-input handling
-- obsolete code
-- models that will make Secrets difficult
-- models that will make App Intents difficult
+## Remaining work
 
-Do not perform a large rewrite solely for architectural purity.
+- [ ] Apply the design system consistently across remaining major screens and controls.
+- [ ] Define consistent normal/pressed/loading/disabled/success/failure presentation for major controls.
+- [ ] Prefer native SwiftUI components and navigation patterns where suitable.
+- [ ] Use Liquid Glass appropriately where supported without sacrificing clarity or compatibility.
+- [ ] Add appropriate haptic feedback to important control interactions.
+- [ ] Ensure important state is never communicated by color alone.
+- [ ] Complete app-wide Dynamic Type, VoiceOver, contrast, interaction-target and Reduce Motion review.
+- [ ] Review smallest supported iPhone, largest current iPhone and useful landscape layouts.
+- [ ] Remove major safe-area and Tab Bar overlap issues.
+- [ ] Polish empty, loading, offline and error states using native patterns such as `ContentUnavailableView` and `ProgressView` where appropriate.
 
-Refactor where there is a concrete benefit for 0.9.
+## Architecture notes
 
----
+Keep semantic state colors separate from user-selectable branding/accent colors. Avoid introducing custom components when native SwiftUI behavior already solves the interaction well.
 
-# Stage 2 — Shared Action Architecture
+## Exit criteria
 
-Before significantly expanding Shortcuts, Secrets and App Intents, evaluate whether InputPilot needs a shared action abstraction.
-
-Conceptually:
-
-`InputPilotAction`
-
-could represent operations such as:
-
-- keyboard key
-- keyboard shortcut
-- text
-- secret reference
-- mouse action
-- delay
-- existing supported automation actions
-
-The exact type hierarchy is intentionally not prescribed.
-
-The goal is more important:
-
-> Shortcuts, Presets, Macros and App Intents should not each implement their own independent HID execution stack.
-
-Prefer:
-
-`UI / App Intent`
-→ `Action`
-→ `Execution Service`
-→ `Active Transport`
-→ `ESP32`
-
-over:
-
-`Shortcut UI → BLE`
-
-`Preset UI → separate BLE code`
-
-`App Intent → another transport implementation`
-
-Transport selection and HID execution should have clear ownership.
+The major 0.9 screens share one coherent visual language, remain usable in Light/Dark/System appearance and adapt correctly to supported layouts and accessibility settings.
 
 ---
 
-# Stage 3 — Input Safety Foundation
+# 2. Devices, Connection & Transport Safety
 
-Before adding more automation capability, strengthen input safety.
+## Goal
 
-Create a reliable centralized mechanism for releasing held input.
+A normal user should immediately understand whether InputPilot is usable without needing to understand BLE, TCP, REST or transport internals. BLE and Wi-Fi should behave as interchangeable capable transports behind the same product experience wherever the protocol supports it.
 
-Ensure safe recovery for:
+## Completed
+
+- [x] Remember and reconcile one active device across Devices, Control, Firmware and Settings.
+- [x] Mark the active device in the saved-device list and provide native swipe/context switching actions.
+- [x] Use one high-level Connected/Connecting/Offline/Attention Required presentation in normal UI.
+- [x] Offer retry, app-permission and USB-trust recovery from the shared connection banner.
+- [x] Move technical device/build/log/export information behind Diagnostics & Advanced.
+
+## Remaining work
+
+- [ ] Verify Bluetooth-denied, Bluetooth-off, Wi-Fi-only and automatic-fallback states on physical hardware.
+- [ ] Verify BLE-only operation exposes all supported InputPilot control functions rather than becoming a reduced emergency mode.
+- [ ] Verify Wi-Fi-only operation exposes all supported InputPilot control functions where technically applicable.
+- [ ] Ensure automatic fallback never looks like a total outage while another transport remains usable.
+- [ ] Ensure the currently active control transport remains identifiable without making normal UI overly technical.
+- [ ] Audit authentication after adding Wi-Fi and transport transitions so a newly configured network becomes usable without inconsistent authentication state.
+- [ ] Audit reconnect behavior after prolonged Wi-Fi failure and ensure BLE can recover/become active when available.
+- [ ] Audit unexpected disconnect paths and prove held keyboard/mouse input is released.
+- [ ] Complete VoiceOver, Dynamic Type, Light/Dark and Reduce Motion review for all connection screens.
+
+## Input safety
+
+Centralize or strengthen shared cleanup semantics for:
 
 - BLE disconnect
 - Wi-Fi disconnect
+- active transport failure
 - transport switch
 - timeout
-- cancelled Macro
-- failed Preset
-- failed Shortcut
-- app lifecycle interruptions where relevant
+- failed/cancelled Shortcut, Preset or Macro
+- relevant app lifecycle interruption
 
-Keyboard:
+Provide reliable shared concepts equivalent to:
 
 `Release All Keys`
-
-Mouse:
 
 `Release All Buttons`
 
-Where practical, execution systems should use cleanup semantics comparable to:
+Where practical, execution should follow:
 
-`begin → execute → success/failure/cancel → guaranteed cleanup`
+`begin → execute → success / failure / cancel → guaranteed cleanup`
 
-Avoid situations where every feature has to remember its own cleanup implementation.
+Features should not each maintain independent cleanup implementations.
 
-Add regression tests.
+## Architecture notes
 
----
+Normal UI should consume coherent device-level state rather than independently interpreting raw transport state on every screen. Transport selection, authentication and fallback should have clear ownership.
 
-# Stage 4 — Native Design System
+Keep low-level protocol, OTA schema, build, transport and raw diagnostics in Advanced/Diagnostics.
 
-Establish the visual foundation before independently redesigning every screen.
+## Exit criteria
 
-Create reusable native styling for:
+Devices, Details, Control, Firmware and Settings agree on live device state. BLE-only, Wi-Fi-only and fallback behavior pass physical-hardware verification. No known disconnect path can leave a held key or mouse button behind.
 
-- typography
-- spacing
-- cards
-- buttons
-- status presentation
-- destructive actions
-- loading
-- success
-- failure
-- empty states
-
-Support:
-
-- Light
-- Dark
-- System
-- Custom Accent
-
-Use semantic colors.
-
-Do not make the configurable InputPilot accent responsible for:
-
-- errors
-- destructive actions
-- warnings
-
-Prefer SwiftUI system behavior.
-
-Avoid unnecessary custom UI components when iOS already provides a suitable native component.
-
-Support Liquid Glass where appropriate and available.
+The existing manual M1 checklist may continue to be used where applicable: [M1 Device and Connection Checklist](M1_DEVICE_CONNECTION_CHECKLIST.md).
 
 ---
 
-# Stage 5 — Connection State Model
+# 3. Trackpad
 
-Review the current connection/transport state implementation.
+## Goal
 
-The UI should consume a coherent device-level state rather than independently interpreting BLE and Wi-Fi state on every screen.
+Make the InputPilot trackpad behave as closely as practical to a real laptop trackpad while prioritizing predictable HID behavior and safe release.
 
-Conceptually separate:
+## Existing implementation
 
-### Device state
+The current code already contains useful trackpad behavior including movement, scrolling, tap/double-tap, long-press secondary click and drag release. Harden and extend this rather than rebuilding working behavior without reason.
 
-- connected
-- connecting
-- offline
-- attention required
+## Remaining work
 
-from:
+- [ ] Define/refine explicit mutually exclusive gesture states where useful: `idle → moving → scrolling → clicking → dragging → zooming`.
+- [ ] Improve low-speed pointer precision.
+- [ ] Improve pointer smoothing and acceleration curve.
+- [ ] Improve two-finger scrolling.
+- [ ] Add/tune natural scrolling option.
+- [ ] Add/tune momentum or inertial scrolling where it improves the experience.
+- [ ] Verify tap-to-click and double-click behavior.
+- [ ] Verify press/hold and/or two-finger secondary click behavior.
+- [ ] Make drag-and-drop reliable, including guaranteed drag release.
+- [ ] Add pinch-to-zoom where the HID/protocol path can support it correctly.
+- [ ] Add configurable sensitivity.
+- [ ] Add subtle haptic feedback where useful.
+- [ ] Add lightweight first-use gesture hints without permanently cluttering the trackpad.
+- [ ] Keep explicit click controls as a reliable fallback if they remain useful.
 
-### Transport state
+## Exit criteria
 
-- BLE available
-- BLE connected
-- BLE active
-- Wi-Fi available
-- Wi-Fi connected
-- Wi-Fi active
-- reconnecting
-- failed
-
-Automatic fallback must not incorrectly make the whole device appear disconnected.
-
-The currently active transport should remain identifiable.
-
-Low-level details belong in Diagnostics.
+There are no conflicting gestures or known stuck-drag states. Movement, precision, scrolling, secondary click, drag/release and implemented zoom behavior pass a real ESP32-S3/computer hardware checklist.
 
 ---
 
-# Stage 6 — Control Experience
+# 4. Keyboard & InputPilot Shortcuts
 
-## Trackpad
+## Goal
 
-Rework gesture handling deliberately rather than stacking additional SwiftUI gestures onto existing gestures.
+Turn keyboard control and InputPilot's internal Shortcuts into one polished, safe, first-class control experience.
 
-Model mutually exclusive interaction states where useful:
+## Keyboard
 
-`idle`
-`moving`
-`scrolling`
-`clicking`
-`dragging`
-`zooming`
+The current implementation already includes keyboard layouts, one-shot modifiers and `releaseAll` support. Preserve and harden these capabilities.
 
-Implement and tune on real hardware.
+- [ ] Redesign keyboard shortcut controls into compact native layouts rather than stretched full-width buttons.
+- [ ] Improve modifier presentation and sticky/latched behavior where useful.
+- [ ] Keep an explicit `Release All Keys` safety action.
+- [ ] Ensure modifiers and held keys are released after all relevant error/disconnect paths.
+- [ ] Improve key/send visual feedback.
+- [ ] Improve keyboard dismissal and text-composer behavior.
+- [ ] Add explicit `Paste Clipboard` action that reads the clipboard only after user interaction.
+- [ ] Paste clipboard contents into the editable field before transmission so the user can review/edit them.
+- [ ] Handle empty/unavailable clipboard clearly.
+- [ ] Never unnecessarily log or persist clipboard contents.
+- [ ] Preserve intentional field clearing after text is sent, with appropriate success/failure feedback.
 
-Prioritize:
+Clipboard verification must cover normal, empty, multiline, special-character and large input plus unavailable/denied cases where applicable.
 
-1. reliable movement
-2. low-speed precision
-3. scrolling
-4. clicking
-5. drag-and-drop
-6. secondary click
-7. zoom
-8. momentum/haptics
+## InputPilot Shortcuts redesign
 
-Correctness is more important than feature count.
+Shortcuts are not merely keyboard buttons. Review both their visual presentation and their data/execution model.
 
-A stuck drag state is worse than temporarily not supporting an advanced gesture.
+- [ ] Support Create, Edit, Rename, Duplicate, Delete, Reorder and Favorite/Unfavorite.
+- [ ] Use native context menus, swipe actions and compact grid/list presentation where appropriate.
+- [ ] Provide clear Ready/Running/Completed/Failed execution feedback.
+- [ ] Prevent unsafe duplicate execution.
+- [ ] Support reusable actions such as key, key combination, modifiers, text and Secret references where appropriate.
+- [ ] Guarantee Shortcut failure cannot leave modifiers, keys or mouse buttons held.
 
----
+## Shared action architecture
 
-# Stage 7 — Keyboard
+As this feature is implemented, establish or evolve toward a shared action/execution abstraction if it materially improves the current architecture.
 
-Improve:
+Conceptually:
 
-- modifier handling
-- sticky modifiers
-- key feedback
-- input field behavior
-- keyboard dismissal
-- safety
+`UI / App Intent → InputPilotAction → Execution Service → Active Transport → ESP32`
 
-Add:
+Shortcuts, Presets, Macros and future App Intents should not each implement independent HID/transport stacks.
 
-`Release All Keys`
+The exact Swift type hierarchy is intentionally not prescribed. Codex should fit the abstraction to the existing codebase and avoid an unnecessary full rewrite.
 
-Add explicit clipboard import.
+## Exit criteria
 
-Clipboard content should enter the editable input field before transmission.
-
-Do not automatically transmit clipboard content immediately after reading it.
+Keyboard input feels intentional and safe, clipboard behavior passes its verification matrix, internal Shortcuts have a coherent management/execution experience, and execution uses shared transport/action infrastructure where beneficial.
 
 ---
 
-# Stage 8 — InputPilot Shortcuts Redesign
+# 5. Presets, Macros & Secrets
 
-Treat Shortcuts as a first-class feature.
+## Goal
 
-Do not limit the work to visual changes.
+Unify reusable InputPilot automation around safe execution and a Keychain-backed Secrets system without unnecessarily rewriting stable Preset/Macro behavior.
 
-Review the current Shortcut data model and execution model.
+## Existing implementation
 
-Shortcuts should become reusable actions that can be:
+The repository already contains useful Preset favorite/duplicate/delete/drag ordering behavior and Macro recording/repeats/start-delay/cancellation/release-all behavior. Treat these as working foundations.
 
-- created
-- renamed
-- edited
-- duplicated
-- deleted
-- reordered
-- favorited
-- executed
+## Presets
 
-The UI should feel native and compact.
+- [ ] Ensure Run works reliably.
+- [ ] Improve cards/rows and management consistency.
+- [ ] Support Rename, Duplicate, Edit, Delete, ordering and favorites coherently.
+- [ ] Provide Run/Running/Completed/Failed feedback.
+- [ ] Prevent unsafe duplicate execution.
+- [ ] Support Secret references.
+- [ ] Guarantee failure cleans up held input.
 
-Avoid full-width oversized keyboard buttons where they provide no benefit.
+## Macros
 
-Execution must provide:
+- [ ] Improve list/card presentation and management.
+- [ ] Support Rename, Duplicate and confirmed Delete.
+- [ ] Support event editing/deletion/reordering where technically safe.
+- [ ] Show playback progress, repeat count and approximate duration where available.
+- [ ] Allow immediate cancellation.
+- [ ] Support Secret references where appropriate.
+- [ ] Provide Running/Completed/Cancelled/Failed feedback.
+- [ ] Guarantee cancellation/failure cleans up held input.
 
-- immediate feedback
-- running state where applicable
-- completion
-- failure
+## Secrets
 
-Shortcuts should integrate with the shared action execution architecture.
+Create one shared Secrets system for Shortcuts, Presets and Macros.
 
----
+Storage contract:
 
-# Stage 9 — Secrets Architecture
+`Secret value → iOS Keychain`
 
-Implement Secrets as a shared system.
+`SwiftData → Secret ID + display metadata/reference only`
 
-## Storage contract
+Never store plaintext Secret values in SwiftData.
 
-The actual value belongs in:
+- [ ] Create Secret.
+- [ ] Rename Secret metadata.
+- [ ] Replace/update Secret value.
+- [ ] Delete Secret.
+- [ ] Explicitly reveal Secret only on deliberate user action.
+- [ ] Allow actions to select/reference a Secret without copying plaintext into their persistent model.
+- [ ] Handle deleted/missing/unavailable Keychain references safely and never substitute an empty value silently.
+- [ ] Clear temporary Secret UI state after use where practical.
+- [ ] Audit logging, diagnostics, errors, model descriptions and crash metadata so Secret values cannot leak.
+- [ ] Reduce accidental screenshot/app-switcher exposure where reasonably possible.
 
-`iOS Keychain`
+Preferred model:
 
-Persistent application models contain only:
+`Shortcut / Preset / Macro → SecretReference("work-password") → Keychain`
 
-- ID
-- display name
-- metadata
-- reference
+## Migration
 
-Never the secret value.
+Preserve existing devices, Shortcuts, Presets, Macros and user configuration where reasonably possible. Define and test explicit SwiftData migration before schema changes. Never use a migration path that temporarily persists plaintext Secrets in SwiftData.
 
-SwiftData must not contain plaintext Secrets.
+## Exit criteria
 
-## Consumers
-
-Secrets should be usable by:
-
-- Shortcuts
-- Presets
-- Macros
-
-Future action consumers should be able to use the same system.
-
-## Lifecycle
-
-Support:
-
-- Create
-- Read for execution
-- Update
-- Delete
-- Rename metadata
-
-Consider behavior when:
-
-- a referenced Secret is deleted
-- Keychain data is unavailable
-- device migration occurs
-- app data is restored without matching Keychain entry
-
-Broken references must fail safely.
-
-Never silently substitute an empty value.
-
-## Logging
-
-Audit logging paths.
-
-Secret values must never be included in:
-
-- print()
-- Logger
-- diagnostics exports
-- errors
-- model descriptions
-- crash metadata
-
-Avoid holding plaintext Secret values longer than necessary.
+Preset and Macro execution states are reliable, cancellation/failure safely releases input, and Secrets can be referenced by supported actions while remaining exclusively Keychain-backed.
 
 ---
 
-# Stage 10 — Presets & Macros
+# 6. Apple Shortcuts / App Intents
 
-After the action/Secret architecture is established, migrate or adapt Presets and Macros where beneficial.
+## Goal
 
-Do not rewrite stable behavior unnecessarily.
-
-Presets:
-
-- fix execution
-- improve management
-- improve visual presentation
-- add Secret references
-- improve feedback
-
-Macros:
-
-- improve management
-- progress
-- cancellation
-- event editing where safe
-- Secret references where appropriate
-
-Cancellation must guarantee held-input cleanup.
-
----
-
-# Stage 11 — Apple Shortcuts / App Intents
-
-Implement modern App Intents.
-
-Do not use legacy URL schemes as the primary integration architecture.
+Make InputPilot automatable from Apple's Shortcuts app and Siri using modern App Intents while reusing the same action, connection and transport architecture as the app itself.
 
 ## Architecture
 
-Preferred:
+Preferred flow:
 
-`Apple Shortcuts`
-→ `App Intent`
-→ `InputPilot service/action`
-→ `Connection/Transport`
-→ `ESP32`
+`Apple Shortcuts → App Intent → InputPilot service/action → Execution Service → Active Transport → ESP32`
 
-App Intents must not contain independent BLE/TCP implementations.
+Do not create independent BLE/TCP/REST implementations inside App Intents. Do not use legacy URL schemes as the primary automation architecture.
 
-Reuse the application's existing services.
-
----
-
-# Initial App Intent Set
+## Initial intents
 
 Prioritize:
 
-### Run Shortcut
+- [ ] Run InputPilot Shortcut.
+- [ ] Run Preset.
+- [ ] Run Macro.
+- [ ] Send Keyboard Shortcut.
+- [ ] Send Text.
+- [ ] Connect Device.
+- [ ] Switch Device.
+- [ ] Start Mouse Move.
+- [ ] Stop Mouse Move.
+- [ ] Check Device Status using high-level product state.
 
-Parameters:
+Expose device/action parameters only where useful and avoid leaking protocol internals.
 
-- InputPilot device where needed
-- InputPilot Shortcut
+## Secrets
 
-### Run Preset
+Apple Shortcuts should trigger Secret-backed InputPilot actions without receiving the plaintext Secret.
 
-Parameters:
+Preferred flow:
 
-- device
-- preset
+`Apple Automation → Run "Work Login" → InputPilot Shortcut → SecretReference → Keychain → Device`
 
-### Run Macro
+Do not implement `Get InputPilot Secret Value` or equivalent. Do not return Secret values from App Intents, expose them in parameter suggestions, use them as entity display names or write them into Apple Shortcut configuration.
 
-Parameters:
+## Background behavior
 
-- device
-- macro
+Investigate and document what iOS reliably permits while InputPilot is foreground, background, suspended or terminated. Do not promise unsupported execution behavior or add lifecycle hacks solely to bypass iOS restrictions.
 
-### Send Keyboard Shortcut
+When execution cannot proceed because the device/connection/authentication/lifecycle state is unavailable, return a useful actionable result.
 
-Parameters:
+## Exit criteria
 
-- device
-- keyboard shortcut
-
-### Send Text
-
-Parameters:
-
-- device
-- text
-
-### Connect Device
-
-Parameter:
-
-- saved device
-
-### Switch Device
-
-Parameter:
-
-- saved device
-
-### Mouse Move
-
-Actions:
-
-- Start Mouse Move
-- Stop Mouse Move
-
-### Device Status
-
-Return useful high-level information.
-
-Avoid exposing internal protocol details unnecessarily.
+Core intents execute through shared InputPilot services, foreground behavior is reliable, supported background behavior is documented/tested, unavailable-device cases fail usefully, and Secret-backed actions never expose plaintext Secrets to Apple Shortcuts.
 
 ---
 
-# App Intents + Secrets
+# 7. Firmware Compatibility & OTA
 
-Security is important here.
+## Goal
 
-Apple Shortcuts should normally reference an InputPilot action containing a Secret reference.
+Keep app and firmware independently versioned while making compatibility, downgrade protection and OTA behavior understandable and safe.
 
-Example:
+## Existing implementation
 
-`Apple Automation`
-→ `Run "Work Login"`
-→ `InputPilot`
-→ `SecretReference`
-→ `Keychain`
-→ `ESP32`
+The repository already contains firmware compatibility validation, detailed update progress and integrity checking. Build on these rather than replacing working paths without reason.
 
-The Apple Shortcut therefore does not need to contain:
+## Remaining work
 
-`actual password`
+- [ ] Audit compatibility metadata/capabilities such as firmware version, protocol version, OTA schema, minimum app/firmware requirements and supported features.
+- [ ] Never require `App Version == Firmware Version`.
+- [ ] Prevent unsupported firmware downgrade by default.
+- [ ] Ensure firmware-side downgrade rejection exists where required; the app alone must not be the security boundary.
+- [ ] Do not assume newer firmware is automatically incompatible; use explicit protocol/capability checks.
+- [ ] Present a clear newer-firmware/requires-newer-app message when applicable.
+- [ ] Clearly show installed → available firmware version and release notes where available.
+- [ ] Preserve understandable Downloading/Validating/Transferring/Installing/Rebooting/Reconnecting/Completed progress.
+- [ ] Provide dedicated success/failure results and actionable compatibility errors.
+- [ ] Keep an explicit developer-only downgrade override only if it remains useful.
 
-Do not provide an App Intent such as:
+## Firmware size
 
-`Get Secret Value`
+0.9 firmware changes must remain size-conscious. Do not add firmware dependencies merely for app-side visual features. Track meaningful binary-size increases and justify them. Prefer shared BLE/Wi-Fi protocol functionality rather than duplicated implementations.
 
-Do not return Secret values from App Intents.
+## Exit criteria
 
-Do not expose Secret values as entity display names or parameter suggestions.
-
----
-
-# Background Execution
-
-Investigate what iOS permits for App Intent execution while InputPilot is:
-
-- foreground
-- background
-- suspended
-- terminated
-
-Do not promise behavior that iOS cannot reliably provide.
-
-Where execution requires the application or a connection state that is unavailable, return a useful actionable result.
-
-Avoid hacks designed solely to circumvent iOS lifecycle restrictions.
-
-Document unavoidable platform limitations.
+Normal OTA, validation failure, interrupted OTA/recovery, incompatible firmware, downgrade rejection and reconnect-after-update behavior pass the release matrix.
 
 ---
 
-# Stage 12 — Firmware Compatibility UX
+# 8. Final Polish & 0.9 Release Gate
 
-Keep app and firmware versions independent.
+## Goal
 
-Build compatibility around explicit metadata/capabilities.
+Finish the product as a coherent 0.9 release rather than treating completion of individual features as release readiness.
 
-Review whether the current firmware already exposes sufficient information.
+## Settings & diagnostics
 
-Potential metadata:
+Keep user-facing settings understandable. A suitable structure may include:
 
-- firmware version
-- protocol version
-- OTA schema
-- minimum app version
-- capabilities
+- Connection
+- Appearance
+- Trackpad
+- Keyboard
+- Shortcuts
+- Secrets
+- Advanced
+- About
 
-Downgrade prevention should exist on the firmware side.
+Keep protocol, OTA schema, raw transport state, build/commit information, logs and internal IDs in Advanced/Diagnostics. Consider Developer Mode for especially low-level controls.
 
-The app alone must not be the security boundary.
+## Repository presentation
 
-Developer builds may optionally support an explicit downgrade override.
+Once the UI is stable:
 
----
+- [ ] Add/update current InputPilot logo.
+- [ ] Replace outdated screenshots with real current iOS screenshots.
+- [ ] Add relevant Android screenshots only where appropriate/current.
+- [ ] Update README feature overview.
+- [ ] Add/update architecture diagram: `iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer`.
 
-# Stage 13 — Settings & Diagnostics
+Recommended screenshots include Devices, Device Details, Trackpad, Keyboard, Shortcuts, Presets, Secrets, Firmware and Settings.
 
-Separate product UI from developer information.
+## Testing strategy
 
-Normal settings should focus on things users understand.
+Testing is continuous; the release gate is final verification rather than the first testing phase.
 
-Suggested sections:
+### Unit/integration priorities
 
-`Connection`
-`Appearance`
-`Trackpad`
-`Keyboard`
-`Shortcuts`
-`Secrets`
-`Advanced`
-`About`
-
-Advanced/Diagnostics may contain:
-
-- protocol
-- OTA schema
-- transport state
-- firmware metadata
-- logs
-- internal IDs
-
-Consider hiding especially low-level options behind Developer Mode.
-
----
-
-# Stage 14 — Repository Presentation
-
-Once the 0.9 UI is sufficiently stable:
-
-- capture real screenshots
-- update README
-- add current logo
-- remove obsolete screenshots
-- add architecture diagram
-
-Do not capture screenshots early and then redesign the screens afterward.
-
----
-
-# Testing Strategy
-
-Do not wait until the end of 0.9 to test.
-
-Each stage should add or update tests.
-
-## Unit tests
-
-Prioritize:
-
-- action serialization
-- action execution
-- Secret references
-- missing Secrets
+- action serialization/execution
+- Secret references and missing Secrets
+- connection-state transitions
 - compatibility logic
-- connection state transitions
 - Shortcut execution
+- Preset execution
 - Macro cancellation
-
-## Integration tests
-
-Prioritize:
-
+- held-input cleanup
 - Action → Transport
-- Shortcut → Action
-- Preset → Action
+- Shortcut/Preset/Macro → Action
 - Secret → Action
 - App Intent → Action
 
-## Hardware tests
+### Physical hardware matrix
 
-Real ESP32-S3 testing remains required for:
+- [ ] BLE HID.
+- [ ] Wi-Fi HID.
+- [ ] BLE-only operation.
+- [ ] Wi-Fi-only operation.
+- [ ] automatic fallback and active-transport presentation.
+- [ ] reconnect behavior.
+- [ ] authentication failure/recovery.
+- [ ] BLE OTA.
+- [ ] OTA rollback/failure recovery.
+- [ ] Trackpad on real hardware.
+- [ ] keyboard/mouse release after disconnect/failure.
 
-- BLE HID
-- Wi-Fi HID
-- transport fallback
-- reconnect
-- OTA
-- keyboard release
-- mouse release
-- Trackpad gestures
+Mocks and simulators do not replace these hardware gates.
 
-Simulators and mocks are not sufficient for the release gate.
+### Secrets gate
 
----
+- [ ] Keychain create/read/update/delete.
+- [ ] no plaintext Secret in SwiftData.
+- [ ] no Secret values in logs/diagnostics.
+- [ ] missing/deleted Secret reference behavior.
+- [ ] restart/migration/restore behavior where applicable.
 
-# Migration & Compatibility
+### Apple Shortcuts gate
 
-Existing user data should be preserved where reasonably possible.
+- [ ] foreground execution.
+- [ ] supported background execution.
+- [ ] connected and unavailable device behavior.
+- [ ] BLE-only and Wi-Fi execution where supported.
+- [ ] invalid parameters.
+- [ ] Shortcut/Preset/Macro execution.
+- [ ] Secret-backed action without Secret exposure.
+- [ ] Siri behavior where supported.
 
-Before modifying SwiftData schemas:
+### UI/accessibility gate
 
-- inspect existing models
-- create appropriate migration strategy
-- test upgrade from current released builds
+- [ ] Light Mode reviewed.
+- [ ] Dark Mode reviewed.
+- [ ] System appearance reviewed.
+- [ ] smallest supported iPhone reviewed.
+- [ ] largest current iPhone reviewed.
+- [ ] Dynamic Type reviewed.
+- [ ] VoiceOver reviewed.
+- [ ] Reduce Motion reviewed.
+- [ ] safe areas and Tab Bar overlap reviewed.
+- [ ] major empty/loading/error/disabled states reviewed.
 
-Do not silently delete:
+### Data & safety gate
 
-- devices
-- presets
-- macros
-- shortcuts
-- user configuration
+- [ ] no known data-loss bugs.
+- [ ] migrations preserve existing supported user data.
+- [ ] no known stuck-key bugs.
+- [ ] no known stuck-mouse-button bugs.
+- [ ] Macro cancellation/failure releases input.
+- [ ] Shortcut/Preset failure releases input.
 
-If an old model cannot represent the new architecture directly, provide an explicit migration.
-
----
-
-# Performance
-
-0.9 UI polish must not make control input feel slower.
-
-Pay attention to:
-
-- trackpad event frequency
-- SwiftUI redraws
-- transport queues
-- App Intent startup
-- macro playback
-- excessive state observation
-
-Avoid unnecessary work on the main actor.
-
-Measure before introducing complicated optimizations.
-
----
-
-# Firmware Size
-
-Firmware changes during 0.9 should remain size-conscious.
-
-Do not add firmware dependencies merely to support an app-side UX improvement.
-
-Track firmware binary size during development.
-
-Any meaningful firmware-size increase should have a clear reason.
-
-Avoid duplicating functionality across BLE and Wi-Fi implementations where a shared implementation is possible.
+Every failed required gate is fixed before stable release or explicitly recorded as a release blocker. Required gates must not silently disappear from scope.
 
 ---
 
-# Scope Control
+# Tracking
 
-0.9 is already a large milestone.
+- `ROADMAP.md` → product scope and desired result.
+- `IMPLEMENTATION_0.9.md` → feature-oriented implementation architecture, progress and release gates.
+- `CHANGELOG.md` → completed user-visible changes under `Unreleased` until release.
+- `docs/` → hardware verification and release-gate evidence where useful.
 
-Do not opportunistically add unrelated features.
+Keep app and firmware independently versioned. Do not promote a build to stable `0.9.0` merely because individual 0.9 features are present; the complete release gate determines stable readiness.
 
-Features that do not directly improve:
+# Scope control
 
-- native UX
-- control quality
-- Shortcuts
-- Secrets
-- Apple automation
-- reliability
-- compatibility
-- 1.0 readiness
+0.9 is already a large milestone. Unrelated features should normally be deferred unless they directly improve native UX, control quality, Shortcuts, Secrets, Apple automation, transport reliability, input safety, firmware compatibility or 1.0 readiness.
 
-should normally be deferred.
+# Definition of 0.9 complete
 
----
+InputPilot 0.9 is complete when:
 
-# Definition of Done
+1. the app feels like a polished native iOS application
+2. BLE and Wi-Fi behavior is reliable and understandable
+3. transport fallback behaves correctly
+4. held input is safely released after failure/disconnect
+5. the Trackpad provides a substantially improved native-feeling experience
+6. keyboard input is polished and safe
+7. InputPilot Shortcuts have been visually and technically redesigned
+8. Shortcuts, Presets and Macros share action execution infrastructure where appropriate
+9. Secrets are securely stored in iOS Keychain and referenced without plaintext persistence
+10. Apple Shortcuts integration works through modern App Intents without exposing Secret values
+11. firmware compatibility and OTA behavior are understandable and safe
+12. existing supported user data survives required migrations
+13. the complete 0.9 release gate passes
 
-The 0.9 generation is complete when InputPilot:
-
-1. feels like a polished native iOS application
-2. has reliable BLE/Wi-Fi control behavior
-3. has a substantially improved Trackpad
-4. has a redesigned Keyboard experience
-5. has a redesigned first-class Shortcut system
-6. stores Secrets securely in Keychain
-7. allows Shortcuts/Presets/Macros to reference Secrets
-8. integrates with Apple Shortcuts through App Intents
-9. safely releases held inputs on failure
-10. provides understandable firmware/update UX
-11. has consistent loading/error/offline states
-12. passes the 0.9 release gate
-
-At that point development should shift away from feature expansion and toward the production-readiness work required for InputPilot 1.0.
+After this point, development should shift from 0.9 feature expansion toward the production-readiness and security work required for InputPilot 1.0.
