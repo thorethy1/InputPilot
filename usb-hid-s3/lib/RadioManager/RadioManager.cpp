@@ -21,6 +21,7 @@
 #include "WifiConfigServer.h"
 #include "BLEOTA.h"
 #include "BLEDiagnostics.h"
+#include "BLEAdvertisingRecovery.h"
 #include "BLESessionOwnership.h"
 #include "OTAEngine.h"
 #include "KeyMap.h"
@@ -891,6 +892,18 @@ bool deviceBleTransportEnabled() { return g_radio.bleEnabled(); }
 
 bool deviceWifiTransportEnabled() { return g_radio.wifiEnabled(); }
 
+bool deviceBleConnected() { return g_radio.isBleConnected(); }
+
+bool deviceBleAdvertising() { return g_radio.isBleAdvertising(); }
+
+uint32_t deviceBleAdvertisingRecoveryCount() {
+  return g_radio.bleAdvertisingRecoveryCount();
+}
+
+uint32_t deviceBleAdvertisingRecoveryFailureCount() {
+  return g_radio.bleAdvertisingRecoveryFailureCount();
+}
+
 bool deviceBleConnectionOwnsSession(uint16_t connectionHandle) {
   return s_bleOwner.owns(connectionHandle);
 }
@@ -1274,6 +1287,43 @@ void RadioManager::setBleAdvertisingStatus(bool active) {
   snprintf(status_, sizeof(status_), active ? "ble:adv" : "ble:adv-fail");
 }
 
+bool RadioManager::isBleAdvertising() const {
+  if (!bleEnabled() || !s_bleReady || !NimBLEDevice::isInitialized()) return false;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  return adv && adv->isAdvertising();
+}
+
+bool RadioManager::isBleConnected() const {
+  return s_bleOwner.connected() || (s_bleServer && s_bleServer->getConnectedCount() > 0);
+}
+
+void RadioManager::serviceBleAdvertising() {
+  const uint32_t now = millis();
+  if (now - lastBleAdvertisingCheckMs_ < BLE_ADVERTISING_CHECK_INTERVAL_MS) return;
+  lastBleAdvertisingCheckMs_ = now;
+
+  const bool connected = isBleConnected();
+  const bool advertising = isBleAdvertising();
+  if (!BLEAdvertisingRecovery::shouldAttempt(
+          bleEnabled() && !s_bleTearingDown, s_bleReady,
+          connected, advertising)) return;
+
+  LOG_BLE("advertising watchdog detected inactive advertising; recovery attempt");
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv && adv->start() && adv->isAdvertising()) {
+    ++bleAdvertisingRecoveryCount_;
+    setBleAdvertisingStatus(true);
+    LOG_BLE("advertising watchdog recovery succeeded count=%lu",
+            static_cast<unsigned long>(bleAdvertisingRecoveryCount_));
+    return;
+  }
+
+  ++bleAdvertisingRecoveryFailureCount_;
+  setBleAdvertisingStatus(false);
+  LOG_BLE("advertising watchdog recovery failed count=%lu",
+          static_cast<unsigned long>(bleAdvertisingRecoveryFailureCount_));
+}
+
 void RadioManager::stopBle() {
   // IMPORTANT: we do NOT call NimBLEDevice::deinit() here. On arduino-esp32
   // 3.2.1 / IDF 5.4, esp_bt_controller_deinit (reached via nimble_port_deinit)
@@ -1320,6 +1370,7 @@ void RadioManager::loop() {
   // Decode binary writes outside NimBLE's host callback. This keeps STL,
   // KeyMap, logging and HID queue work off the 4 KiB BLE host stack.
   g_bleOta.loop();
+  serviceBleAdvertising();
   if (s_managementRebootAtMs &&
       static_cast<int32_t>(millis() - s_managementRebootAtMs) >= 0) {
     esp_restart();
@@ -1376,13 +1427,16 @@ void RadioManager::loop() {
 }
 
 const char *RadioManager::statusStr() {
+  const char *bleState = isBleConnected() ? "conn" :
+                         (isBleAdvertising() ? "adv" : "adv-off");
   if (mode_ == RadioMode::WifiBle) {
-    if (softAp_) snprintf(status_, sizeof(status_), "wifi:ap+ble:%s", s_bleOwner.connected() ? "conn" : "adv");
+    if (softAp_) snprintf(status_, sizeof(status_), "wifi:ap+ble:%s", bleState);
     else if (WiFi.status() == WL_CONNECTED)
       snprintf(status_, sizeof(status_), "wifi:%s+ble:%s", WiFi.localIP().toString().c_str(),
-               s_bleOwner.connected() ? "conn" : "adv");
+               bleState);
+    else snprintf(status_, sizeof(status_), "wifi:connecting+ble:%s", bleState);
   } else if (mode_ == RadioMode::Ble) {
-    snprintf(status_, sizeof(status_), "ble:%s", s_bleOwner.connected() ? "conn" : "adv");
+    snprintf(status_, sizeof(status_), "ble:%s", bleState);
   } else if (mode_ == RadioMode::Wifi) {
     if (softAp_) {
       snprintf(status_, sizeof(status_), "wifi:ap");

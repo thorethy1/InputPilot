@@ -84,6 +84,6 @@ Do not decode against a different build: addresses and stacks will not match.
 | Appearance | Meaning |
 |------------|---------|
 | Solid red | WiFi down / not associated |
-| Magenta blink | Soft-AP setup (`InputPilot-XXXX`; suffix from device MAC) |
+| Magenta blink | Soft-AP setup (friendly MAC-derived name, e.g. `InputPilot-Dupe9`) |
 | Dim solid green | STA up, jiggle off |
 | Cyan breathing | STA up, jiggle on |

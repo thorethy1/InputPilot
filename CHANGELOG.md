@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Prepare 0.9.0 Beta 2 with a CoreBluetooth direct-reconnect timeout that
+  cancels stuck cached peripherals and forces a real advertisement scan before
+  cached reconnect is allowed again.
+- Add a firmware advertising watchdog with live advertising diagnostics,
+  recovery counters and recovery logging when BLE is enabled but idle.
+- Use deterministic MAC-derived friendly names for the Soft-AP, BLE and app
+  discovery (`InputPilot-DE94` becomes `InputPilot-Dupe9`).
+- Accept the ESP32 fallback Soft-AP as a verified Wi-Fi endpoint after device
+  identity and Secure Protocol checks, and show the physical status LED matrix
+  in the iOS app.
 - Start the 0.9 M1 device and connection experience with one remembered active
   device across Devices, Control, Firmware and Settings; native list actions
   for fast switching; a shared Connected/Connecting/Offline/Attention Required

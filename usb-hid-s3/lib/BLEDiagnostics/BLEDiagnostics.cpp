@@ -9,10 +9,15 @@
 #include "FirmwareLog.h"
 #include "CommandSink.h"
 
+extern bool deviceBleConnected();
+extern bool deviceBleAdvertising();
+extern uint32_t deviceBleAdvertisingRecoveryCount();
+extern uint32_t deviceBleAdvertisingRecoveryFailureCount();
+
 BLEDiagnostics g_bleDiagnostics;
 
 std::string BLEDiagnostics::infoJson() const {
-  char json[1024];
+  char json[1280];
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
   const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
@@ -21,6 +26,7 @@ std::string BLEDiagnostics::infoJson() const {
            "\"protocol\":2,\"otaSchema\":1,\"deviceId\":\"%s\","
            "\"firmwareCommit\":\"%s\",\"resetReason\":\"%s\","
            "\"runningPartition\":\"%s\",\"bootPartition\":\"%s\",\"uptime\":%lu,\"heap\":%u,"
+           "\"ble\":{\"connected\":%s,\"advertising\":%s,\"advertisingRecoveries\":%lu,\"advertisingRecoveryFailures\":%lu},"
            "\"hid\":{\"rxBle\":%lu,\"rxTcp\":%lu,\"rxSerial\":%lu,"
            "\"decoded\":%lu,\"decodeErrors\":%lu,\"queued\":%lu,\"queueRejected\":%lu,"
            "\"executed\":%lu,\"failed\":%lu,\"mouseExecuted\":%lu,\"keyboardExecuted\":%lu,"
@@ -33,6 +39,10 @@ std::string BLEDiagnostics::infoJson() const {
            FW_GIT_COMMIT, deviceResetReason(),
            running ? running->label : "unknown", boot ? boot->label : "unknown",
            static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
+           deviceBleConnected() ? "true" : "false",
+           deviceBleAdvertising() ? "true" : "false",
+           static_cast<unsigned long>(deviceBleAdvertisingRecoveryCount()),
+           static_cast<unsigned long>(deviceBleAdvertisingRecoveryFailureCount()),
            (unsigned long)hid.rxBle, (unsigned long)hid.rxTcp, (unsigned long)hid.rxSerial,
            (unsigned long)hid.decoded, (unsigned long)hid.decodeErrors, (unsigned long)hid.queued, (unsigned long)hid.queueRejected,
            (unsigned long)hid.executed, (unsigned long)hid.executeFailed, (unsigned long)hid.mouseExecuted, (unsigned long)hid.keyboardExecuted,
@@ -45,15 +55,18 @@ std::string BLEDiagnostics::infoJson() const {
 }
 
 std::string BLEDiagnostics::compactInfoJson() const {
-  // Keep the encrypted text record below the 512-byte GATT value limit.
+  // Keep the encrypted binary record below BLE_CONTROL_FRAME_MAX while still
+  // reporting the live advertising bit instead of inferring it from a link.
   char json[224];
   const esp_partition_t *running = esp_ota_get_running_partition();
   snprintf(json, sizeof(json),
            "{\"product\":\"%s\",\"firmware\":\"%s\",\"board\":\"%s\"," 
            "\"protocol\":2,\"otaSchema\":1,\"deviceId\":\"%s\"," 
-           "\"resetReason\":\"%s\",\"runningPartition\":\"%s\"}",
+           "\"runningPartition\":\"%s\",\"ble\":{\"connected\":%s,\"advertising\":%s}}",
            FW_PRODUCT, FW_VERSION, FW_BOARD, DeviceIdentity::deviceId(),
-           deviceResetReason(), running ? running->label : "unknown");
+           running ? running->label : "unknown",
+           deviceBleConnected() ? "true" : "false",
+           deviceBleAdvertising() ? "true" : "false");
   return std::string(json);
 }
 

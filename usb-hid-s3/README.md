@@ -46,8 +46,8 @@ cp config.env.example config.env      # set ESP_PORT
 `autoclick on|off|status|interval <ms>` · `pairtest` · `radio wifi|ble|none` ·
 `wifi status|set|clear` · `status` · `version` · `help`
 
-WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts Soft-AP
-`InputPilot-XXXX` (last 4 hex of MAC, uppercase; open by default; set
+WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts a
+MAC-derived friendly Soft-AP such as `InputPilot-Dupe9` (open by default; set
 `WIFI_AP_PASS` in `wifi_secrets.h` for WPA) with read-only discovery at
 `http://192.168.4.1/api/status`.
 With creds, STA joins and exposes:
@@ -80,7 +80,7 @@ sensitive data are accepted exclusively through Secure Protocol v2.
 | Appearance | Meaning |
 |------------|---------|
 | Solid red | WiFi disconnected (radio off / not associated) |
-| Magenta blink | Soft-AP setup mode (`InputPilot-XXXX`) |
+| Magenta blink | Soft-AP setup mode (for example `InputPilot-Dupe9`) |
 | Dim solid green | STA connected, jiggle **off** |
 | Cyan breathing | STA connected, jiggle **on** |
 

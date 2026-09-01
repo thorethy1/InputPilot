@@ -78,8 +78,8 @@
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
 #define WIFI_RETRY_INTERVAL_MS 30000UL
 
-// Soft-AP / mDNS prefixes. Runtime SSIDs/hostnames append a MAC suffix via
-// DeviceIdentity (e.g. InputPilot-EEFF, inputpilot-eeff.local).
+// Soft-AP/BLE use a friendly deterministic MAC-derived name; mDNS keeps the
+// hex suffix (e.g. InputPilot-Dupe9, inputpilot-de94.local).
 #define WIFI_AP_SSID_PREFIX  "InputPilot-"
 #define MDNS_HOSTNAME_PREFIX "inputpilot-"
 #define WIFI_AP_CHANNEL  1
@@ -95,6 +95,7 @@
 #define BLE_HID_CONTROL_UUID  "7d9f0002-4f4d-4f56-4552-484944000001"
 #define BLE_HID_STATUS_UUID   "7d9f0005-4f4d-4f56-4552-484944000001"
 #define BLE_SECURE_AUTH_TIMEOUT_MS 15000UL
+#define BLE_ADVERTISING_CHECK_INTERVAL_MS 5000UL
 
 // InputPilot Secure Protocol v2 BLE OTA flow-control characteristics. OTA
 // writes are AES-GCM records from the active control session.

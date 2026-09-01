@@ -879,6 +879,7 @@ struct AppVersionInfo: Equatable {
 
 struct DiagnosticsMetadata: Codable, Equatable {
     struct HIDCounters: Codable, Equatable { let rxBle: UInt64?; let rxTcp: UInt64?; let rxSerial: UInt64?; let decoded: UInt64?; let decodeErrors: UInt64?; let queued: UInt64?; let queueRejected: UInt64?; let executed: UInt64?; let failed: UInt64?; let mouseExecuted: UInt64?; let keyboardExecuted: UInt64?; let usbReportsAttempted: UInt64?; let usbReportsSucceeded: UInt64?; let usbReportsFailed: UInt64?; let lastSource: String?; let lastType: String?; let lastSequence: UInt64?; let lastPhase: String?; let previousBreadcrumbValid: Bool?; let previousSequence: UInt64?; let previousSource: String?; let previousEventType: UInt8?; let previousPhase: UInt8?; let previousBleRxType: UInt8?; let previousBleRxLength: UInt64?; let previousQueueDepth: UInt64? }
+    struct BLEState: Codable, Equatable { let connected: Bool?; let advertising: Bool?; let advertisingRecoveries: UInt64?; let advertisingRecoveryFailures: UInt64? }
     let product: String
     let firmware: String
     let board: String
@@ -891,10 +892,11 @@ struct DiagnosticsMetadata: Codable, Equatable {
     let heap: UInt64?
     let firmwareCommit: String?
     let resetReason: String?
+    let ble: BLEState?
     let hid: HIDCounters?
     enum CodingKeys: String, CodingKey {
         case product, firmware, board, protocolVersion = "protocol", otaSchema, deviceId
-        case runningPartition, bootPartition, uptime, heap, firmwareCommit, resetReason, hid
+        case runningPartition, bootPartition, uptime, heap, firmwareCommit, resetReason, ble, hid
     }
 }
 
@@ -1427,6 +1429,13 @@ final class UnavailableHIDControlTransport: HIDControlTransport {
     func disconnect() async {}
 }
 
+struct BLEReconnectGate: Equatable {
+    private(set) var requiresAdvertisement = false
+    var permitsCachedPeripheral: Bool { !requiresAdvertisement }
+    mutating func connectionAttemptFailed() { requiresAdvertisement = true }
+    mutating func advertisementObserved() { requiresAdvertisement = false }
+}
+
 final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
     let kind = TransportKind.bluetooth
     @Published private(set) var isAvailable = false
@@ -1448,11 +1457,14 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     private var reconnectWork: DispatchWorkItem?
     private var scanTimeoutWork: DispatchWorkItem?
+    private var connectionTimeoutWork: DispatchWorkItem?
     private var peripheralIdentifier: UUID?
+    private var reconnectGate = BLEReconnectGate()
     private var shouldReconnect = false
     private var pendingServices = 0
     private var authTimeoutWork: DispatchWorkItem?
     private let authTimeout: TimeInterval
+    private let connectionTimeout: TimeInterval
     private struct PendingWrite {
         let id: String
         let characteristic: CBCharacteristic
@@ -1481,15 +1493,16 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         if properties.contains(.writeWithoutResponse) { return .withoutResponse }
         return nil
     }
-    init(deviceId: String, authTimeout: TimeInterval = 10) { self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
+    init(deviceId: String, authTimeout: TimeInterval = 10, connectionTimeout: TimeInterval = 8) { self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout; self.connectionTimeout = connectionTimeout; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
-        if let peripheralIdentifier,
+        if reconnectGate.permitsCachedPeripheral, let peripheralIdentifier,
            let known = central.retrievePeripherals(withIdentifiers: [peripheralIdentifier]).first {
             peripheral = known
             state = .connecting
             appLog(.bluetooth, "reconnecting known peripheral deviceId=\(deviceId)")
             central.connect(known)
+            startConnectionTimeout(for: known, source: "cached")
             return
         }
         state = state == .reconnecting ? .reconnecting : .discovering
@@ -1498,8 +1511,31 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         appLog(.bluetooth, "control scan started deviceId=\(deviceId)")
         scanTimeoutWork?.cancel()
-        let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); self.state = .offline; let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
+        let timeout = DispatchWorkItem { [weak self] in guard let self, self.central.isScanning else { return }; self.central.stopScan(); self.state = .offline; appLog(.bluetooth, "control scan timed out deviceId=\(self.deviceId)"); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+    }
+    private func startConnectionTimeout(for candidate: CBPeripheral, source: String) {
+        connectionTimeoutWork?.cancel()
+        let timeout = DispatchWorkItem { [weak self, weak candidate] in
+            guard let self, let candidate, self.peripheral === candidate,
+                  self.state == .connecting else { return }
+            appLog(.errors, "BLE \(source) connection timed out deviceId=\(self.deviceId); cancelling and forcing advertisement scan")
+            self.reconnectGate.connectionAttemptFailed()
+            self.connectionTimeoutWork = nil
+            self.central.cancelPeripheralConnection(candidate)
+            self.peripheral = nil
+            self.isAvailable = false
+            self.state = self.shouldReconnect ? .reconnecting : .offline
+            if self.shouldReconnect {
+                // Let CoreBluetooth deliver the cancellation callback before a
+                // scan can rediscover the same CBPeripheral object.
+                let recovery = DispatchWorkItem { [weak self] in self?.scan() }
+                self.reconnectWork = recovery
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: recovery)
+            }
+        }
+        connectionTimeoutWork = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + connectionTimeout, execute: timeout)
     }
     func connect() async { shouldReconnect = true; scan() }
     func waitUntilReady(timeout: TimeInterval = 10) async throws {
@@ -1517,17 +1553,27 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn: radioState = .poweredOn; if state == .unavailable { state = .offline }; scan()
-        case .poweredOff: radioState = .poweredOff; isAvailable = false; state = .unavailable
-        case .unsupported: radioState = .unsupported; isAvailable = false; state = .unavailable
-        case .unauthorized: radioState = .unauthorized; isAvailable = false; state = .unavailable
-        case .resetting: radioState = .resetting; isAvailable = false; state = .unavailable
-        case .unknown: radioState = .unknown; isAvailable = false; state = .unavailable
-        @unknown default: radioState = .unknown; isAvailable = false; state = .unavailable
+        case .poweredOff: radioState = .poweredOff; resetForUnavailableRadio(); state = .unavailable
+        case .unsupported: radioState = .unsupported; resetForUnavailableRadio(); state = .unavailable
+        case .unauthorized: radioState = .unauthorized; resetForUnavailableRadio(); state = .unavailable
+        case .resetting: radioState = .resetting; resetForUnavailableRadio(); state = .unavailable
+        case .unknown: radioState = .unknown; resetForUnavailableRadio(); state = .unavailable
+        @unknown default: radioState = .unknown; resetForUnavailableRadio(); state = .unavailable
         }
+    }
+    private func resetForUnavailableRadio() {
+        reconnectWork?.cancel(); scanTimeoutWork?.cancel(); connectionTimeoutWork?.cancel()
+        central.stopScan()
+        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        peripheral = nil; isAvailable = false; secureChannel = nil
+        characteristics.removeAll(); pendingServices = 0
+        failPendingWrites(TransportError.unavailable)
+        failPendingSecureReplies(TransportError.unavailable)
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
         appLog(.bluetooth, "discovered deviceId=\(deviceId) rssi=\(RSSI) connect requested")
+        reconnectGate.advertisementObserved()
         self.peripheral = peripheral
         peripheralIdentifier = peripheral.identifier
         scanTimeoutWork?.cancel()
@@ -1535,9 +1581,13 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         state = .discovered
         central.connect(peripheral)
         state = .connecting
+        startConnectionTimeout(for: peripheral, source: "scan")
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { guard self.peripheral === peripheral else { central.cancelPeripheralConnection(peripheral); return }; connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; reconnectGate.advertisementObserved(); appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { appLog(.bluetooth, "ignored stale BLE connect failure deviceId=\(deviceId)"); return }
+        connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil
+        reconnectGate.connectionAttemptFailed()
         appLog(.errors, "BLE connection failed error=\(error?.localizedDescription ?? "unknown")")
         self.peripheral = nil; isAvailable = false; state = shouldReconnect ? .reconnecting : .offline
         guard shouldReconnect else { return }
@@ -1546,6 +1596,8 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { appLog(.bluetooth, "ignored stale BLE disconnect deviceId=\(deviceId)"); return }
+        connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil
         appLog(error == nil ? .bluetooth : .errors, "BLE disconnected error=\(error?.localizedDescription ?? "none") reconnect=\(shouldReconnect)")
         let authFailed = state == .authenticationFailed
         isAvailable = false
@@ -2011,7 +2063,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         pendingSecureReplies.removeAll()
         pending.forEach { $0.timeout.cancel(); $0.continuation.resume(throwing: error) }
     }
-    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); failPendingSecureReplies(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); failPendingSecureReplies(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
 }
 
 @MainActor enum InputPilotBluetoothManager {

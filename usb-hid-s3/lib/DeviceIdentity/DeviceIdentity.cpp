@@ -23,17 +23,44 @@ bool deviceIdFromMacBytes(const uint8_t mac[6], char outId[13], char outSuffix[5
   return true;
 }
 
-void formatSoftApSsid(const char *suffix4, char out[24]) {
-  if (!out) return;
-  char up[5] = {'0', '0', '0', '0', '\0'};
-  if (suffix4) {
-    for (int i = 0; i < 4 && suffix4[i]; i++) {
-      char c = suffix4[i];
-      if (c >= 'a' && c <= 'f') c = (char)(c - 'a' + 'A');
-      up[i] = c;
+namespace {
+
+const char *friendlyWordFor(char letter) {
+  // A fixed lookup makes the seemingly random friendly name stable across
+  // reboots while keeping it short enough for BLE scan-response data.
+  static const char *const words[] = {"Aero", "Bolt", "Cove", "Dupe", "Echo", "Flux"};
+  if (letter >= 'A' && letter <= 'F') letter = (char)(letter - 'A' + 'a');
+  if (letter >= 'a' && letter <= 'f') return words[letter - 'a'];
+  return words[0];
+}
+
+void friendlyParts(const char *suffix4, const char *&word, char &digit) {
+  char firstLetter = '\0';
+  digit = '\0';
+  uint8_t fallback = 0;
+  for (int i = 0; suffix4 && i < 4 && suffix4[i]; ++i) {
+    char c = suffix4[i];
+    if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+    if (!firstLetter && c >= 'a' && c <= 'f') firstLetter = c;
+    if (!digit && c >= '0' && c <= '9') digit = c;
+    if (i == 0) {
+      fallback = (c >= '0' && c <= '9') ? (uint8_t)(c - '0')
+                                        : (uint8_t)(c >= 'a' && c <= 'f' ? c - 'a' + 10 : 0);
     }
   }
-  snprintf(out, 24, "InputPilot-%s", up);
+  if (!firstLetter) firstLetter = (char)('a' + (fallback % 6));
+  if (!digit) digit = (char)('0' + (fallback % 10));
+  word = friendlyWordFor(firstLetter);
+}
+
+}  // namespace
+
+void formatSoftApSsid(const char *suffix4, char out[24]) {
+  if (!out) return;
+  const char *word;
+  char digit;
+  friendlyParts(suffix4, word, digit);
+  snprintf(out, 24, "InputPilot-%s%c", word, digit);
 }
 
 void formatDeviceName(const char *suffix4, char out[24]) {

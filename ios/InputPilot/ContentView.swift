@@ -579,6 +579,7 @@ private struct ConnectionSettingsView: View {
             }
             Section("Support") {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
+                NavigationLink("Status LED Matrix") { StatusLEDMatrixView() }
                 NavigationLink("Diagnostics & Advanced") {
                     DiagnosticsSettingsView(devices: devices, selection: $selectedDeviceId)
                 }
@@ -616,6 +617,49 @@ private struct ConnectionSettingsView: View {
     }
     private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
+}
+
+private struct StatusLEDMatrixView: View {
+    private struct LEDState: Identifiable {
+        let id: String
+        let color: Color
+        let pattern: String
+        let meaning: String
+    }
+
+    private let states = [
+        LEDState(id: "Setup", color: .purple, pattern: "Magenta · blinking", meaning: "Fallback access point is active for setup or recovery."),
+        LEDState(id: "Disconnected", color: .red, pattern: "Red · solid", meaning: "Wi-Fi is unavailable, connecting, or the device is running in Bluetooth-only mode."),
+        LEDState(id: "Keep Awake", color: .cyan, pattern: "Cyan · breathing", meaning: "Wi-Fi is connected and automatic pointer movement is enabled."),
+        LEDState(id: "Ready", color: .green, pattern: "Green · dim solid", meaning: "Wi-Fi is connected and InputPilot is idle.")
+    ]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(states) { state in
+                    HStack(alignment: .top, spacing: 12) {
+                        Circle()
+                            .fill(state.color)
+                            .shadow(color: state.color.opacity(0.55), radius: 4)
+                            .frame(width: 18, height: 18)
+                            .padding(.top, 3)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(state.id).font(.headline)
+                            Text(state.pattern).font(.subheadline).foregroundStyle(.secondary)
+                            Text(state.meaning).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            } footer: {
+                Text("Bluetooth advertising recovery is automatic and is recorded in Diagnostics; it does not use a separate LED pattern.")
+            }
+        }
+        .navigationTitle("Status LED Matrix")
+        .navigationBarTitleDisplayMode(.inline)
+    }
 }
 
 private struct DiagnosticsSettingsView: View {
@@ -827,7 +871,7 @@ private struct DiagnosticsExportView: View {
     private var text: String {
         let metadata = diagnostics.metadata
         let hid = metadata?.hid
-        return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
+        return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "BLE connected/advertising: \(metadata?.ble?.connected ?? false)/\(metadata?.ble?.advertising ?? false)", "BLE advertising recoveries/failures: \(metadata?.ble?.advertisingRecoveries ?? 0)/\(metadata?.ble?.advertisingRecoveryFailures ?? 0)", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
     }
     var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
 }

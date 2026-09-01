@@ -10,7 +10,8 @@
  *
  * device_id: 12 lowercase hex chars (no separators), e.g. "aabbccddeeff"
  * suffix:    last 4 hex of device_id, e.g. "eeff"
- * Soft-AP:   InputPilot-<SUFFIX_UPPER>
+ * Friendly:  InputPilot-<WORD><DIGIT>, e.g. InputPilot-Dupe9 for suffix de94
+ * Soft-AP and BLE use the same friendly name. mDNS keeps the stable hex suffix.
  * mDNS:      inputpilot-<suffix_lower>
  */
 
@@ -28,8 +29,8 @@ public:
 
   static const char *deviceId();      // 12-hex
   static const char *suffix();        // 4-hex lowercase
-  static const char *softApSsid();    // InputPilot-XXXX
-  static const char *deviceName();    // InputPilot-XXXX
+  static const char *softApSsid();    // InputPilot-<WORD><DIGIT>
+  static const char *deviceName();    // InputPilot-<WORD><DIGIT>
   static const char *mdnsHostname();  // inputpilot-xxxx
   static const char *mdnsFqdn();      // inputpilot-xxxx.local
 };

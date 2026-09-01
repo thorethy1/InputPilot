@@ -83,6 +83,32 @@ final class DeviceRepositoryTests: XCTestCase {
         XCTAssertEqual(device.staIP, "192.168.2.44")
     }
 
+    func testRefreshAcceptsIdentityVerifiedSoftAPFallback() async throws {
+        let container = try ModelContainer(
+            for: StoredDevice.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = ModelContext(container)
+        let device = StoredDevice(
+            deviceId: "aabbccddeeff", displayName: "Desk",
+            mdnsHost: "inputpilot-eeff.local", staIP: "192.168.2.20"
+        )
+        context.insert(device)
+        let api = MockAPIClient()
+        let fallbackURL = URL(string: "http://192.168.4.1/")!
+        api.statusResults[fallbackURL] = .success(DeviceStatus(
+            ok: true, name: "InputPilot-Dupe9", version: "0.9.0-beta.2",
+            deviceId: device.deviceId, jiggle: false, jiggleIntervalMs: 30_000,
+            protocolVersion: 2, capabilities: ["secure_protocol_v2", "wifi_transport"],
+            radioMode: "wifi+ble", otaSchema: 1
+        ))
+
+        let refreshed = await DeviceRepository(context: context).refresh(device: device, api: api)
+        XCTAssertTrue(refreshed)
+        XCTAssertEqual(api.statusCalls.last, fallbackURL)
+        XCTAssertEqual(device.staIP, DeviceEndpointResolver.softAPHost)
+    }
+
     func testBonjourValidatesAndCachesChangedIP() async throws {
         let container = try ModelContainer(
             for: StoredDevice.self,
@@ -196,6 +222,27 @@ final class DeviceRepositoryTests: XCTestCase {
         XCTAssertEqual(stored.wifiNetworksUpdatedAt, cachedAt)
     }
 
+    func testFriendlyDiscoveryNameMigratesOnlyLegacyAutomaticName() {
+        let metadata = BLEDeviceMetadata(
+            product: "InputPilot", board: "esp32-s3-zero-4mb",
+            deviceId: "aabbccddeeff", deviceName: "InputPilot-Dupe9",
+            firmware: "0.9.0-beta.2", protocolVersion: 2, otaSchema: 1,
+            capabilities: ["secure_protocol_v2"], trustRequired: true
+        )
+        let legacy = StoredDevice(
+            deviceId: metadata.deviceId, displayName: "InputPilot-DE94", mdnsHost: ""
+        )
+        let custom = StoredDevice(
+            deviceId: metadata.deviceId, displayName: "Standing Desk", mdnsHost: ""
+        )
+
+        DeviceMerge.bluetooth(metadata, into: legacy)
+        DeviceMerge.bluetooth(metadata, into: custom)
+
+        XCTAssertEqual(legacy.displayName, "InputPilot-Dupe9")
+        XCTAssertEqual(custom.displayName, "Standing Desk")
+    }
+
     func testBasicUSBRefreshPreservesCachedManufacturer() {
         let device = StoredDevice(
             deviceId: "aabbccddeeff",
@@ -228,6 +275,17 @@ final class DeviceEndpointResolverTests: XCTestCase {
     func testEndpointsPreferDirectAddressAndDeduplicate() {
         XCTAssertEqual(DeviceEndpointResolver.endpointURLs(mdnsHost: "inputpilot-eeff.local", staIP: "192.168.2.20").map(\.absoluteString), ["http://192.168.2.20/", "http://inputpilot-eeff.local/"])
         XCTAssertEqual(DeviceEndpointResolver.endpointURLs(mdnsHost: "192.168.2.20", staIP: "192.168.2.20").count, 1)
+    }
+
+    func testProbeEndpointsUseSoftAPAsLastFallback() {
+        XCTAssertEqual(
+            DeviceEndpointResolver.probeURLs(mdnsHost: "inputpilot-eeff.local", staIP: "192.168.2.20").map(\.absoluteString),
+            ["http://192.168.2.20/", "http://inputpilot-eeff.local/", "http://192.168.4.1/"]
+        )
+        XCTAssertEqual(
+            DeviceEndpointResolver.probeURLs(mdnsHost: "192.168.4.1", staIP: "192.168.4.1").map(\.absoluteString),
+            ["http://192.168.4.1/"]
+        )
     }
 
     func testDirectIPv4AddressRejectsBonjourHostnames() {

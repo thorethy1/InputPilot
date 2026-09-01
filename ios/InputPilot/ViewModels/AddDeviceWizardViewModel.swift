@@ -191,6 +191,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
                     port: 80
                 ))
             }
+            verificationCandidates.append(DiscoveredService(
+                id: "soft-ap-fallback-\(metadata.deviceId)",
+                deviceId: metadata.deviceId,
+                name: metadata.deviceName,
+                host: DeviceEndpointResolver.softAPHost,
+                port: 80
+            ))
             for candidate in BonjourDiscoveryFilter.deduplicate(verificationCandidates) where
                 candidate.deviceId?.lowercased() == metadata.deviceId.lowercased() {
                 sawMatchingDiscovery = true
@@ -261,18 +268,18 @@ final class AddDeviceWizardViewModel: ObservableObject {
                     AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned a different device identity")
                     return .failed("InputPilot returned a different secure device identity.")
                 }
-                if let provisioning = status.provisioning,
-                   provisioning.state == "failed" {
-                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(provisioning.error)")
-                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
-                }
                 if status.state == "connected", !status.ip.isEmpty {
                     AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(status.ip)")
                     return .connected(DeviceEndpointResolver.sanitizeHost(status.ip))
                 }
                 if status.state == "soft_ap" {
-                    AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned to Soft-AP; STA join failed")
-                    return .failed("InputPilot could not reach any configured Wi-Fi network. Bluetooth remains connected; check the network credentials and retry.")
+                    AppLog.shared.write(.control, "BLE Wi-Fi handoff is using authenticated Soft-AP fallback host=\(DeviceEndpointResolver.softAPHost)")
+                    return .connected(DeviceEndpointResolver.softAPHost)
+                }
+                if let provisioning = status.provisioning,
+                   provisioning.state == "failed" {
+                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(provisioning.error)")
+                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
                 }
             } catch {
                 AppLog.shared.write(.errors, "BLE Wi-Fi handoff status failed: \(error.localizedDescription)")

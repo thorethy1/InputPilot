@@ -38,6 +38,13 @@ public:
   // Called by the NimBLE disconnect callback after re-advertising is checked.
   void setBleAdvertisingStatus(bool active);
 
+  // Live BLE state for diagnostics. Advertising is queried from NimBLE and is
+  // never inferred from the absence of a connection.
+  bool isBleAdvertising() const;
+  bool isBleConnected() const;
+  uint32_t bleAdvertisingRecoveryCount() const { return bleAdvertisingRecoveryCount_; }
+  uint32_t bleAdvertisingRecoveryFailureCount() const { return bleAdvertisingRecoveryFailureCount_; }
+
   // Apply newly saved STA credentials from an authenticated secure session.
   // If currently in Wifi mode, restarts WiFi to Soft-AP or STA as appropriate.
   void applyWifiCredentials(const String &provisionedSsid = String());
@@ -57,6 +64,7 @@ private:
   void stopWifi();
   void startBle();
   void stopBle();
+  void serviceBleAdvertising();
   void startSoftAp();
   void startSta(const String &ssid, const String &pass, size_t credentialIndex);
   void finishStaConnection();
@@ -75,6 +83,9 @@ private:
   String provisioningState_ = "idle";
   String provisioningError_;
   char status_[64] = "none";
+  uint32_t lastBleAdvertisingCheckMs_ = 0;
+  uint32_t bleAdvertisingRecoveryCount_ = 0;
+  uint32_t bleAdvertisingRecoveryFailureCount_ = 0;
 };
 
 extern RadioManager g_radio;

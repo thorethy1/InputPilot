@@ -3,6 +3,26 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    func testReconnectGateRequiresAdvertisementAfterConnectionFailure() {
+        var gate = BLEReconnectGate()
+        XCTAssertTrue(gate.permitsCachedPeripheral)
+
+        gate.connectionAttemptFailed()
+        XCTAssertFalse(gate.permitsCachedPeripheral)
+
+        gate.advertisementObserved()
+        XCTAssertTrue(gate.permitsCachedPeripheral)
+    }
+
+    func testDiagnosticsDecodeActualBLEAdvertisingState() throws {
+        let data = Data(#"{"product":"InputPilot","firmware":"0.9.0-beta.2","board":"esp32-s3-zero-4mb","protocol":2,"otaSchema":1,"deviceId":"aabbccddeeff","ble":{"connected":false,"advertising":true,"advertisingRecoveries":2,"advertisingRecoveryFailures":1}}"#.utf8)
+        let metadata = try JSONDecoder().decode(DiagnosticsMetadata.self, from: data)
+        XCTAssertEqual(metadata.ble?.connected, false)
+        XCTAssertEqual(metadata.ble?.advertising, true)
+        XCTAssertEqual(metadata.ble?.advertisingRecoveries, 2)
+        XCTAssertEqual(metadata.ble?.advertisingRecoveryFailures, 1)
+    }
+
     func testUSBIdentityDecodesSecureProtocolResponse() throws {
         let data = Data(#"{"manufacturer_name":"thorethy","product_name":"InputPilot","vid":51966,"pid":16385,"serial_number":"Desk-01"}"#.utf8)
         let identity = try JSONDecoder().decode(USBIdentity.self, from: data)
