@@ -77,4 +77,17 @@ final class DevicePresenceStatusTests: XCTestCase {
             .setup
         )
     }
+
+    func testEveryPresenceStateHasANonColorIndicator() {
+        let states: [DevicePresenceStatus] = [
+            .checking, .offline, .setup, .bluetoothDiscovered, .connecting,
+            .reconnecting, .authenticating, .authenticationFailed, .readyBoth,
+            .readyBluetooth, .readyWiFi
+        ]
+
+        for state in states {
+            XCTAssertFalse(state.systemImage.isEmpty, "Missing symbol for \(state)")
+            XCTAssertFalse(state.title.isEmpty, "Missing title for \(state)")
+        }
+    }
 }

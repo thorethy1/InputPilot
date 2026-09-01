@@ -116,6 +116,49 @@ final class HIDRemoteTests: XCTestCase {
 
     func testSemanticVersionsCompareNumerically() {
         XCTAssertLessThan(SemanticVersion("0.8.9")!, SemanticVersion("0.8.11")!)
+        XCTAssertLessThan(SemanticVersion("0.9.0-beta.1")!, SemanticVersion("0.9.0-beta.2")!)
+        XCTAssertLessThan(SemanticVersion("0.9.0-beta.9")!, SemanticVersion("0.9.0")!)
+    }
+
+    func testLaterBetaFirmwareIsAnUpdateAndStableSupersedesBeta() {
+        func manifest(_ version: String) -> FirmwareManifest {
+            FirmwareManifest(
+                product: "InputPilot", version: version, board: "esp32-s3-zero-4mb",
+                protocolVersion: 2, otaSchema: 1, size: 100, sha256: String(repeating: "a", count: 64)
+            )
+        }
+        XCTAssertEqual(
+            FirmwareReleaseEvaluator.evaluate(
+                installed: "0.9.0-beta.1", manifest: manifest("0.9.0-beta.2"),
+                deviceOTASchema: 1, appVersion: "0.9.0"
+            ),
+            .updateAvailable("0.9.0-beta.2")
+        )
+        XCTAssertEqual(
+            FirmwareReleaseEvaluator.evaluate(
+                installed: "0.9.0-beta.2", manifest: manifest("0.9.0"),
+                deviceOTASchema: 1, appVersion: "0.9.0"
+            ),
+            .updateAvailable("0.9.0")
+        )
+    }
+
+    @MainActor func testBetaReleaseSelectionSkipsRollingFeedAndStableReleases() throws {
+        let data = Data(#"[
+          {"tag_name":"beta","draft":false,"prerelease":true,"assets":[{"name":"altstore-source.json","browser_download_url":"https://example.com/feed"}]},
+          {"tag_name":"v0.8.19","draft":false,"prerelease":false,"assets":[]},
+          {"tag_name":"v0.9.0-beta.2","draft":false,"prerelease":true,"assets":[
+            {"name":"firmware-manifest.json","browser_download_url":"https://example.com/manifest"},
+            {"name":"firmware.bin","browser_download_url":"https://example.com/firmware"}
+          ]}
+        ]"#.utf8)
+        let release = try GitHubFirmwareSource.selectRelease(from: data, channel: .beta)
+        XCTAssertEqual(release.tagName, "v0.9.0-beta.2")
+    }
+
+    @MainActor func testStableReleaseSelectionRejectsPrerelease() {
+        let data = Data(#"{"tag_name":"v0.9.0-beta.1","draft":false,"prerelease":true,"assets":[]}"#.utf8)
+        XCTAssertThrowsError(try GitHubFirmwareSource.selectRelease(from: data, channel: .stable))
     }
 }
 

@@ -43,7 +43,6 @@ struct ContentView: View {
           NavigationStack { ConnectionSettingsView() }
             .tabItem { Label("Settings", systemImage: "gearshape") }
         }
-        .tint(AppColors.primary)
         .environmentObject(viewModel)
         .task(id: storedDevices.map(\.deviceId)) {
             viewModel.monitorBonjour(devices: storedDevices, context: modelContext)
@@ -114,9 +113,9 @@ private struct DeviceRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(presence.color)
-                .frame(width: 10, height: 10)
+            Image(systemName: presence.systemImage)
+                .foregroundStyle(presence.color)
+                .frame(width: 20)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -166,7 +165,7 @@ private struct LiveDeviceStatusView: View {
 
     var body: some View {
         HStack {
-            Label(presence.title, systemImage: presence.isUsable ? "checkmark.circle.fill" : "circle")
+            Label(presence.title, systemImage: presence.systemImage)
                 .foregroundStyle(presence.color)
             Spacer()
             Text(presence.detail).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
@@ -218,6 +217,7 @@ private struct FirmwareDeviceView: View {
     @State private var manualValidationError: String?
     private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
+    @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
         let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId)
@@ -231,6 +231,7 @@ private struct FirmwareDeviceView: View {
         Form {
             Section("Firmware") {
                 Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } }
+                LabeledContent("Update channel", value: updateChannel.rawValue)
                 LiveDeviceStatusView(device: device)
                 LabeledContent("Installed firmware", value: device.firmwareVersion ?? "Unknown")
                 LabeledContent("Latest firmware", value: releaseSource.manifest?.version ?? "Not checked")
@@ -245,7 +246,7 @@ private struct FirmwareDeviceView: View {
                 } else if !device.capabilities.contains("secure_ota") {
                     Label("The installed firmware does not provide a supported update transport.", systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning)
                 } else {
-                    Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion) } }
+                    Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion, channel: updateChannel) } }
                     if releaseSource.status.canDownload { Button("Download Firmware \(releaseSource.manifest?.version ?? "")") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
                     if let error = releaseSource.errorMessage { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
                     if let selectedData { LabeledContent("File", value: selectedName); LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file)) }
@@ -261,7 +262,7 @@ private struct FirmwareDeviceView: View {
                     Text(statusText).accessibilityLabel("Firmware update status: \(statusText)")
                     if let transport = updater.activeTransport { LabeledContent("Transport", value: transport.rawValue) }
                     if updater.totalBytes > 0 { Text("\(Int(updater.progress * 100))% · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesSent), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(updater.totalBytes), countStyle: .file)) · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesPerSecond), countStyle: .file))/s").font(.caption).foregroundStyle(.secondary) }
-                    if case .transferring = updater.state { Button("Cancel", role: .cancel) { updater.cancel() }.tint(AppColors.primary) }
+                    if case .transferring = updater.state { Button("Cancel", role: .cancel) { updater.cancel() } }
                 }
             }
         }
@@ -271,6 +272,7 @@ private struct FirmwareDeviceView: View {
             device.firmwareVersion = installed
             releaseSource.reconcile(installed: installed, deviceOTASchema: device.otaSchema, appVersion: appVersion)
         }
+        .onChange(of: updateChannelName) { _, _ in releaseSource.reset() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data]) { result in
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
@@ -280,6 +282,7 @@ private struct FirmwareDeviceView: View {
             catch { targetVersion = ""; manualValidationError = error.localizedDescription }
         }
     }
+    private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
     private var statusText: String { switch updater.state { case .idle: "Ready"; case .checking: "Checking…"; case .connecting: "Connecting…"; case .authenticating: "Authenticating…"; case .preparing: "Preparing…"; case .transferring: "Updating firmware…"; case .waitingForFinalAck: "Waiting for final acknowledgement…"; case .verifying: "Verifying firmware…"; case .installing: "Installing firmware…"; case .rebooting: "Restarting InputPilot…"; case .reconnecting: "Reconnecting…"; case .verifyingInstalledVersion: "Verifying installed firmware…"; case .completed: "Firmware updated successfully"; case .cancelled: "Update cancelled. Existing firmware remains installed."; case let .failed(message): message } }
 }
 
@@ -294,18 +297,18 @@ private struct FirmwareDeviceView: View {
         guard let manifest else { return }
         status = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: manifest, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
     }
-    func check(installed: String?, deviceOTASchema: Int, appVersion: String) async {
+    func reset() {
+        manifest = nil; status = .notChecked; errorMessage = nil; firmwareURL = nil
+    }
+    func check(installed: String?, deviceOTASchema: Int, appVersion: String, channel: UpdateChannel = .stable) async {
         errorMessage = nil; manifest = nil; firmwareURL = nil; status = .checking
         do {
-            let url = URL(string: "https://api.github.com/repos/thorethy1/InputPilot/releases/latest")!
-            var request = URLRequest(url: url); request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            var request = URLRequest(url: channel.releaseAPIURL); request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let assets = json["assets"] as? [[String: Any]],
-                  let manifestString = assets.first(where: { $0["name"] as? String == Self.manifestAssetName })?["browser_download_url"] as? String,
-                  let firmwareString = assets.first(where: { $0["name"] as? String == Self.firmwareAssetName })?["browser_download_url"] as? String,
-                  let manifestURL = URL(string: manifestString), let imageURL = URL(string: firmwareString) else { throw URLError(.badServerResponse) }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            let release = try Self.selectRelease(from: data, channel: channel)
+            guard let manifestURL = release.assetURL(named: Self.manifestAssetName),
+                  let imageURL = release.assetURL(named: Self.firmwareAssetName) else { throw URLError(.badServerResponse) }
             let (manifestData, manifestResponse) = try await URLSession.shared.data(from: manifestURL)
             guard (manifestResponse as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
             let decoded = try JSONDecoder().decode(FirmwareManifest.self, from: manifestData)
@@ -331,10 +334,65 @@ private struct FirmwareDeviceView: View {
     }
 }
 
+struct GitHubReleaseDescriptor: Codable, Equatable, Sendable {
+    struct Asset: Codable, Equatable, Sendable {
+        let name: String
+        let browserDownloadURL: URL
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
+    }
+
+    let tagName: String
+    let draft: Bool
+    let prerelease: Bool
+    let assets: [Asset]
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case draft, prerelease, assets
+    }
+
+    func assetURL(named name: String) -> URL? {
+        assets.first { $0.name == name }?.browserDownloadURL
+    }
+
+    var isVersionedBeta: Bool {
+        let parts = tagName.components(separatedBy: "-beta.")
+        guard parts.count == 2, parts[0].hasPrefix("v"), Int(parts[1]) != nil else { return false }
+        return SemanticVersion(String(parts[0].dropFirst())) != nil
+    }
+}
+
+extension GitHubFirmwareSource {
+    static func selectRelease(from data: Data, channel: UpdateChannel) throws -> GitHubReleaseDescriptor {
+        let decoder = JSONDecoder()
+        switch channel {
+        case .stable:
+            let release = try decoder.decode(GitHubReleaseDescriptor.self, from: data)
+            guard !release.draft, !release.prerelease else { throw URLError(.badServerResponse) }
+            return release
+        case .beta:
+            let releases = try decoder.decode([GitHubReleaseDescriptor].self, from: data)
+            guard let release = releases.first(where: {
+                !$0.draft && $0.prerelease && $0.isVersionedBeta &&
+                $0.assetURL(named: manifestAssetName) != nil &&
+                $0.assetURL(named: firmwareAssetName) != nil
+            }) else { throw URLError(.resourceUnavailable) }
+            return release
+        }
+    }
+}
+
 private struct ConnectionSettingsView: View {
     @Query(sort: \StoredDevice.displayName) private var devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
+    @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
+    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
     private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
     private let appVersion = AppVersionInfo.read()
     var body: some View {
@@ -343,6 +401,23 @@ private struct ConnectionSettingsView: View {
                 if let selected { LiveDeviceStatusView(device: selected) }
                 Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Updates") {
+                Picker("Channel", selection: $updateChannelName) {
+                    ForEach(UpdateChannel.allCases) { channel in
+                        Text(channel.rawValue).tag(channel.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(updateChannel.detail)
+                    .font(.caption)
+                    .foregroundStyle(updateChannel == .beta ? AppColors.warning : .secondary)
+                ShareLink(item: updateChannel.altStoreSourceURL) {
+                    Label("Share AltStore \(updateChannel.rawValue) Source", systemImage: "square.and.arrow.up")
+                }
+                Text("The channel controls firmware OTA checks. Add the matching source in AltStore to receive app updates from the same channel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if let selected, PairingKeyStore.load(deviceId: selected.deviceId) == nil {
                 Section("Security") {
@@ -371,9 +446,26 @@ private struct ConnectionSettingsView: View {
                     if let lastSeen = selected.lastSeen { LabeledContent("Last seen", value: lastSeen.formatted(date: .abbreviated, time: .shortened)) }
                 }
             }
-            Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") }
+            Section("Appearance") {
+                Picker("Interface", selection: $appearanceName) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Text(appearance.rawValue).tag(appearance.rawValue)
+                    }
+                }
+                Picker("Accent color", selection: $accentName) {
+                    ForEach(AppAccent.allCases) { accent in
+                        Label(accent.rawValue, systemImage: accent == .inputPilot ? "app.fill" : "circle.fill")
+                            .foregroundStyle(accent.color)
+                            .tag(accent.rawValue)
+                    }
+                }
+                Label("Status and destructive colors keep their meaning when the accent changes.", systemImage: "paintpalette")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
     }
+    private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
     private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
 }
 
@@ -403,11 +495,11 @@ struct USBPairingInputTestView: View {
                 case .waiting:
                     Text("Waiting for InputPilot…").foregroundStyle(.secondary)
                 case .valid:
-                    Label("Paired securely with \(pairedDeviceId)", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
+                    Label("Paired securely with \(pairedDeviceId)", systemImage: "checkmark.shield.fill").foregroundStyle(AppColors.success)
                 case .invalid:
-                    Label("Input was received, but it was not a valid InputPilot pairing frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label("Input was received, but it was not a valid InputPilot pairing frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(AppColors.warning)
                 case .storageFailed:
-                    Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(.red)
+                    Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(AppColors.error)
                 }
                 Button("Pair another device") { captured = ""; pairedDeviceId = ""; result = .waiting }
                     .disabled(embedded && result == .valid)
@@ -472,9 +564,9 @@ struct SecureLifecycleGuideView: View {
             }
             Section("After pairing") {
                 Label("Bluetooth and Wi-Fi carry the same authenticated encrypted protocol.", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(AppColors.success)
                 Label("Setup, controls, diagnostics, management, and OTA never use plaintext endpoints.", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(AppColors.success)
                 Text("If the key is lost, create a new pairing code over USB. Pair every iPhone again because the old code becomes invalid.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -545,7 +637,7 @@ private struct FirmwareLogsView: View {
             }.frame(maxHeight: devices.count > 1 ? 170 : 125)
             ScrollViewReader { proxy in
                 ScrollView { LazyVStack(alignment: .leading, spacing: 4) { ForEach(visible) { line in Text(line.raw).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(line.level == "ERROR" ? .red : line.level == "WARN" ? .orange : .primary).frame(maxWidth: .infinity, alignment: .leading).id(line.id) } }.padding() }
-                    .background(.black.opacity(0.04))
+                    .background(Color(uiColor: .secondarySystemBackground))
                     .onChange(of: visible.count) { _, _ in if !manager.paused, let last = visible.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } }
             }
         }

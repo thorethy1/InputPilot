@@ -15,8 +15,14 @@ The generator reads the bundle identifier, marketing version, build number,
 privacy permissions, file size, and SHA-256 directly from the packaged IPA so
 the AltStore entry cannot silently diverge from the released app.
 
-`Version.xcconfig` is the single marketing-version source for both the iOS app
-and ESP32 firmware. CI overrides `INPUTPILOT_BUILD` with its monotonically
+Beta prereleases use versioned tags such as `v0.9.0-beta.1`. Their validated
+AltStore source is also copied to the fixed rolling URL
+`https://github.com/thorethy1/InputPilot/releases/download/beta/altstore-source.json`.
+See [Stable and Beta Release Channels](RELEASE_CHANNELS.md) for branch, version,
+OTA and promotion rules.
+
+`Version.xcconfig` holds the numeric iOS marketing version and the stable or beta
+firmware release identity. CI overrides `INPUTPILOT_BUILD` with its monotonically
 increasing workflow run number; local builds use the harmless fallback declared
 in that file.
 
@@ -44,7 +50,7 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 
 ## Release assets (public)
 
-The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the normal release entry point. Choose a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. It updates only the shared version on a temporary branch, starts CI for that exact commit, and promotes the commit to `main` only after CI succeeds. It then publishes the tag and generated release notes and dispatches [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
+The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the stable release entry point. Choose `none` when promoting an already-versioned beta, or a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. It updates the release configuration on a temporary branch, starts CI for that exact commit, and promotes the commit to `main` only after CI succeeds. [`create-beta-release.yml`](/.github/workflows/create-beta-release.yml) applies the same exact-commit gate to versioned prereleases from `beta`. Both dispatch [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
 
 - validates the release tag against `Version.xcconfig`;
 - waits for a successful CI run on the exact tag commit;

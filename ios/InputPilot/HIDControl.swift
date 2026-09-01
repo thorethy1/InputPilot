@@ -1062,17 +1062,42 @@ enum FirmwareManifestValidator {
 
 struct SemanticVersion: Comparable, Equatable {
     let components: [Int]
+    let prerelease: [String]
     init?(_ value: String) {
-        let core = value.split(separator: "+", maxSplits: 1)[0].split(separator: "-", maxSplits: 1)[0]
-        let parts = core.split(separator: ".")
+        let withoutBuild = value.split(separator: "+", maxSplits: 1)[0]
+        let releaseParts = withoutBuild.split(separator: "-", maxSplits: 1)
+        let parts = releaseParts[0].split(separator: ".")
         guard !parts.isEmpty, parts.allSatisfy({ Int($0) != nil }) else { return nil }
         components = parts.map { Int($0)! }
+        if releaseParts.count == 2 {
+            let identifiers = releaseParts[1].split(separator: ".").map(String.init)
+            guard !identifiers.isEmpty,
+                  identifiers.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" } }) else { return nil }
+            prerelease = identifiers
+        } else {
+            prerelease = []
+        }
     }
     static func < (lhs: Self, rhs: Self) -> Bool {
         for index in 0..<max(lhs.components.count, rhs.components.count) {
             let l = index < lhs.components.count ? lhs.components[index] : 0
             let r = index < rhs.components.count ? rhs.components[index] : 0
             if l != r { return l < r }
+        }
+        if lhs.prerelease.isEmpty || rhs.prerelease.isEmpty {
+            return !lhs.prerelease.isEmpty && rhs.prerelease.isEmpty
+        }
+        for index in 0..<max(lhs.prerelease.count, rhs.prerelease.count) {
+            guard index < lhs.prerelease.count else { return true }
+            guard index < rhs.prerelease.count else { return false }
+            let left = lhs.prerelease[index], right = rhs.prerelease[index]
+            if left == right { continue }
+            switch (Int(left), Int(right)) {
+            case let (.some(l), .some(r)): return l < r
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return left < right
+            }
         }
         return false
     }
@@ -2299,6 +2324,6 @@ struct PresetsView: View {
 
 struct MacrosView: View {
     @ObservedObject var manager: HIDConnectionManager; @ObservedObject var controller: MacroController; @Environment(\.modelContext) private var context; @Query(sort: \HIDMacro.createdAt, order: .reverse) private var saved: [HIDMacro]; @State private var speed = 1.0; @State private var repeatCount = 1; @State private var delay = 0; @State private var showSave = false; @State private var macroName = ""; @State private var macroDescription = ""
-    var body: some View { VStack { if controller.isPlaying { Button("STOP", role: .destructive) { UINotificationFeedbackGenerator().notificationOccurred(.warning); controller.stop(manager: manager) }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large) }; HStack { Button(controller.isRecording ? "Stop & Save" : "Record") { if controller.isRecording { controller.stopRecording(); macroName = "Macro \(saved.count + 1)"; showSave = true; UIImpactFeedbackGenerator(style: .medium).impactOccurred() } else { controller.startRecording(); UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }.buttonStyle(.borderedProminent); if controller.isRecording { Button("Cancel", role: .cancel) { controller.stopRecording(); controller.recorded = [] } }; TimelineView(.periodic(from: .now, by: 1)) { _ in Text(recordingStatus) } }; Form { Picker("Speed", selection: $speed) { ForEach([0.5, 1, 1.5, 2], id: \.self) { Text("\($0, specifier: "%g")×").tag($0) } }; Picker("Repeat", selection: $repeatCount) { ForEach([1, 2, 5, 10, 0], id: \.self) { Text($0 == 0 ? "Infinite" : "\($0)×").tag($0) } }; Picker("Start delay", selection: $delay) { ForEach([0, 3, 5, 10], id: \.self) { Text("\($0) s").tag($0) } }; Section("Saved") { ForEach(saved) { macro in HStack { VStack(alignment: .leading) { TextField("Name", text: Binding(get: { macro.name }, set: { macro.name = $0 })); Text("\(macro.events.count) events").font(.caption) }; Spacer(); Button("Play") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); controller.play(macro, speed: speed, repeats: repeatCount == 0 ? nil : repeatCount, delay: Double(delay), manager: manager) } }.swipeActions { Button(role: .destructive) { context.delete(macro) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDMacro(name: macro.name + " Copy", description: macro.macroDescription, events: macro.events)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } } } } } .alert("Save Macro", isPresented: $showSave) { TextField("Name", text: $macroName); TextField("Description (optional)", text: $macroDescription); Button("Save") { context.insert(HIDMacro(name: macroName.isEmpty ? "Macro" : macroName, description: macroDescription, events: controller.recorded)); controller.recorded = [] }; Button("Cancel", role: .cancel) { controller.recorded = [] } } }
+    var body: some View { VStack { if controller.isPlaying { Button("STOP", role: .destructive) { UINotificationFeedbackGenerator().notificationOccurred(.warning); controller.stop(manager: manager) }.buttonStyle(.borderedProminent).tint(AppColors.destructive).controlSize(.large) }; HStack { Button(controller.isRecording ? "Stop & Save" : "Record") { if controller.isRecording { controller.stopRecording(); macroName = "Macro \(saved.count + 1)"; showSave = true; UIImpactFeedbackGenerator(style: .medium).impactOccurred() } else { controller.startRecording(); UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }.buttonStyle(.borderedProminent); if controller.isRecording { Button("Cancel", role: .cancel) { controller.stopRecording(); controller.recorded = [] } }; TimelineView(.periodic(from: .now, by: 1)) { _ in Text(recordingStatus) } }; Form { Picker("Speed", selection: $speed) { ForEach([0.5, 1, 1.5, 2], id: \.self) { Text("\($0, specifier: "%g")×").tag($0) } }; Picker("Repeat", selection: $repeatCount) { ForEach([1, 2, 5, 10, 0], id: \.self) { Text($0 == 0 ? "Infinite" : "\($0)×").tag($0) } }; Picker("Start delay", selection: $delay) { ForEach([0, 3, 5, 10], id: \.self) { Text("\($0) s").tag($0) } }; Section("Saved") { ForEach(saved) { macro in HStack { VStack(alignment: .leading) { TextField("Name", text: Binding(get: { macro.name }, set: { macro.name = $0 })); Text("\(macro.events.count) events").font(.caption) }; Spacer(); Button("Play") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); controller.play(macro, speed: speed, repeats: repeatCount == 0 ? nil : repeatCount, delay: Double(delay), manager: manager) } }.swipeActions { Button(role: .destructive) { context.delete(macro) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDMacro(name: macro.name + " Copy", description: macro.macroDescription, events: macro.events)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } } } } } .alert("Save Macro", isPresented: $showSave) { TextField("Name", text: $macroName); TextField("Description (optional)", text: $macroDescription); Button("Save") { context.insert(HIDMacro(name: macroName.isEmpty ? "Macro" : macroName, description: macroDescription, events: controller.recorded)); controller.recorded = [] }; Button("Cancel", role: .cancel) { controller.recorded = [] } } }
     private var recordingStatus: String { guard controller.isRecording else { return "\(controller.recorded.count) events" }; let seconds = Int(controller.recordingDuration); return String(format: "🔴 Recording · %02d:%02d · %d events", seconds / 60, seconds % 60, controller.recorded.count) }
 }

@@ -14,6 +14,10 @@ import struct
 import zipfile
 from pathlib import Path, PurePosixPath
 
+RELEASE_TAG_PATTERN = re.compile(
+    r"^v(?P<core>\d+\.\d+\.\d+)(?P<prerelease>-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$"
+)
+
 LC_CODE_SIGNATURE = 0x1D
 THIN_MAGICS = {
     b"\xce\xfa\xed\xfe": ("<", 28),  # MH_MAGIC
@@ -144,20 +148,28 @@ def read_ipa_info(ipa: Path) -> dict:
 
 def create_altstore_source(ipa: Path, tag: str, release_date: str,
                            destination: Path) -> None:
+    tag_match = RELEASE_TAG_PATTERN.fullmatch(tag)
+    if not tag_match:
+        raise ValueError(f"invalid InputPilot release tag: {tag}")
     info = read_ipa_info(ipa)
     version = str(info.get("CFBundleShortVersionString", ""))
     build = str(info.get("CFBundleVersion", ""))
     bundle_id = info.get("CFBundleIdentifier")
-    if bundle_id != "com.thorethy.inputpilot" or version != tag.removeprefix("v") or not build:
+    is_beta = tag_match.group("prerelease") is not None
+    expected_channel = "beta" if is_beta else "stable"
+    if (bundle_id != "com.thorethy.inputpilot" or version != tag_match.group("core") or not build or
+            info.get("InputPilotUpdateChannel") != expected_channel):
         raise ValueError("IPA identity/version does not match the AltStore release")
     try:
         dt.date.fromisoformat(release_date)
     except ValueError as error:
         raise ValueError(f"invalid AltStore release date: {release_date}") from error
     asset_name = f"InputPilot-{tag}-ios-unsigned.ipa"
-    base = "https://raw.githubusercontent.com/thorethy1/InputPilot/main"
+    base = f"https://raw.githubusercontent.com/thorethy1/InputPilot/{tag}"
+    channel_name = "InputPilot Beta" if is_beta else "InputPilot"
+    release_label = f"InputPilot {tag.removeprefix('v')} beta release." if is_beta else f"InputPilot {version} release."
     source = {
-        "name": "InputPilot",
+        "name": channel_name,
         "subtitle": "Secure local control for InputPilot hardware.",
         "description": "Install and update the InputPilot iOS companion app.",
         "website": "https://github.com/thorethy1/InputPilot",
@@ -179,8 +191,9 @@ def create_altstore_source(ipa: Path, tag: str, release_date: str,
             "versions": [{
                 "version": version,
                 "buildVersion": build,
+                "marketingVersion": tag.removeprefix("v") if is_beta else version,
                 "date": release_date,
-                "localizedDescription": f"InputPilot {version} release.",
+                "localizedDescription": release_label,
                 "downloadURL": f"https://github.com/thorethy1/InputPilot/releases/download/{tag}/{asset_name}",
                 "size": ipa.stat().st_size,
                 "sha256": hashlib.sha256(ipa.read_bytes()).hexdigest(),
@@ -271,8 +284,8 @@ def main() -> None:
     parser.add_argument("--release-date", default=dt.datetime.now(dt.timezone.utc).date().isoformat())
     args = parser.parse_args()
 
-    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.tag):
-        raise ValueError(f"release tag must match vMAJOR.MINOR.PATCH, got {args.tag!r}")
+    if not RELEASE_TAG_PATTERN.fullmatch(args.tag):
+        raise ValueError(f"release tag must match vMAJOR.MINOR.PATCH[-PRERELEASE], got {args.tag!r}")
 
     args.output.mkdir(parents=True, exist_ok=True)
     if any(args.output.iterdir()):

@@ -1,7 +1,11 @@
-// Single source of truth for the public InputPilot app and firmware version.
-// GitHub's Release workflow updates INPUTPILOT_VERSION. CI supplies the
-// monotonically increasing INPUTPILOT_BUILD value for packaged iOS builds.
-INPUTPILOT_VERSION = 0.8.19
+// Single source of truth for InputPilot app, firmware and release identity.
+// Release workflows update these values. CI supplies the monotonically
+// increasing INPUTPILOT_BUILD value for packaged iOS builds.
+INPUTPILOT_VERSION = 0.9.0
+// Firmware/release identity. Beta builds use e.g. 0.9.0-beta.1 while the iOS
+// marketing version remains the Apple-compatible numeric core above.
+INPUTPILOT_RELEASE = 0.9.0-beta.1
+INPUTPILOT_CHANNEL = beta
 INPUTPILOT_BUILD = 1
 
 MARKETING_VERSION = $(INPUTPILOT_VERSION)

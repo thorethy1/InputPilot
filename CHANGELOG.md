@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add aligned Stable/Beta app and firmware update channels, semantic beta
+  firmware versions, a dedicated beta release workflow, versioned GitHub
+  prereleases and a fixed rolling AltStore beta feed.
+- Start the 0.9 native iOS design foundation with System, Light and Dark
+  appearance choices, user-selectable accent colors, shared layout tokens and
+  semantic connection-state colors/icons that keep offline, failure and
+  destructive meaning separate from branding.
 - Prefer each device's last confirmed IP for immediate and VPN-safe access,
   while using background Bonjour discovery only to validate and cache address
   changes for the matching secure device identity.

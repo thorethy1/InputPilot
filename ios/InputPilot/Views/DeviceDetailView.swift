@@ -227,7 +227,7 @@ struct DeviceDetailView: View {
             Section("Security") {
                 if hasPairingKey {
                     Label("USB-trusted Secure Protocol v2", systemImage: "checkmark.shield.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(AppColors.success)
                 } else {
                     Label("USB trust is missing", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(AppColors.warning)

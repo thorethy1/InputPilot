@@ -14,7 +14,7 @@ struct TrackpadInputBridge: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .secondarySystemBackground
-        view.layer.cornerRadius = 18
+        view.layer.cornerRadius = AppTheme.Radius.trackpad
         view.accessibilityLabel = "Remote trackpad"
 
         let movePan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.moved(_:)))

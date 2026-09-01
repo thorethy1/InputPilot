@@ -57,10 +57,26 @@ enum DevicePresenceStatus: Equatable, Sendable {
 
     var color: Color {
         switch self {
-        case .readyBoth, .readyBluetooth, .readyWiFi: AppColors.success
-        case .bluetoothDiscovered, .connecting, .reconnecting, .authenticating, .checking: AppColors.info
-        case .setup: AppColors.warning
-        case .authenticationFailed, .offline: AppColors.error
+        case .readyBoth, .readyBluetooth, .readyWiFi: AppColors.connected
+        case .bluetoothDiscovered, .connecting, .reconnecting, .authenticating, .checking: AppColors.available
+        case .setup: AppColors.attention
+        case .authenticationFailed: AppColors.error
+        case .offline: AppColors.offline
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .checking: "ellipsis.circle"
+        case .offline: "wifi.slash"
+        case .setup: "wrench.and.screwdriver"
+        case .bluetoothDiscovered: "antenna.radiowaves.left.and.right"
+        case .connecting, .reconnecting: "arrow.triangle.2.circlepath"
+        case .authenticating: "checkmark.shield"
+        case .authenticationFailed: "exclamationmark.shield"
+        case .readyBoth: "checkmark.circle.fill"
+        case .readyBluetooth: "checkmark.circle.fill"
+        case .readyWiFi: "checkmark.circle.fill"
         }
     }
 

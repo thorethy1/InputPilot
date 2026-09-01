@@ -73,8 +73,8 @@ Secure protocol: [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 ## CI
 
-Badges above track the latest `main` workflow run
-(`.github/workflows/ci.yml` on every PR and push to `main`):
+Badges above track the latest `main` workflow run. `.github/workflows/ci.yml`
+runs on every PR and push to `main` or `beta`:
 
 - PlatformIO **native unit tests**
 - **esp32s3 firmware compile**
@@ -138,7 +138,7 @@ Contributors should use `AppColors` and the `AccentColor` asset for the red bran
 
 ## iOS builds on GitHub
 
-No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes ESP32-S3 firmware and an unsigned iOS device IPA on each `main` build. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
+No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes ESP32-S3 firmware and an unsigned iOS device IPA on each `main` and `beta` build. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
 
 Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow**. The workflow replaces `InputPilot.ipa` in the unpublished **Private Signed InputPilot IPA** draft release and writes its direct download link to the run summary. Only authorized repository collaborators can access that draft; the signed IPA is never added to a public release.
 
@@ -146,12 +146,13 @@ Signing inputs are never committed or uploaded as artifacts and are reconstructe
 
 ## Versioned release assets
 
-Use **Actions → Create release → Run workflow** and choose `patch`, `minor`, or
-`major`. The worker updates the single version in `Version.xcconfig`, runs CI
+Use **Actions → Create release → Run workflow** and choose `none`, `patch`, `minor`, or
+`major`. The worker updates the release values in `Version.xcconfig`, runs CI
 with an automatically increasing iOS build number, creates the matching tag and
 GitHub Release, and starts the verified asset workflow. App and firmware builds
-both read this shared version; their project files do not contain release-number
-copies.
+read this shared configuration; beta firmware additionally uses a prerelease
+identity such as `0.9.0-beta.1` while the iOS marketing version remains numeric
+for Apple compatibility.
 
 | Asset | Content |
 |-------|---------|
@@ -168,6 +169,13 @@ Add `https://github.com/thorethy1/InputPilot/releases/latest/download/altstore-s
 as an AltStore Classic source to receive iOS app updates. The source is generated
 from the validated public IPA for every tagged release.
 
+0.9 development and prereleases use the `beta` branch. Select **Beta** under
+Settings → Updates for beta firmware OTA checks and add
+`https://github.com/thorethy1/InputPilot/releases/download/beta/altstore-source.json`
+to AltStore for beta app updates. Stable releases and `releases/latest` remain
+isolated from prereleases. The complete publish and promotion procedure is in
+[Stable and Beta Release Channels](docs/RELEASE_CHANNELS.md).
+
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 
 To repair a release whose assets were not attached (or to retry after a CI fix), run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name. A manually created release remains supported when its tag matches `Version.xcconfig`.
@@ -180,7 +188,7 @@ pio test -e native
 pio run -e esp32s3
 ```
 
-iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. Firmware and iOS jobs run on pull requests and pushes to `main`.
+iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. Firmware and iOS jobs run on pull requests and pushes to `main` and `beta`.
 
 The manual hardware and Liquid Glass release-candidate checklist is in [the hardware E2E test plan](docs/HARDWARE_E2E.md).
 
