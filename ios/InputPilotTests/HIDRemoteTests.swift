@@ -144,14 +144,16 @@ final class HIDRemoteTests: XCTestCase {
     }
 
     @MainActor func testBetaReleaseSelectionSkipsRollingFeedAndStableReleases() throws {
-        let data = Data(#"[
+        let data = Data(#"""
+        [
           {"tag_name":"beta","draft":false,"prerelease":true,"assets":[{"name":"altstore-source.json","browser_download_url":"https://example.com/feed"}]},
           {"tag_name":"v0.8.19","draft":false,"prerelease":false,"assets":[]},
           {"tag_name":"v0.9.0-beta.2","draft":false,"prerelease":true,"assets":[
             {"name":"firmware-manifest.json","browser_download_url":"https://example.com/manifest"},
             {"name":"firmware.bin","browser_download_url":"https://example.com/firmware"}
           ]}
-        ]"#.utf8)
+        ]
+        """#.utf8)
         let release = try GitHubFirmwareSource.selectRelease(from: data, channel: .beta)
         XCTAssertEqual(release.tagName, "v0.9.0-beta.2")
     }
