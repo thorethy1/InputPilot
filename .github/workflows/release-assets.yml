@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   attach:
+    if: github.event_name == 'workflow_dispatch' || github.event.release.tag_name != 'beta'
     name: Validate and attach public assets
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -40,8 +41,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="$TAG_NAME"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release tag must match vMAJOR.MINOR.PATCH; got '$tag'."
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Release tag must match vMAJOR.MINOR.PATCH[-PRERELEASE]; got '$tag'."
             exit 1
           fi
           version="${tag#v}"
@@ -61,8 +62,8 @@ jobs:
           version = sys.argv[1]
           if Path("Version.xcconfig").is_file():
               sys.path.insert(0, str(Path.cwd()))
-              from versioning import project_version
-              configured = project_version()
+              from versioning import release_version
+              configured = release_version()
           else:
               # Compatibility for repairing releases created before the shared
               # version source was introduced.
@@ -80,6 +81,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "date=$(jq -r '.published_at[0:10]' <<<"$release_json")" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$(jq -r '.prerelease' <<<"$release_json")" >> "$GITHUB_OUTPUT"
           echo "Release tag $tag resolves to $sha"
 
       - name: Require successful CI for the release commit
@@ -181,3 +183,20 @@ jobs:
           fi
           echo "Verified release assets for $tag:"
           printf '%s\n' "$actual"
+
+      - name: Publish rolling AltStore beta feed
+        if: steps.release.outputs.prerelease == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create beta --repo "$GITHUB_REPOSITORY" \
+              --target "${{ steps.release.outputs.sha }}" \
+              --title "InputPilot Beta Channel" \
+              --notes "Rolling AltStore feed for InputPilot beta releases. Use the immutable versioned prereleases for release artifacts." \
+              --prerelease
+          fi
+          gh release upload beta release-assets/altstore-source.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          echo "Beta AltStore feed: https://github.com/$GITHUB_REPOSITORY/releases/download/beta/altstore-source.json" >> "$GITHUB_STEP_SUMMARY"

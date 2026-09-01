@@ -1,59 +1,56 @@
-name: Create release
+name: Create beta release
 
 on:
   workflow_dispatch:
     inputs:
-      bump:
-        description: Semantic version component to increment
+      version:
+        description: Beta version (for example 0.9.0-beta.1)
         required: true
-        default: patch
-        type: choice
-        options:
-          - none
-          - patch
-          - minor
-          - major
+        default: 0.9.0-beta.1
+        type: string
 
 permissions:
   actions: write
   contents: write
 
 concurrency:
-  group: create-release
+  group: create-beta-release
   cancel-in-progress: false
 
 jobs:
   release:
-    name: Bump, validate and publish
+    name: Validate and publish beta
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
 
     steps:
-      - name: Checkout latest main
+      - name: Checkout latest beta
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: beta
           fetch-depth: 0
 
-      - name: Set stable release version
+      - name: Set beta version
         id: version
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          git fetch origin main --tags
-          git checkout -B main origin/main
-          previous="$(python3 versioning.py show)"
-          if [[ '${{ inputs.bump }}' == 'none' ]]; then
-            version="$(python3 versioning.py show)"
-            python3 versioning.py set-release "$version" >/dev/null
-          else
-            version="$(python3 versioning.py bump '${{ inputs.bump }}')"
+          git fetch origin beta --tags
+          git checkout -B beta origin/beta
+          version="$RELEASE_VERSION"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "::error::Beta version must match MAJOR.MINOR.PATCH-beta.NUMBER; got '$version'."
+            exit 1
           fi
+          previous="$(python3 versioning.py show-release)"
+          python3 versioning.py set-release "$version" >/dev/null
           tag="v$version"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "::error::Tag $tag already exists."
+            echo "::error::Tag $tag already exists. Increase the beta number."
             exit 1
           fi
           git config user.name github-actions[bot]
@@ -63,7 +60,7 @@ jobs:
             git commit -m "Release InputPilot $version"
           fi
           sha="$(git rev-parse HEAD)"
-          branch="release/$tag-$GITHUB_RUN_ID"
+          branch="beta-release/$tag-$GITHUB_RUN_ID"
           git push origin "HEAD:refs/heads/$branch"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -71,7 +68,7 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Start CI for release commit
+      - name: Start CI for beta release commit
         shell: bash
         run: >-
           gh workflow run ci.yml
@@ -101,29 +98,30 @@ jobs:
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
 
-      - name: Tag and publish release
+      - name: Tag and publish prerelease
         shell: bash
         run: |
           set -euo pipefail
           tag='${{ steps.version.outputs.tag }}'
           sha='${{ steps.version.outputs.sha }}'
-          git push origin "$sha:refs/heads/main"
+          git push origin "$sha:refs/heads/beta"
           git tag -a "$tag" "$sha" -m "InputPilot ${{ steps.version.outputs.version }}"
           git push origin "$tag"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
             --target "$sha" \
             --title "InputPilot ${{ steps.version.outputs.version }}" \
             --generate-notes \
+            --prerelease \
             --verify-tag
 
-      - name: Attach and verify artifacts from validated CI
+      - name: Attach and verify beta artifacts
         id: assets
         shell: bash
         run: |
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
           gh workflow run release-assets.yml --repo "$GITHUB_REPOSITORY" \
-            --ref main -f tag='${{ steps.version.outputs.tag }}'
+            --ref beta -f tag='${{ steps.version.outputs.tag }}'
           run_id=""
           for attempt in $(seq 1 60); do
             runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
@@ -143,13 +141,13 @@ jobs:
           {
             echo "## InputPilot ${{ steps.version.outputs.version }}"
             echo
-            echo "Stable version prepared from ${{ steps.version.outputs.previous }} using Version.xcconfig."
+            echo "Previous beta identity: ${{ steps.version.outputs.previous }}"
             echo "CI run: ${{ steps.ci.outputs.run_id }}"
             echo "Release asset run: $run_id"
-            echo "The public release and its verified assets are complete."
+            echo "The versioned prerelease, OTA assets and rolling AltStore beta feed are complete."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Remove temporary release branch
+      - name: Remove temporary beta release branch
         if: always() && steps.version.outputs.branch != ''
         shell: bash
         run: git push origin --delete '${{ steps.version.outputs.branch }}' || true
