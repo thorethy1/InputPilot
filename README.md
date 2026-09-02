@@ -4,12 +4,9 @@
 [![Firmware + unit tests](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Native%20unit%20tests%20%2B%20firmware%20build&label=firmware%20%2B%20unit%20tests)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![iOS](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=iOS%20build%20%2B%20unit%20tests&label=iOS)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 
-
-
 **InputPilot** is ESP32-S3 firmware that appears to your computer as a USB mouse and keyboard, plus an iOS companion that controls it locally over BLE or persistent Wi-Fi/TCP. Setup establishes trust by USB, then uses the same authenticated Secure Protocol v2 over Bluetooth and Wi-Fi. Older firmware is intentionally unsupported and must be reflashed over USB.
 
 No cloud relay, telemetry, computer-input capture, or Internet remote control is included. Use it only with computers you own or are authorized to control.
-
 
 ## Getting started
 
@@ -75,6 +72,28 @@ After flashing, sideload the InputPilot iOS companion app and securely pair it w
 | Native unit tests (`pio test -e native`) | Linux / macOS / CI |
 | Firmware compile (`pio run -e esp32s3`) | Linux / macOS / CI |
 | iOS companion (`xcodebuild test`) | **macOS with Xcode 26+** / CI (`macos-26`) |
+
+## AltStore
+
+InputPilot can be installed and updated through AltStore-compatible sources. The source files live directly in this repository, while the unsigned IPA files remain versioned GitHub Release assets.
+
+### Stable
+
+Use the stable source for normal InputPilot releases:
+
+```text
+https://github.com/thorethy1/InputPilot/raw/main/app-repo.json
+```
+
+### Beta
+
+Use the beta source to receive InputPilot prereleases:
+
+```text
+https://github.com/thorethy1/InputPilot/raw/main/app-repo-beta.json
+```
+
+Add the desired URL as a source in AltStore Classic or another compatible sideloading app. Stable releases update `app-repo.json`; prereleases update `app-repo-beta.json`. The source metadata points to the matching validated unsigned IPA in GitHub Releases.
 
 ## Layout
 
@@ -167,8 +186,7 @@ copies.
 
 | Asset | Content |
 |-------|---------|
-| `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing) |
-| `altstore-source.json` | AltStore Classic source for installing and updating the public unsigned IPA |
+| `InputPilot-vX.Y.Z-ios-unsigned.ipa` | Unsigned iOS device IPA (for self-signing and AltStore-compatible sources) |
 | `InitialFirmware.bin` | Single merged image for initial installation or required USB reflash; never OTA |
 | `InputPilot-Firmware-vX.Y.Z.zip` | Individual initial-flash images, generated flash arguments, manifest, and instructions |
 | `firmware.bin` | App-only image for normal authenticated Wi-Fi or BLE OTA |
@@ -176,9 +194,7 @@ copies.
 
 The individual bootloader, partition, OTA bootstrap, checksum, and initial-flash manifest files remain inside the complete ZIP instead of being duplicated as public release assets. `firmware.bin` and `firmware-manifest.json` are always published together so older InputPilot apps can discover and verify future updates.
 
-Add `https://github.com/thorethy1/InputPilot/releases/latest/download/altstore-source.json`
-as an AltStore Classic source to receive iOS app updates. The source is generated
-from the validated public IPA for every tagged release.
+The repository-hosted AltStore-compatible feeds are documented in the [AltStore](#altstore) section above and are updated automatically when stable or beta releases are published.
 
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 
