@@ -242,3 +242,34 @@ private final class MockTransport: HIDControlTransport {
     func send(_ event: HIDEvent) async throws { events.append(event) }
     func disconnect() async { state = .offline }
 }
+
+final class PresetScriptTests: XCTestCase {
+    func testFormWithLeadingZerosAndDelay() throws {
+        let source = "[TAB]\n[TAB]\n263\n[TAB]\n2630\n[TAB]\n00004756\n[TAB]\n00\n[DELAY 500]\n[ENTER]"
+        XCTAssertEqual(try PresetScript.parse(source), [
+            .key("tab"), .key("tab"), .text("263"), .key("tab"),
+            .text("2630"), .key("tab"), .text("00004756"), .key("tab"),
+            .text("00"), .delay(500), .key("enter")
+        ])
+    }
+
+    func testDuckyScriptSubsetAndLiteralEscaping() throws {
+        XCTAssertEqual(try PresetScript.parse("REM form\r\nCTRL ALT DELETE\r\nSTRING [TAB]  \r\nDELAY 0\r\nENTER"), [
+            .key("ctrl+alt+delete"), .text("[TAB]  "), .delay(0), .key("enter")
+        ])
+        XCTAssertEqual(try PresetScript.parse("[CTRL+A]\n[SHIFT+TAB]\nF12"), [.key("ctrl+a"), .key("shift+tab"), .key("f12")])
+    }
+
+    func testMalformedCommandsHaveLineNumbers() {
+        for command in ["[DELAY]", "DELAY -1", "DELAY 60001", "DELAY 999999999999999999999999999", "[TBA]", "[TAB", "[CTRL+BOGUS]", "[TAB ENTER]"] {
+            XCTAssertThrowsError(try PresetScript.parse("STRING valid\n" + command)) { error in
+                XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
+            }
+        }
+    }
+
+    func testBlankLinesDoNotSendEnterAndTextKeepsWhitespace() throws {
+        XCTAssertEqual(try PresetScript.parse("\n  00004756  \n\n[ENTER]\n"), [.text("  00004756  "), .key("enter")])
+        XCTAssertEqual(try PresetScript.parse("STRING TAB\nSTRING ENTER\nSTRING DELAY 500"), [.text("TAB"), .text("ENTER"), .text("DELAY 500")])
+    }
+}
