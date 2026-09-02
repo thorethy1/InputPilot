@@ -65,8 +65,6 @@ jobs:
               from versioning import release_version
               configured = release_version()
           else:
-              # Compatibility for repairing releases created before the shared
-              # version source was introduced.
               config = Path("usb-hid-s3/include/Config.h").read_text(encoding="utf-8")
               match = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', config)
               configured = match.group(1) if match else ""
@@ -184,19 +182,71 @@ jobs:
           echo "Verified release assets for $tag:"
           printf '%s\n' "$actual"
 
-      - name: Publish rolling AltStore beta feed
-        if: steps.release.outputs.prerelease == 'true'
+      - name: Publish repository app source
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view beta --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create beta --repo "$GITHUB_REPOSITORY" \
-              --target "${{ steps.release.outputs.sha }}" \
-              --title "InputPilot Beta Channel" \
-              --notes "Rolling AltStore feed for InputPilot beta releases. Use the immutable versioned prereleases for release artifacts." \
-              --prerelease
+          if [[ "${{ steps.release.outputs.prerelease }}" == "true" ]]; then
+            feed="app-repo-beta.json"
+          else
+            feed="app-repo.json"
           fi
-          gh release upload beta release-assets/altstore-source.json \
-            --repo "$GITHUB_REPOSITORY" \
-            --clobber
-          echo "Beta AltStore feed: https://github.com/$GITHUB_REPOSITORY/releases/download/beta/altstore-source.json" >> "$GITHUB_STEP_SUMMARY"
+
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$feed?ref=main" --jq '.sha' 2>/dev/null || true)"
+          if [[ -n "$current_sha" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/contents/$feed?ref=main" --jq '.content' \
+              | tr -d '\n' | base64 --decode > current-app-repo.json
+          else
+            printf '{"apps":[{"versions":[]}]}' > current-app-repo.json
+          fi
+
+          python3 - "$feed" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          feed = sys.argv[1]
+          new_source = json.loads(Path("release-assets/altstore-source.json").read_text(encoding="utf-8"))
+          current_source = json.loads(Path("current-app-repo.json").read_text(encoding="utf-8"))
+
+          new_app = new_source["apps"][0]
+          new_version = new_app["versions"][0]
+          current_apps = current_source.get("apps") or []
+          current_versions = current_apps[0].get("versions", []) if current_apps else []
+
+          version_name = new_version.get("version")
+          new_app["versions"] = [new_version] + [
+              version for version in current_versions
+              if version.get("version") != version_name
+          ]
+
+          if feed == "app-repo-beta.json":
+              new_source["name"] = "InputPilot Beta"
+              new_source["subtitle"] = "InputPilot beta releases for early testing."
+              new_source["description"] = "Install and update InputPilot beta builds."
+
+          Path("merged-app-repo.json").write_text(
+              json.dumps(new_source, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          content="$(base64 -w0 merged-app-repo.json)"
+          args=(
+            -f "message=Update $feed for ${{ steps.release.outputs.tag }}"
+            -f "content=$content"
+            -f "branch=main"
+          )
+          if [[ -n "$current_sha" ]]; then
+            args+=(-f "sha=$current_sha")
+          fi
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$feed" "${args[@]}" >/dev/null
+
+          url="https://github.com/$GITHUB_REPOSITORY/raw/main/$feed"
+          {
+            echo
+            echo "## App source"
+            echo
+            echo "$url"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Published app source: $url"
