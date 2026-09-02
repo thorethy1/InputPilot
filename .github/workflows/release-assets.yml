@@ -192,8 +192,46 @@ jobs:
             feed="app-repo.json"
           fi
 
-          content="$(base64 -w0 release-assets/altstore-source.json)"
           current_sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$feed?ref=main" --jq '.sha' 2>/dev/null || true)"
+          if [[ -n "$current_sha" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/contents/$feed?ref=main" --jq '.content' \
+              | tr -d '\n' | base64 --decode > current-app-repo.json
+          else
+            printf '{"apps":[{"versions":[]}]}' > current-app-repo.json
+          fi
+
+          python3 - "$feed" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          feed = sys.argv[1]
+          new_source = json.loads(Path("release-assets/altstore-source.json").read_text(encoding="utf-8"))
+          current_source = json.loads(Path("current-app-repo.json").read_text(encoding="utf-8"))
+
+          new_app = new_source["apps"][0]
+          new_version = new_app["versions"][0]
+          current_apps = current_source.get("apps") or []
+          current_versions = current_apps[0].get("versions", []) if current_apps else []
+
+          version_name = new_version.get("version")
+          new_app["versions"] = [new_version] + [
+              version for version in current_versions
+              if version.get("version") != version_name
+          ]
+
+          if feed == "app-repo-beta.json":
+              new_source["name"] = "InputPilot Beta"
+              new_source["subtitle"] = "InputPilot beta releases for early testing."
+              new_source["description"] = "Install and update InputPilot beta builds."
+
+          Path("merged-app-repo.json").write_text(
+              json.dumps(new_source, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          content="$(base64 -w0 merged-app-repo.json)"
           args=(
             -f "message=Update $feed for ${{ steps.release.outputs.tag }}"
             -f "content=$content"
