@@ -185,6 +185,9 @@ struct InputPilotApp: App {
                 .preferredColorScheme(appearance.colorScheme)
                 .fontDesign(interfaceStyle.fontDesign)
                 .buttonBorderShape(.roundedRectangle(radius: interfaceStyle.controlRadius))
+                .onAppear { applyUIKitTint() }
+                .onChange(of: accentName) { _, _ in applyUIKitTint() }
+                .onChange(of: customAccentHex) { _, _ in applyUIKitTint() }
         }
         .modelContainer(container)
     }
@@ -199,5 +202,15 @@ struct InputPilotApp: App {
 
     private var interfaceStyle: AppInterfaceStyle {
         AppInterfaceStyle(rawValue: interfaceStyleName) ?? .standard
+    }
+
+    @MainActor
+    private func applyUIKitTint() {
+        let tintColor = UIColor(accent.color(customHex: customAccentHex))
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows {
+                window.tintColor = tintColor
+            }
+        }
     }
 }
