@@ -84,7 +84,7 @@ Do not decode against a different build: addresses and stacks will not match.
 | Appearance | Meaning |
 |------------|---------|
 | Fast amber blink | OTA firmware update active |
-| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Dupe9`) |
+| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Halo9`) |
 | Cyan breathing | Keep Awake movement or clicking enabled |
 | Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
 | Dim solid green | At least one BLE/Wi-Fi control path is ready |

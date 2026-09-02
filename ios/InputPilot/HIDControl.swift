@@ -774,6 +774,22 @@ struct BLEDiscoveredDevice: Identifiable, Equatable {
     let id: UUID; let deviceId: String; let name: String; let rssi: Int
 }
 
+enum BLEMetadataRecovery {
+    static let invalidHandleMessage = "Bluetooth had cached outdated InputPilot services. Toggle Bluetooth off and on once, then retry setup."
+
+    static func isInvalidHandle(_ error: Error?) -> Bool {
+        guard let error = error as NSError? else { return false }
+        return (error.domain == CBATTErrorDomain &&
+                error.code == CBATTError.Code.invalidHandle.rawValue) ||
+            (error.domain == CBErrorDomain &&
+             error.code == CBError.Code.invalidHandle.rawValue)
+    }
+
+    static func userFacingError(_ error: Error) -> Error {
+        isInvalidHandle(error) ? TransportError.failed(invalidHandleMessage) : error
+    }
+}
+
 final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var devices: [BLEDiscoveredDevice] = []
     @Published private(set) var isScanning = false
@@ -784,6 +800,8 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     private var completion: ((Result<BLEDeviceMetadata, Error>) -> Void)?
     private var resultPendingDisconnect: Result<BLEDeviceMetadata, Error>?
     private var metadataTimeoutWork: DispatchWorkItem?
+    private var invalidHandleRetriesRemaining = 0
+    private var reconnectingAfterInvalidHandle = false
     private let otaService = CBUUID(string: "7D9F1001-4F4D-4F56-4552-484944000001")
     private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
 
@@ -805,6 +823,9 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     func metadata(for device: BLEDiscoveredDevice) async throws -> BLEDeviceMetadata {
         guard let peripheral = peripherals[device.id] else { throw TransportError.unavailable }
         stop(); selected = peripheral
+        invalidHandleRetriesRemaining = 1
+        reconnectingAfterInvalidHandle = false
+        resultPendingDisconnect = nil
         return try await withCheckedThrowingContinuation { continuation in
             completion = { continuation.resume(with: $0) }
             central.connect(peripheral)
@@ -825,7 +846,8 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        finish(.failure(error ?? TransportError.unavailable))
+        if let error, recoverInvalidHandle(error, peripheral: peripheral) { return }
+        finish(.failure(error.map(BLEMetadataRecovery.userFacingError) ?? TransportError.unavailable))
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         if let pending = resultPendingDisconnect {
@@ -833,20 +855,36 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
             complete(pending)
             return
         }
+        if reconnectingAfterInvalidHandle, completion != nil {
+            reconnectingAfterInvalidHandle = false
+            reconnect(peripheral)
+            return
+        }
         guard completion != nil else { return }
         finish(.failure(error ?? TransportError.failed("Bluetooth disconnected during metadata setup.")))
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == otaService }) else { finish(.failure(error ?? TransportError.failed("InputPilot metadata service not found."))); return }
+        if let error {
+            if recoverInvalidHandle(error, peripheral: peripheral) { return }
+            finish(.failure(BLEMetadataRecovery.userFacingError(error))); return
+        }
+        guard let service = peripheral.services?.first(where: { $0.uuid == otaService }) else { finish(.failure(TransportError.failed("InputPilot metadata service not found."))); return }
         peripheral.discoverCharacteristics([otaStatus], for: service)
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard error == nil, let status = service.characteristics?.first(where: { $0.uuid == otaStatus }) else { finish(.failure(error ?? TransportError.failed("InputPilot metadata not available."))); return }
+        if let error {
+            if recoverInvalidHandle(error, peripheral: peripheral) { return }
+            finish(.failure(BLEMetadataRecovery.userFacingError(error))); return
+        }
+        guard let status = service.characteristics?.first(where: { $0.uuid == otaStatus }) else { finish(.failure(TransportError.failed("InputPilot metadata not available."))); return }
         peripheral.readValue(for: status)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == otaStatus else { return }
-        if let error { finish(.failure(error)); return }
+        if let error {
+            if recoverInvalidHandle(error, peripheral: peripheral) { return }
+            finish(.failure(BLEMetadataRecovery.userFacingError(error))); return
+        }
         guard let value = characteristic.value, let metadata = try? JSONDecoder().decode(BLEDeviceMetadata.self, from: value), metadata.product == "InputPilot", metadata.board == "esp32-s3-zero-4mb" else {
             finish(.failure(TransportError.failed("Invalid InputPilot Bluetooth metadata."))); return
         }
@@ -861,6 +899,29 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         metadataTimeoutWork = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
     }
+    private func recoverInvalidHandle(_ error: Error, peripheral: CBPeripheral) -> Bool {
+        guard BLEMetadataRecovery.isInvalidHandle(error),
+              invalidHandleRetriesRemaining > 0, completion != nil else { return false }
+        invalidHandleRetriesRemaining -= 1
+        reconnectingAfterInvalidHandle = true
+        appLog(.bluetooth, "stale BLE GATT handle detected during setup; reconnecting and rediscovering services once")
+        startMetadataTimeout()
+        if peripheral.state == .disconnected {
+            reconnectingAfterInvalidHandle = false
+            reconnect(peripheral)
+        } else {
+            central.cancelPeripheralConnection(peripheral)
+        }
+        return true
+    }
+    private func reconnect(_ peripheral: CBPeripheral) {
+        let retry = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self, let peripheral, self.completion != nil else { return }
+            peripheral.delegate = self
+            self.central.connect(peripheral)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: retry)
+    }
     private func finish(_ result: Result<BLEDeviceMetadata, Error>) {
         metadataTimeoutWork?.cancel(); metadataTimeoutWork = nil
         if let selected, selected.state != .disconnected {
@@ -872,6 +933,8 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     private func complete(_ result: Result<BLEDeviceMetadata, Error>) {
         let callback = completion; completion = nil
+        reconnectingAfterInvalidHandle = false
+        invalidHandleRetriesRemaining = 0
         selected = nil
         callback?(result)
     }

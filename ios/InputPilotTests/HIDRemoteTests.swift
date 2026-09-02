@@ -3,6 +3,26 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    func testBLEMetadataRecoveryRecognizesBothInvalidHandleDomains() {
+        let att = NSError(
+            domain: CBATTErrorDomain,
+            code: CBATTError.Code.invalidHandle.rawValue
+        )
+        let central = NSError(
+            domain: CBErrorDomain,
+            code: CBError.Code.invalidHandle.rawValue
+        )
+        let unrelated = NSError(domain: CBErrorDomain, code: CBError.Code.connectionTimeout.rawValue)
+
+        XCTAssertTrue(BLEMetadataRecovery.isInvalidHandle(att))
+        XCTAssertTrue(BLEMetadataRecovery.isInvalidHandle(central))
+        XCTAssertFalse(BLEMetadataRecovery.isInvalidHandle(unrelated))
+        XCTAssertEqual(
+            BLEMetadataRecovery.userFacingError(att).localizedDescription,
+            BLEMetadataRecovery.invalidHandleMessage
+        )
+    }
+
     func testReconnectGateRequiresAdvertisementAfterConnectionFailure() {
         var gate = BLEReconnectGate()
         XCTAssertTrue(gate.permitsCachedPeripheral)

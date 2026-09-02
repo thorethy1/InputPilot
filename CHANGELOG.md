@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Derive friendly Soft-AP/BLE names from the complete MAC with a 2,560-name
+  deterministic space, migrate the short-lived Beta 2 automatic names, and
+  recover once from stale CoreBluetooth GATT handles during secure setup.
 - Keep the optional fallback Soft-AP and its authenticated control services
   stable while an iPhone is attached; background station retries are deferred
   for active AP clients and otherwise run without tearing the AP down.
@@ -19,7 +22,7 @@
 - Add a firmware advertising watchdog with live advertising diagnostics,
   recovery counters and recovery logging when BLE is enabled but idle.
 - Use deterministic MAC-derived friendly names for the Soft-AP, BLE and app
-  discovery (`InputPilot-DE94` becomes `InputPilot-Dupe9`).
+  discovery.
 - Accept the ESP32 fallback Soft-AP as a verified Wi-Fi endpoint after device
   identity and Secure Protocol checks, and show the physical status LED matrix
   in the iOS app.

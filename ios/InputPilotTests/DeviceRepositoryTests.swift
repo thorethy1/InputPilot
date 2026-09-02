@@ -225,7 +225,7 @@ final class DeviceRepositoryTests: XCTestCase {
     func testFriendlyDiscoveryNameMigratesOnlyLegacyAutomaticName() {
         let metadata = BLEDeviceMetadata(
             product: "InputPilot", board: "esp32-s3-zero-4mb",
-            deviceId: "aabbccddeeff", deviceName: "InputPilot-Dupe9",
+            deviceId: "aabbccddeeff", deviceName: "InputPilot-Halo9",
             firmware: "0.9.0-beta.2", protocolVersion: 2, otaSchema: 1,
             capabilities: ["secure_protocol_v2"], trustRequired: true
         )
@@ -239,8 +239,24 @@ final class DeviceRepositoryTests: XCTestCase {
         DeviceMerge.bluetooth(metadata, into: legacy)
         DeviceMerge.bluetooth(metadata, into: custom)
 
-        XCTAssertEqual(legacy.displayName, "InputPilot-Dupe9")
+        XCTAssertEqual(legacy.displayName, "InputPilot-Halo9")
         XCTAssertEqual(custom.displayName, "Standing Desk")
+    }
+
+    func testCurrentFriendlyDiscoveryNameReplacesBetaTwoAutomaticName() {
+        let metadata = BLEDeviceMetadata(
+            product: "InputPilot", board: "esp32-s3-zero-4mb",
+            deviceId: "aabbccddde94", deviceName: "InputPilot-Halo9",
+            firmware: "0.9.0-beta.3", protocolVersion: 2, otaSchema: 1,
+            capabilities: ["secure_protocol_v2"], trustRequired: true
+        )
+        let automatic = StoredDevice(
+            deviceId: metadata.deviceId, displayName: "InputPilot-Dupe9", mdnsHost: ""
+        )
+
+        DeviceMerge.bluetooth(metadata, into: automatic)
+
+        XCTAssertEqual(automatic.displayName, "InputPilot-Halo9")
     }
 
     func testBasicUSBRefreshPreservesCachedManufacturer() {

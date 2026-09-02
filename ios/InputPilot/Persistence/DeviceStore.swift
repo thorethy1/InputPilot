@@ -208,10 +208,14 @@ enum DeviceMerge {
 
     private static func migrateLegacyAutomaticName(_ discoveredName: String, into stored: StoredDevice) {
         let prefix = "InputPilot-"
-        guard stored.displayName.hasPrefix(prefix),
-              stored.displayName.dropFirst(prefix.count).count == 4,
-              stored.displayName.dropFirst(prefix.count).allSatisfy(\.isHexDigit),
-              !discoveredName.isEmpty else { return }
+        guard stored.displayName.hasPrefix(prefix), !discoveredName.isEmpty else { return }
+        let suffix = String(stored.displayName.dropFirst(prefix.count))
+        let isLegacyHexName = suffix.count == 4 && suffix.allSatisfy(\.isHexDigit)
+        let legacyWords = ["Aero", "Bolt", "Cove", "Dupe", "Echo", "Flux"]
+        let isLegacyFriendlyName = legacyWords.contains { word in
+            suffix.count == word.count + 1 && suffix.hasPrefix(word) && suffix.last?.isNumber == true
+        }
+        guard isLegacyHexName || isLegacyFriendlyName else { return }
         stored.displayName = discoveredName
     }
 }

@@ -78,8 +78,8 @@
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
 #define WIFI_RETRY_INTERVAL_MS 30000UL
 
-// Soft-AP/BLE use a friendly deterministic MAC-derived name; mDNS keeps the
-// hex suffix (e.g. InputPilot-Dupe9, inputpilot-de94.local).
+// Soft-AP/BLE use a friendly deterministic full-MAC-derived name; mDNS keeps
+// the hex suffix (e.g. InputPilot-Halo9, inputpilot-de94.local).
 #define WIFI_AP_SSID_PREFIX  "InputPilot-"
 #define MDNS_HOSTNAME_PREFIX "inputpilot-"
 #define WIFI_AP_CHANNEL  1

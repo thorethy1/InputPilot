@@ -25,46 +25,47 @@ bool deviceIdFromMacBytes(const uint8_t mac[6], char outId[13], char outSuffix[5
 
 namespace {
 
-const char *friendlyWordFor(char letter) {
-  // A fixed lookup makes the seemingly random friendly name stable across
-  // reboots while keeping it short enough for BLE scan-response data.
-  static const char *const words[] = {"Aero", "Bolt", "Cove", "Dupe", "Echo", "Flux"};
-  if (letter >= 'A' && letter <= 'F') letter = (char)(letter - 'A' + 'a');
-  if (letter >= 'a' && letter <= 'f') return words[letter - 'a'];
-  return words[0];
+uint32_t friendlyHash(const char *deviceId) {
+  // FNV-1a over the complete, case-normalized MAC makes the friendly label
+  // stable without exposing the MAC itself. All twelve digits contribute.
+  uint32_t hash = 2166136261u;
+  for (size_t i = 0; deviceId && deviceId[i]; ++i) {
+    char c = deviceId[i];
+    if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+    hash ^= static_cast<uint8_t>(c);
+    hash *= 16777619u;
+  }
+  return hash;
 }
 
-void friendlyParts(const char *suffix4, const char *&word, char &digit) {
-  char firstLetter = '\0';
-  digit = '\0';
-  uint8_t fallback = 0;
-  for (int i = 0; suffix4 && i < 4 && suffix4[i]; ++i) {
-    char c = suffix4[i];
-    if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
-    if (!firstLetter && c >= 'a' && c <= 'f') firstLetter = c;
-    if (!digit && c >= '0' && c <= '9') digit = c;
-    if (i == 0) {
-      fallback = (c >= '0' && c <= '9') ? (uint8_t)(c - '0')
-                                        : (uint8_t)(c >= 'a' && c <= 'f' ? c - 'a' + 10 : 0);
-    }
+char firstMacDigit(const char *deviceId, uint32_t hash) {
+  for (size_t i = 0; deviceId && deviceId[i]; ++i) {
+    if (deviceId[i] >= '0' && deviceId[i] <= '9') return deviceId[i];
   }
-  if (!firstLetter) firstLetter = (char)('a' + (fallback % 6));
-  if (!digit) digit = (char)('0' + (fallback % 10));
-  word = friendlyWordFor(firstLetter);
+  return (char)('0' + (hash % 10));
 }
 
 }  // namespace
 
-void formatSoftApSsid(const char *suffix4, char out[24]) {
+void formatSoftApSsid(const char *deviceId, char out[24]) {
   if (!out) return;
-  const char *word;
-  char digit;
-  friendlyParts(suffix4, word, digit);
-  snprintf(out, 24, "InputPilot-%s%c", word, digit);
+  // Two independently selected syllables provide 256 short, pronounceable
+  // labels. With the trailing MAC digit this replaces the previous 60-name
+  // space with 2,560 combinations while staying well inside BLE limits.
+  static const char *const starts[] = {
+      "Al", "Be", "Co", "Di", "El", "Fa", "Gi", "Ha",
+      "Io", "Ju", "Ka", "Lu", "Mi", "No", "Or", "Pi"};
+  static const char *const ends[] = {
+      "ba", "co", "do", "fi", "go", "ha", "jo", "ki",
+      "lo", "mi", "no", "pa", "ri", "so", "tu", "vo"};
+  const uint32_t hash = friendlyHash(deviceId);
+  const char digit = firstMacDigit(deviceId, hash);
+  snprintf(out, 24, "InputPilot-%s%s%c", starts[hash & 0x0f],
+           ends[(hash >> 8) & 0x0f], digit);
 }
 
-void formatDeviceName(const char *suffix4, char out[24]) {
-  formatSoftApSsid(suffix4, out);
+void formatDeviceName(const char *deviceId, char out[24]) {
+  formatSoftApSsid(deviceId, out);
 }
 
 void formatMdnsHostname(const char *suffix4, char out[24]) {
@@ -102,8 +103,8 @@ void ensureReady() {
     memset(mac, 0, sizeof(mac));
   }
   deviceIdFromMacBytes(mac, s_deviceId, s_suffix);
-  formatSoftApSsid(s_suffix, s_softAp);
-  formatDeviceName(s_suffix, s_deviceName);
+  formatSoftApSsid(s_deviceId, s_softAp);
+  formatDeviceName(s_deviceId, s_deviceName);
   formatMdnsHostname(s_suffix, s_mdns);
   snprintf(s_mdnsFqdn, sizeof(s_mdnsFqdn), "%s.local", s_mdns);
   s_ready = true;

@@ -1,6 +1,6 @@
 # Known limitations
 
-- The friendly MAC-derived Soft-AP (for example `InputPilot-Dupe9`) is **open** unless you set
+- The friendly full-MAC-derived Soft-AP (for example `InputPilot-Halo9`) is **open** unless you set
   `WIFI_AP_PASS`. Multiple boards on the same LAN get distinct SSIDs and mDNS
   names (`inputpilot-xxxx.local`). The network grants no control access:
   sensitive operations still require Secure Protocol v2.

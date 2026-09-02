@@ -47,7 +47,7 @@ cp config.env.example config.env      # set ESP_PORT
 `wifi status|set|clear` · `status` · `version` · `help`
 
 WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts a
-MAC-derived friendly Soft-AP such as `InputPilot-Dupe9` (open by default; set
+full-MAC-derived friendly Soft-AP such as `InputPilot-Halo9` (open by default; set
 `WIFI_AP_PASS` in `wifi_secrets.h` for WPA) with read-only discovery at
 `http://192.168.4.1/api/status`.
 With creds, STA joins and exposes:
@@ -84,7 +84,7 @@ v2.
 | Appearance | Meaning |
 |------------|---------|
 | Fast amber blink | OTA firmware update active |
-| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Dupe9`) |
+| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Halo9`) |
 | Cyan breathing | Keep Awake movement or clicking enabled |
 | Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
 | Dim solid green | At least one BLE/Wi-Fi control path is ready |
