@@ -1,0 +1,50 @@
+{
+  "name": "InputPilot",
+  "subtitle": "Secure local control for InputPilot hardware.",
+  "description": "Install and update the InputPilot iOS companion app.",
+  "website": "https://github.com/thorethy1/InputPilot",
+  "iconURL": "https://github.com/thorethy1/InputPilot/raw/main/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "tintColor": "#007AFF",
+  "apps": [
+    {
+      "name": "InputPilot",
+      "bundleIdentifier": "com.thorethy.inputpilot",
+      "developerName": "thorethy",
+      "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
+      "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
+      "iconURL": "https://github.com/thorethy1/InputPilot/raw/main/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "tintColor": "#007AFF",
+      "category": "utilities",
+      "screenshots": [
+        "https://github.com/thorethy1/InputPilot/raw/main/docs/images/ios-device-list.jpg",
+        "https://github.com/thorethy1/InputPilot/raw/main/docs/images/ios-device-detail.jpg"
+      ],
+      "versions": [
+        {
+          "version": "0.8.20",
+          "buildVersion": "1",
+          "date": "2026-09-01",
+          "localizedDescription": "InputPilot 0.8.20 release.",
+          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.8.20/InputPilot-v0.8.20-ios-unsigned.ipa",
+          "size": 2343041,
+          "sha256": "50e7ee2d6ba5a86ed9ed8b5c6f958f57114ef43d3cc7aae7a72560197de77c66",
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": [
+          {
+            "name": "BluetoothAlways",
+            "usageDescription": "Connect InputPilot to your authorized ESP32-S3 device."
+          },
+          {
+            "name": "LocalNetwork",
+            "usageDescription": "InputPilot discovers and controls ESP32 devices on your local network."
+          }
+        ]
+      }
+    }
+  ],
+  "news": []
+}
