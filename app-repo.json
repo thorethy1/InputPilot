@@ -22,7 +22,7 @@
       "versions": [
         {
           "version": "0.8.20",
-          "buildVersion": "1",
+          "buildVersion": "29",
           "date": "2026-09-01",
           "localizedDescription": "InputPilot 0.8.20 release.",
           "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.8.20/InputPilot-v0.8.20-ios-unsigned.ipa",
