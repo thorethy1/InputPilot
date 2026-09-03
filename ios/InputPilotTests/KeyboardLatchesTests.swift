@@ -90,4 +90,31 @@ final class KeyboardLatchesTests: XCTestCase {
         XCTAssertEqual(KeyComboPresentation.display(for: "f5"), "F5")
         XCTAssertEqual(KeyComboPresentation.display(for: "esc"), "ESC")
     }
+
+    func testFlightLengthPrefersWholeWords() {
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hello world", sentPrefix: 6, isQuiet: false), 6)
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hello world", sentPrefix: 11, isQuiet: false), 6)
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "a  b", sentPrefix: 4, isQuiet: false), 3)
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hi\nthere", sentPrefix: 3, isQuiet: false), 3)
+    }
+
+    func testFlightLengthHoldsPartialWordsUntilQuiet() {
+        XCTAssertNil(KeyboardTransmissionPacing.flightLength(text: "Hello", sentPrefix: 5, isQuiet: false))
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hello", sentPrefix: 5, isQuiet: true), 5)
+        XCTAssertNil(KeyboardTransmissionPacing.flightLength(text: "Hello wor", sentPrefix: 9, isQuiet: false))
+    }
+
+    func testFlightLengthCapsRunawayInput() {
+        let long = String(repeating: "x", count: 80)
+        XCTAssertEqual(
+            KeyboardTransmissionPacing.flightLength(text: long, sentPrefix: 80, isQuiet: false),
+            KeyboardTransmissionPacing.visualFlightCap
+        )
+    }
+
+    func testFlightLengthRequiresSentPrefixAndText() {
+        XCTAssertNil(KeyboardTransmissionPacing.flightLength(text: "Hello", sentPrefix: 0, isQuiet: true))
+        XCTAssertNil(KeyboardTransmissionPacing.flightLength(text: "", sentPrefix: 5, isQuiet: true))
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hi", sentPrefix: 10, isQuiet: true), 2)
+    }
 }

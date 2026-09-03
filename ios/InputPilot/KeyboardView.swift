@@ -88,6 +88,10 @@ enum KeyComboPresentation {
 // MARK: - Transmission pacing
 
 enum KeyboardTransmissionPacing {
+    static let visualQuietInterval: TimeInterval = 0.6
+    static let visualFlightCap = 48
+    static let visualFlightInterval: Duration = .milliseconds(220)
+
     static func chunkLength(for characterCount: Int) -> Int {
         switch characterCount {
         case ..<120: 3
@@ -102,6 +106,17 @@ enum KeyboardTransmissionPacing {
         case 120..<400: .milliseconds(45)
         default: .milliseconds(30)
         }
+    }
+
+    static func flightLength(text: String, sentPrefix: Int, isQuiet: Bool) -> Int? {
+        guard sentPrefix > 0, !text.isEmpty else { return nil }
+        let region = min(sentPrefix, text.count)
+        let prefix = text.prefix(region)
+        if let lastBoundary = prefix.lastIndex(where: { $0 == " " || $0 == "\n" || $0 == "\t" }) {
+            return prefix.distance(from: prefix.startIndex, to: lastBoundary) + 1
+        }
+        if isQuiet || region >= visualFlightCap { return region }
+        return nil
     }
 }
 
@@ -123,7 +138,8 @@ struct QuickShortcut: Identifiable, Hashable {
         QuickShortcut(id: "find", title: "Find", combo: "ctrl+f", icon: "magnifyingglass"),
         QuickShortcut(id: "appSwitcher", title: "App Switcher", combo: "alt+tab", icon: "square.stack.3d.up"),
         QuickShortcut(id: "reopenTab", title: "Reopen Tab", combo: "ctrl+shift+t", icon: "arrow.clockwise"),
-        QuickShortcut(id: "spotlight", title: "Search", combo: "cmd+space", icon: "magnifyingglass.circle")
+        QuickShortcut(id: "spotlight", title: "Search", combo: "cmd+space", icon: "magnifyingglass.circle"),
+        QuickShortcut(id: "lockScreen", title: "Lock Screen", combo: "cmd+l", icon: "lock")
     ]
 }
 
@@ -194,11 +210,62 @@ private struct ShakeEffect: GeometryEffect {
     }
 }
 
+// MARK: - Liquid Glass surfaces
+
+private extension View {
+    @ViewBuilder
+    func keyChipSurface(highlighted: Bool = false) -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(
+                highlighted ? .regular.tint(Color.accentColor.opacity(0.45)).interactive() : .regular.interactive(),
+                in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+            )
+        } else {
+            self
+                .background(
+                    highlighted ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+                        .strokeBorder(highlighted ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)
+                )
+        }
+    }
+
+    @ViewBuilder
+    func modifierChipSurface(state: ModifierLatchState) -> some View {
+        if #available(iOS 26.0, *) {
+            let tint: Color? = state == .locked
+                ? Color.accentColor
+                : (state == .latched ? Color.accentColor.opacity(0.55) : nil)
+            self.glassEffect(
+                tint.map { .regular.tint($0).interactive() } ?? .regular.interactive(),
+                in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+            )
+        } else {
+            self
+                .background(
+                    state == .off ? Color.primary.opacity(0.06) : (state == .latched ? Color.accentColor.opacity(0.14) : Color.accentColor),
+                    in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+                        .strokeBorder(
+                            state == .off ? Color.primary.opacity(0.12) : (state == .latched ? Color.accentColor.opacity(0.6) : Color.clear),
+                            lineWidth: state == .off ? 1 : 1.5
+                        )
+                )
+        }
+    }
+}
+
 // MARK: - Composer text view
 
 final class ComposerTextView: UITextView {
     var onInsert: ((String, Bool) -> Void)?
-    var onDeleteAtEmpty: (() -> Void)?
+    var onRemoteBackspaceRequested: (() -> Void)?
+    var allowsLocalEditing: () -> Bool = { true }
     var onTextChange: ((String) -> Void)?
     private var isPasteOperation = false
 
@@ -219,8 +286,8 @@ final class ComposerTextView: UITextView {
     }
 
     override func deleteBackward() {
-        if markedTextRange == nil && text.isEmpty {
-            onDeleteAtEmpty?()
+        if markedTextRange == nil && (text.isEmpty || !allowsLocalEditing()) {
+            onRemoteBackspaceRequested?()
             return
         }
         super.deleteBackward()
@@ -284,7 +351,8 @@ final class ComposerFieldBox {
 struct KeyboardComposerBridge: UIViewRepresentable {
     let box: ComposerFieldBox
     let onInsert: (String, Bool) -> Void
-    let onDeleteAtEmpty: () -> Void
+    let onRemoteBackspaceRequested: () -> Void
+    let allowsLocalEditing: () -> Bool
     let onTextChange: (String) -> Void
 
     func makeUIView(context: Context) -> ComposerTextView {
@@ -307,7 +375,8 @@ struct KeyboardComposerBridge: UIViewRepresentable {
         view.accessibilityLabel = "Text composer"
         view.accessibilityHint = "Typed characters are transmitted to the connected computer as you type."
         view.onInsert = onInsert
-        view.onDeleteAtEmpty = onDeleteAtEmpty
+        view.onRemoteBackspaceRequested = onRemoteBackspaceRequested
+        view.allowsLocalEditing = allowsLocalEditing
         view.onTextChange = onTextChange
         box.view = view
         return view
@@ -326,11 +395,12 @@ struct LiveKeyboardView: View {
     @State private var isReviewing = false
     @State private var drainTask: Task<Void, Never>?
     @State private var isTransmitting = false
-    @State private var transmittedCount = 0
-    @State private var skippedCharacters = 0
+    @State private var visualDebt = 0
+    @State private var lastActivityAt = Date.distantPast
+    @State private var visualTask: Task<Void, Never>?
+    @State private var liveSendTask: Task<Void, Never>?
+    @State private var liveQueue: [String] = []
     @State private var transmissionChips: [TransmissionChip] = []
-    @State private var sentConfirmationVisible = false
-    @State private var sentBadgeTask: Task<Void, Never>?
     @State private var shakeProgress: CGFloat = 0
     @State private var status: KeyboardStatus?
     @State private var executedShortcutID: String?
@@ -340,6 +410,7 @@ struct LiveKeyboardView: View {
     private var layout: KeyboardLayout { KeyboardLayout(rawValue: layoutName) ?? .german }
     private var layoutSupported: Bool { manager.supports("keyboard_layout") }
     private var keysSupported: Bool { manager.supports("keyboard_key") }
+    private var isSending: Bool { isTransmitting || liveSendTask != nil }
     private var activeModifierPrefix: String {
         KeyModifier.all.filter { latches.contains($0.bit) }.map(\.comboSymbol).joined()
     }
@@ -375,8 +446,10 @@ struct LiveKeyboardView: View {
         .onDisappear {
             drainTask?.cancel()
             drainTask = nil
-            sentBadgeTask?.cancel()
-            sentBadgeTask = nil
+            liveSendTask?.cancel()
+            liveSendTask = nil
+            visualTask?.cancel()
+            visualTask = nil
             isTransmitting = false
         }
     }
@@ -419,12 +492,12 @@ struct LiveKeyboardView: View {
             Image(systemName: "circle.fill")
                 .font(.system(size: 7))
                 .foregroundStyle(Color.accentColor)
-                .symbolEffect(.pulse, options: .repeating, isActive: isTransmitting)
+                .symbolEffect(.pulse, options: .repeating, isActive: isSending)
             Text("TX")
                 .font(.caption2.monospaced().weight(.semibold))
                 .foregroundStyle(.secondary)
         }
-        .opacity(isTransmitting ? 1 : 0)
+        .opacity(isSending ? 1 : 0)
         .accessibilityHidden(true)
     }
 
@@ -461,8 +534,12 @@ struct LiveKeyboardView: View {
             KeyboardComposerBridge(
                 box: fieldBox,
                 onInsert: handleInsert,
-                onDeleteAtEmpty: handleRemoteBackspace,
-                onTextChange: { composerText = $0 }
+                onRemoteBackspaceRequested: handleRemoteBackspace,
+                allowsLocalEditing: { isReviewing || isTransmitting },
+                onTextChange: { text in
+                    composerText = text
+                    visualDebt = min(visualDebt, text.count)
+                }
             )
             .padding(AppTheme.Spacing.standard)
             .disabled(!layoutSupported)
@@ -477,27 +554,11 @@ struct LiveKeyboardView: View {
         }
         .frame(minHeight: 92, alignment: .topLeading)
         .overlay(alignment: .top) { transmissionOverlay }
-        .overlay {
-            if sentConfirmationVisible {
-                sentBadge
-            }
-        }
         .overlay(
             RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
                 .strokeBorder(isReviewing ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.08), lineWidth: 1)
         )
         .modifier(ShakeEffect(progress: shakeProgress))
-    }
-
-    private var sentBadge: some View {
-        Label(transmittedCount == 1 ? "Sent 1 character" : "Sent \(transmittedCount) characters", systemImage: "checkmark.circle.fill")
-            .font(.footnote.weight(.semibold))
-            .padding(.horizontal, AppTheme.Spacing.standard)
-            .padding(.vertical, AppTheme.Spacing.compact)
-            .background(.thinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(AppColors.success.opacity(0.5), lineWidth: 1))
-            .foregroundStyle(AppColors.success)
-            .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
     }
 
     private var actionRow: some View {
@@ -656,7 +717,7 @@ struct LiveKeyboardView: View {
 
     private func handleInsert(_ text: String, isPaste: Bool) {
         guard layoutSupported, !text.isEmpty else { return }
-        composerText = fieldBox.currentText
+        lastActivityAt = .now
         if isPaste {
             if isTransmitting {
                 setStatus(KeyboardStatus(icon: "plus.circle", message: "Appended to the send queue.", tone: .info))
@@ -665,14 +726,21 @@ struct LiveKeyboardView: View {
                 KeyboardHaptics.medium()
                 setStatus(KeyboardStatus(icon: "eye", message: "Review the pasted text, then tap Send.", tone: .info))
             }
-        } else if !isReviewing {
-            startTransmission()
+        } else if isReviewing || isTransmitting {
+            return
+        } else {
+            enqueueLiveInsert(text)
         }
     }
 
     private func handleRemoteBackspace() {
         guard keysSupported else { return }
         KeyboardHaptics.light()
+        lastActivityAt = .now
+        let current = fieldBox.currentText
+        if !current.isEmpty {
+            fieldBox.replace(text: String(current.dropLast()), cursorShift: -1)
+        }
         Task { @MainActor in await manager.send(.key("backspace")) }
     }
 
@@ -684,9 +752,8 @@ struct LiveKeyboardView: View {
             setStatus(KeyboardStatus(icon: "clipboard", message: "The clipboard is empty or unavailable.", tone: .warning))
             return
         }
-        let combined = fieldBox.currentText + text
-        fieldBox.replace(text: combined, cursorShift: 0, moveCaretToEnd: true)
-        composerText = fieldBox.currentText
+        lastActivityAt = .now
+        fieldBox.replace(text: fieldBox.currentText + text, cursorShift: 0, moveCaretToEnd: true)
         if isTransmitting {
             setStatus(KeyboardStatus(icon: "plus.circle", message: "Appended to the send queue.", tone: .info))
         } else {
@@ -698,16 +765,20 @@ struct LiveKeyboardView: View {
     }
 
     private func startTransmission() {
-        guard drainTask == nil, !composerText.isEmpty, layoutSupported else { return }
+        guard drainTask == nil, layoutSupported else { return }
+        if liveSendTask != nil {
+            flushVisualsNow()
+            return
+        }
+        let current = fieldBox.currentText
+        if current.count - min(visualDebt, current.count) == 0 {
+            flushVisualsNow()
+            return
+        }
         let capturedLatches = latches
         let selectedLayout = layout
         isReviewing = false
         isTransmitting = true
-        transmittedCount = 0
-        skippedCharacters = 0
-        sentBadgeTask?.cancel()
-        sentBadgeTask = nil
-        sentConfirmationVisible = false
         drainTask = Task { @MainActor in
             defer {
                 drainTask = nil
@@ -722,88 +793,160 @@ struct LiveKeyboardView: View {
             var pendingOneShot = capturedLatches.oneShot
             var deliveredAny = false
             while !Task.isCancelled {
-                let current = fieldBox.currentText
-                guard !current.isEmpty else { break }
-                let chunkLength = min(KeyboardTransmissionPacing.chunkLength(for: current.count), current.count)
-                let chunk = String(current.prefix(chunkLength))
-                let strokes: [HIDStroke]
-                do {
-                    strokes = try selectedLayout.strokes(for: chunk)
-                } catch {
-                    fieldBox.replace(text: String(current.dropFirst()), cursorShift: -1)
-                    composerText = fieldBox.currentText
-                    skippedCharacters += 1
-                    continue
-                }
-                var sentAll = true
-                for stroke in strokes {
-                    var modifiers = stroke.modifiers | capturedLatches.locked
-                    if pendingOneShot != 0 { modifiers |= pendingOneShot }
-                    guard await manager.send(.keyboardReport(modifiers: modifiers, usage: stroke.usage)) else {
-                        sentAll = false
-                        break
+                let text = fieldBox.currentText
+                let unsent = text.dropFirst(min(visualDebt, text.count))
+                guard !unsent.isEmpty else { break }
+                let chunkLength = min(KeyboardTransmissionPacing.chunkLength(for: unsent.count), unsent.count)
+                let chunk = unsent.prefix(chunkLength)
+                var consumed = 0
+                var failed = false
+                for character in chunk {
+                    guard let characterStrokes = selectedLayout.strokes(for: character) else {
+                        setStatus(KeyboardStatus(icon: "exclamationmark.triangle", message: "The character ‘\(character)’ is not available in the selected host layout.", tone: .warning))
+                        consumed += 1
+                        continue
                     }
-                    if pendingOneShot != 0 {
-                        latches.consumeOneShot(bits: pendingOneShot)
-                        pendingOneShot = 0
+                    var characterSent = true
+                    for stroke in characterStrokes {
+                        var modifiers = stroke.modifiers | capturedLatches.locked
+                        if pendingOneShot != 0 { modifiers |= pendingOneShot }
+                        guard await manager.send(.keyboardReport(modifiers: modifiers, usage: stroke.usage)) else {
+                            characterSent = false
+                            failed = true
+                            break
+                        }
+                        if pendingOneShot != 0 {
+                            latches.consumeOneShot(bits: pendingOneShot)
+                            pendingOneShot = 0
+                        }
+                        deliveredAny = true
                     }
+                    guard characterSent else { break }
+                    consumed += 1
                 }
-                guard sentAll else {
+                if failed {
+                    visualDebt += consumed
                     triggerFailureFeedback()
                     setStatus(KeyboardStatus(
                         icon: "exclamationmark.triangle.fill",
-                        message: manager.lastError ?? "Sending stopped before the text was delivered.",
+                        message: manager.lastError ?? "Sending stopped before the text was delivered. Tap Send to retry.",
                         tone: .warning
                     ))
                     return
                 }
-                deliveredAny = true
-                let liveText = fieldBox.currentText
-                let removeCount = liveText.hasPrefix(chunk) ? chunk.count : min(chunk.count, liveText.count)
-                if removeCount > 0 {
-                    fieldBox.replace(text: String(liveText.dropFirst(removeCount)), cursorShift: -removeCount)
-                    composerText = fieldBox.currentText
-                    transmittedCount += removeCount
-                    enqueueTransmissionChip(chunk)
-                }
-                try? await Task.sleep(for: KeyboardTransmissionPacing.tickInterval(for: liveText.count))
+                visualDebt += consumed
+                lastActivityAt = .now
+                startVisualDrain()
+                try? await Task.sleep(for: KeyboardTransmissionPacing.tickInterval(for: unsent.count))
             }
             if deliveredAny && !Task.isCancelled {
-                finishTransmissionSuccessfully()
+                KeyboardHaptics.success()
             }
         }
     }
 
-    @MainActor
-    private func finishTransmissionSuccessfully() {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
-            sentConfirmationVisible = true
-        }
-        KeyboardHaptics.success()
-        if skippedCharacters > 0 {
-            setStatus(KeyboardStatus(
-                icon: "exclamationmark.triangle",
-                message: skippedCharacters == 1 ? "Skipped 1 character that the host layout cannot type." : "Skipped \(skippedCharacters) characters that the host layout cannot type.",
-                tone: .warning
-            ))
-        }
-        sentBadgeTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1500))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.25)) {
-                sentConfirmationVisible = false
+    private func enqueueLiveInsert(_ text: String) {
+        liveQueue.append(text)
+        guard liveSendTask == nil else { return }
+        let selectedLayout = layout
+        liveSendTask = Task { @MainActor in
+            defer { liveSendTask = nil }
+            guard !liveQueue.isEmpty else { return }
+            guard manager.beginOrderedSession(lowLatency: false) else {
+                liveQueue.removeAll()
+                triggerFailureFeedback()
+                isReviewing = true
+                setStatus(KeyboardStatus(icon: "exclamationmark.triangle.fill", message: manager.lastError ?? "No connection is ready to send text.", tone: .warning))
+                return
+            }
+            defer { manager.endOrderedSession() }
+            while !Task.isCancelled, !liveQueue.isEmpty {
+                let insert = liveQueue.removeFirst()
+                guard await sendLiveInsert(insert, layout: selectedLayout) else {
+                    liveQueue.removeAll()
+                    triggerFailureFeedback()
+                    isReviewing = true
+                    setStatus(KeyboardStatus(
+                        icon: "exclamationmark.triangle.fill",
+                        message: manager.lastError ?? "Sending stopped. Edit the text and tap Send to retry.",
+                        tone: .warning
+                    ))
+                    return
+                }
+                visualDebt += insert.count
+                lastActivityAt = .now
+                startVisualDrain()
             }
         }
+    }
+
+    private func sendLiveInsert(_ text: String, layout selectedLayout: KeyboardLayout) async -> Bool {
+        for character in text {
+            guard let characterStrokes = selectedLayout.strokes(for: character) else {
+                setStatus(KeyboardStatus(icon: "exclamationmark.triangle", message: "The character ‘\(character)’ is not available in the selected host layout.", tone: .warning))
+                continue
+            }
+            for stroke in characterStrokes {
+                var modifiers = stroke.modifiers | latches.locked
+                let oneShot = latches.oneShot
+                if oneShot != 0 { modifiers |= oneShot }
+                guard await manager.send(.keyboardReport(modifiers: modifiers, usage: stroke.usage)) else { return false }
+                if oneShot != 0 { latches.consumeOneShot(bits: oneShot) }
+            }
+        }
+        return true
+    }
+
+    private func startVisualDrain() {
+        guard visualTask == nil else { return }
+        visualTask = Task { @MainActor in
+            defer { visualTask = nil }
+            while !Task.isCancelled {
+                guard visualDebt > 0 else { break }
+                let text = fieldBox.currentText
+                guard !text.isEmpty else {
+                    visualDebt = 0
+                    break
+                }
+                visualDebt = min(visualDebt, text.count)
+                let isQuiet = lastActivityAt.distance(to: .now) >= KeyboardTransmissionPacing.visualQuietInterval
+                if let length = KeyboardTransmissionPacing.flightLength(text: text, sentPrefix: visualDebt, isQuiet: isQuiet) {
+                    visualDebt -= length
+                    let chunk = String(text.prefix(length))
+                    fieldBox.replace(text: String(text.dropFirst(length)), cursorShift: -length)
+                    enqueueTransmissionChip(chunk)
+                    try? await Task.sleep(for: KeyboardTransmissionPacing.visualFlightInterval)
+                } else {
+                    try? await Task.sleep(for: .milliseconds(80))
+                }
+            }
+        }
+    }
+
+    private func flushVisualsNow() {
+        let text = fieldBox.currentText
+        let count = min(visualDebt, text.count)
+        guard count > 0 else { return }
+        visualDebt -= count
+        let chunk = String(text.prefix(count))
+        fieldBox.replace(text: String(text.dropFirst(count)), cursorShift: -count)
+        enqueueTransmissionChip(chunk)
+        KeyboardHaptics.light()
     }
 
     private func clearComposer() {
         drainTask?.cancel()
         drainTask = nil
+        liveSendTask?.cancel()
+        liveSendTask = nil
+        liveQueue.removeAll()
+        visualTask?.cancel()
+        visualTask = nil
         isTransmitting = false
         isReviewing = false
+        visualDebt = 0
         transmissionChips.removeAll()
         fieldBox.replace(text: "", cursorShift: 0)
-        composerText = ""
         KeyboardHaptics.light()
     }
 
@@ -869,7 +1012,7 @@ struct LiveKeyboardView: View {
     }
 
     private func enqueueTransmissionChip(_ text: String) {
-        let chipText = text.count > 6 ? String(text.prefix(6)) + "…" : text
+        let chipText = text.count > 14 ? String(text.prefix(14)) + "…" : text
         let chip = TransmissionChip(
             id: UUID(),
             text: chipText,
@@ -971,11 +1114,7 @@ private struct ModifierChip: View {
             }
             .font(.footnote.weight(.semibold))
             .frame(maxWidth: .infinity, minHeight: AppTheme.minimumInteractionSize)
-            .background(background, in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
-                    .strokeBorder(border, lineWidth: state == .off ? 1 : 1.5)
-            )
+            .modifierChipSurface(state: state)
             .foregroundStyle(foreground)
             .contentShape(RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
         }
@@ -986,27 +1125,11 @@ private struct ModifierChip: View {
         .accessibilityHint("Tap to latch for the next key, tap again to lock, tap a third time to release.")
     }
 
-    private var background: Color {
-        switch state {
-        case .off: Color.primary.opacity(0.06)
-        case .latched: Color.accentColor.opacity(0.14)
-        case .locked: Color.accentColor
-        }
-    }
-
     private var foreground: Color {
         switch state {
         case .off: Color.secondary
         case .latched: Color.accentColor
         case .locked: Color.white
-        }
-    }
-
-    private var border: Color {
-        switch state {
-        case .off: Color.primary.opacity(0.12)
-        case .latched: Color.accentColor.opacity(0.6)
-        case .locked: Color.clear
         }
     }
 
@@ -1025,14 +1148,7 @@ struct KeyChipButtonStyle: ButtonStyle {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(configuration.isPressed ? Color.accentColor : Color.primary)
             .frame(maxWidth: .infinity, minHeight: AppTheme.minimumInteractionSize)
-            .background(
-                (configuration.isPressed ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06)),
-                in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
-                    .strokeBorder(configuration.isPressed ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)
-            )
+            .keyChipSurface(highlighted: configuration.isPressed)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
@@ -1069,7 +1185,7 @@ private struct ShortcutCard: View {
             }
             .padding(AppTheme.Spacing.compact + 2)
             .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
+            .keyChipSurface()
             .contentShape(RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
         }
         .buttonStyle(.plain)

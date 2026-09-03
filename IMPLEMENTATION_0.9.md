@@ -180,7 +180,7 @@ The current implementation already includes keyboard layouts, one-shot modifiers
 - [x] Never unnecessarily log or persist clipboard contents.
 - [x] Preserve intentional field clearing after text is sent, with appropriate success/failure feedback.
 
-The redesigned keyboard lives in `KeyboardView.swift`. Typed text now lands in a visible composer field and is transmitted to the device in real time with a per-chunk transmission animation (`typed text → send animation → device → field clears`); pasted clipboard content pauses in review mode until the user taps Send. Modifiers support three states (off, latched one-shot, locked), the shortcut grid uses compact icon cards, and an explicit `Release All` action plus capability notices are always visible.
+The redesigned keyboard lives in `KeyboardView.swift`. Typed text is transmitted to the device in real time while the composer keeps each word visible briefly and then flies it away as a whole word (`typed text → word flight animation → device → field clears`); pasted clipboard content pauses in review mode until the user taps Send. Modifiers support three states (off, latched one-shot, locked), the shortcut grid uses compact icon cards with Liquid Glass surfaces on iOS 26, and an explicit `Release All` action plus capability notices are always visible.
 
 Clipboard verification must cover normal, empty, multiline, special-character and large input plus unavailable/denied cases where applicable.
 

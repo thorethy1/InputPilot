@@ -13,12 +13,15 @@
   surface the Clicking gesture state, and all keyboard controls meet the 44 pt
   interaction target.
 - Rebuild the keyboard tab as a native, Termius-inspired control surface: a visible
-  text composer that streams typed characters to the device in real time with a
-  per-chunk transmission animation and a sent confirmation, a clipboard paste flow
-  that pauses in review mode until Send is tapped, three-state modifier chips
-  (off, latched one-shot, locked) with distinct haptics, compact special-key and
-  arrow clusters, an icon-card quick shortcuts grid, an always-visible Release All
-  safety action, explicit keyboard dismissal and clear empty-clipboard feedback.
+  text composer that streams typed characters to the device in real time while a
+  word-by-word flight animation lets each typed word rest briefly before it visibly
+  travels to the device, a clipboard paste flow that pauses in review mode until
+  Send is tapped, three-state modifier chips (off, latched one-shot, locked) with
+  distinct haptics, compact special-key and arrow clusters, an icon-card quick
+  shortcuts grid including a Win+L Lock Screen shortcut, Liquid Glass key and card
+  surfaces on iOS 26 with a clean fallback on older systems, an always-visible
+  Release All safety action, explicit keyboard dismissal and clear empty-clipboard
+  feedback.
 - Make trackpad right-click reliable by keeping taps and double taps mutually
   exclusive with the long press, so a press-and-hold can no longer be followed
   by a stray tap click that immediately closes the context menu it opened.
