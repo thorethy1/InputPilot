@@ -3,10 +3,14 @@ import UIKit
 
 struct TrackpadInputBridge: UIViewRepresentable {
     let move: (CGFloat, CGFloat) -> Void
+    let moveEnded: () -> Void
     let scroll: (CGFloat) -> Void
+    let scrollEnded: (CGFloat) -> Void
     let click: (Int) -> Void
     let drag: (Bool) -> Void
     let rightClick: () -> Void
+    let zoom: (CGFloat) -> Void
+    let zoomEnded: (_ cancelled: Bool) -> Void
     let cancel: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(owner: self) }
@@ -22,13 +26,14 @@ struct TrackpadInputBridge: UIViewRepresentable {
         let scrollPan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.scrolled(_:)))
         scrollPan.minimumNumberOfTouches = 2
         scrollPan.maximumNumberOfTouches = 2
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pinched(_:)))
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTapped(_:)))
         doubleTap.numberOfTapsRequired = 2
         tap.require(toFail: doubleTap)
         let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.longPressed(_:)))
         longPress.minimumPressDuration = 0.4
-        [movePan, scrollPan, tap, doubleTap, longPress].forEach {
+        [movePan, scrollPan, pinch, tap, doubleTap, longPress].forEach {
             $0.delegate = context.coordinator
             view.addGestureRecognizer($0)
         }
@@ -41,6 +46,8 @@ struct TrackpadInputBridge: UIViewRepresentable {
         var owner: TrackpadInputBridge
         private var lastTapAt = Date.distantPast
         private var longPressIsDrag = false
+        private var isDragging = false
+        private var lastPinchScale: CGFloat = 1
         init(owner: TrackpadInputBridge) { self.owner = owner }
 
         @objc func moved(_ recognizer: UIPanGestureRecognizer) {
@@ -48,6 +55,8 @@ struct TrackpadInputBridge: UIViewRepresentable {
                 let delta = recognizer.translation(in: recognizer.view)
                 recognizer.setTranslation(.zero, in: recognizer.view)
                 owner.move(delta.x, delta.y)
+            } else if recognizer.state == .ended {
+                owner.moveEnded()
             } else if recognizer.state == .cancelled || recognizer.state == .failed { owner.cancel() }
         }
 
@@ -56,7 +65,27 @@ struct TrackpadInputBridge: UIViewRepresentable {
                 let delta = recognizer.translation(in: recognizer.view)
                 recognizer.setTranslation(.zero, in: recognizer.view)
                 owner.scroll(delta.y)
+            } else if recognizer.state == .ended {
+                let velocity = recognizer.velocity(in: recognizer.view)
+                owner.scrollEnded(velocity.y)
             } else if recognizer.state == .cancelled || recognizer.state == .failed { owner.cancel() }
+        }
+
+        @objc func pinched(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                lastPinchScale = 1
+            case .changed:
+                let change = recognizer.scale / lastPinchScale
+                lastPinchScale = recognizer.scale
+                guard change.isFinite, change > 0 else { return }
+                owner.zoom(change)
+            case .ended:
+                owner.zoomEnded(false)
+            case .cancelled, .failed:
+                owner.zoomEnded(true)
+            default: break
+            }
         }
 
         @objc func tapped(_ recognizer: UITapGestureRecognizer) {
@@ -69,13 +98,20 @@ struct TrackpadInputBridge: UIViewRepresentable {
         @objc func longPressed(_ recognizer: UILongPressGestureRecognizer) {
             if recognizer.state == .began {
                 longPressIsDrag = Date().timeIntervalSince(lastTapAt) <= 1.0
-                if longPressIsDrag { owner.drag(true) }
+                if longPressIsDrag {
+                    isDragging = true
+                    owner.drag(true)
+                }
             }
             if recognizer.state == .ended {
-                if longPressIsDrag { owner.drag(false) } else { owner.rightClick() }
+                if longPressIsDrag {
+                    isDragging = false
+                    owner.drag(false)
+                } else { owner.rightClick() }
                 longPressIsDrag = false
             } else if recognizer.state == .cancelled || recognizer.state == .failed {
                 if longPressIsDrag {
+                    isDragging = false
                     owner.drag(false)
                     owner.cancel()
                 }
@@ -84,7 +120,12 @@ struct TrackpadInputBridge: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            gestureRecognizer is UILongPressGestureRecognizer || otherGestureRecognizer is UILongPressGestureRecognizer
+            // Pinch must stay mutually exclusive with the two-finger scroll pan
+            // and with long-press drag so gestures cannot fight each other.
+            if gestureRecognizer is UIPinchGestureRecognizer || otherGestureRecognizer is UIPinchGestureRecognizer {
+                return false
+            }
+            return gestureRecognizer is UILongPressGestureRecognizer || otherGestureRecognizer is UILongPressGestureRecognizer
         }
     }
 }

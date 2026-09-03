@@ -137,20 +137,20 @@ The current code already contains useful trackpad behavior including movement, s
 
 ## Remaining work
 
-- [ ] Define/refine explicit mutually exclusive gesture states where useful: `idle → moving → scrolling → clicking → dragging → zooming`.
-- [ ] Improve low-speed pointer precision.
+- [x] Define/refine explicit mutually exclusive gesture states where useful: `idle → moving → scrolling → clicking → dragging → zooming`.
+- [x] Improve low-speed pointer precision.
 - [ ] Improve pointer smoothing and acceleration curve.
-- [ ] Improve two-finger scrolling.
-- [ ] Add/tune natural scrolling option.
-- [ ] Add/tune momentum or inertial scrolling where it improves the experience.
+- [x] Improve two-finger scrolling.
+- [x] Add/tune natural scrolling option.
+- [x] Add/tune momentum or inertial scrolling where it improves the experience.
 - [ ] Verify tap-to-click and double-click behavior.
 - [ ] Verify press/hold and/or two-finger secondary click behavior.
 - [ ] Make drag-and-drop reliable, including guaranteed drag release.
-- [ ] Add pinch-to-zoom where the HID/protocol path can support it correctly.
-- [ ] Add configurable sensitivity.
-- [ ] Add subtle haptic feedback where useful.
-- [ ] Add lightweight first-use gesture hints without permanently cluttering the trackpad.
-- [ ] Keep explicit click controls as a reliable fallback if they remain useful.
+- [x] Add pinch-to-zoom where the HID/protocol path can support it correctly.
+- [x] Add configurable sensitivity.
+- [x] Add subtle haptic feedback where useful.
+- [x] Add lightweight first-use gesture hints without permanently cluttering the trackpad.
+- [x] Keep explicit click controls as a reliable fallback if they remain useful.
 
 ## Exit criteria
 

@@ -2478,19 +2478,242 @@ struct HIDControlView: View {
 }
 
 struct TrackpadView: View {
-    @ObservedObject var manager: HIDConnectionManager; @State private var dragging = false; @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
+    @ObservedObject var manager: HIDConnectionManager
+    @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
+    @AppStorage("trackpadNaturalScrolling") private var naturalScrolling = true
+    @AppStorage("trackpadMomentum") private var momentumEnabled = true
+    @AppStorage("trackpadHintsSeen") private var hintsSeen = false
+    @State private var gestureState: TrackpadGestureState = .idle
+    @State private var pointerAccumulator = PointerAccumulator()
+    @State private var scrollAccumulator = FractionalAccumulator()
+    @State private var zoomAccumulator = FractionalAccumulator()
+    @State private var zoomActive = false
+    @State private var momentumTask: Task<Void, Never>?
+    @State private var showGestureHints = false
     private let coalescer: MouseEventCoalescer
     private let scrollCoalescer: ScrollEventCoalescer
+    private var canZoom: Bool { manager.supports("mouse_scroll") && manager.supports("keyboard_layout") }
+
     init(manager: HIDConnectionManager) {
         self.manager = manager
         coalescer = MouseEventCoalescer { [weak manager] x, y in await manager?.send(.mouseMove(x, y)) }
         scrollCoalescer = ScrollEventCoalescer { [weak manager] value in await manager?.send(.scroll(value)) }
     }
+
     var body: some View {
-        VStack { TrackpadInputBridge(move: { x, y in guard manager.supports("mouse_move") else { return }; Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; let lines = Int(-value / 5); if lines != 0 { Task { await scrollCoalescer.add(lines) } } }, click: { count in guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if active { guard manager.beginOrderedSession(lowLatency: true) else { dragging = false; return } }; let sent = await manager.send(active ? .mouseDown(.left) : .mouseUp(.left)); if !active || !sent { manager.endOrderedSession() }; if !sent { dragging = false; await manager.releaseAllPreservingError() } } }, rightClick: { guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { await manager.send(.click(.right)) } }, cancel: { dragging = false; Task { await coalescer.cancel(); await scrollCoalescer.cancel(); manager.endOrderedSession(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
-            HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }.buttonStyle(.borderedProminent).disabled(!manager.supports("mouse_click"))
-            HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }.padding()
-        }.onChange(of: manager.lastError) { _, error in if error != nil && dragging { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } } }
+        VStack {
+            trackpad
+            HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }
+                .buttonStyle(.borderedProminent)
+                .disabled(!manager.supports("mouse_click"))
+            VStack(spacing: AppTheme.Spacing.compact) {
+                HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }
+                Toggle("Natural Scrolling", isOn: $naturalScrolling)
+                Toggle("Momentum Scrolling", isOn: $momentumEnabled)
+            }
+            .padding(.horizontal)
+            .padding(.bottom)
+            if !hintsSeen {
+                Label("Tap the ? on the trackpad for gesture help.", systemImage: "hand.tap")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onDisappear { stopMomentum() }
+        .onChange(of: manager.lastError) { _, error in if error != nil { recoverFromError() } }
+    }
+
+    private var trackpad: some View {
+        TrackpadInputBridge(
+            move: { x, y in
+                guard manager.supports("mouse_move") else { return }
+                stopMomentum()
+                if gestureState != .moving && gestureState != .dragging { gestureState = .moving }
+                let scaled = pointerAccumulator.add(dx: Double(x) * sensitivity, dy: Double(y) * sensitivity)
+                guard scaled.x != 0 || scaled.y != 0 else { return }
+                Task { await coalescer.add(x: scaled.x, y: scaled.y) }
+            },
+            moveEnded: { if gestureState == .moving { gestureState = .idle } },
+            scroll: { value in
+                guard manager.supports("mouse_scroll") else { return }
+                stopMomentum()
+                if gestureState != .dragging { gestureState = .scrolling }
+                let lines = scrollAccumulator.add(TrackpadGestures.scrollContribution(panDeltaY: value, natural: naturalScrolling))
+                guard lines != 0 else { return }
+                Task { await scrollCoalescer.add(lines) }
+            },
+            scrollEnded: { velocity in
+                let residue = scrollAccumulator.flush()
+                if residue != 0 { Task { await scrollCoalescer.add(residue) } }
+                if gestureState == .scrolling { gestureState = .idle }
+                startMomentum(velocityY: velocity)
+            },
+            click: { count in
+                guard manager.supports("mouse_click") else { return }
+                stopMomentum()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task { for _ in 0..<count { await manager.send(.click(.left)) } }
+            },
+            drag: { active in
+                guard manager.supports("mouse_button_state") else { return }
+                stopMomentum()
+                if active {
+                    guard manager.beginOrderedSession(lowLatency: true) else { return }
+                    gestureState = .dragging
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task {
+                        guard await manager.send(.mouseDown(.left)) else {
+                            gestureState = .idle
+                            manager.endOrderedSession()
+                            await manager.releaseAllPreservingError()
+                            return
+                        }
+                    }
+                } else {
+                    if gestureState == .dragging { gestureState = .idle }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task {
+                        let sent = await manager.send(.mouseUp(.left))
+                        manager.endOrderedSession()
+                        if !sent { await manager.releaseAllPreservingError() }
+                    }
+                }
+            },
+            rightClick: {
+                guard manager.supports("mouse_click") else { return }
+                stopMomentum()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task { await manager.send(.click(.right)) }
+            },
+            zoom: { change in
+                guard canZoom else { return }
+                stopMomentum()
+                hintsSeen = true
+                if !zoomActive {
+                    guard manager.beginOrderedSession(lowLatency: true) else { return }
+                    zoomActive = true
+                    zoomAccumulator.reset()
+                    gestureState = .zooming
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task { await manager.send(.keyboardReport(modifiers: HIDModifiers.ctrl, usage: 0)) }
+                }
+                let lines = zoomAccumulator.add(TrackpadGestures.zoomContribution(scaleChange: change))
+                guard lines != 0 else { return }
+                Task { await manager.send(.scroll(Int16(clamping: lines))) }
+            },
+            zoomEnded: { cancelled in
+                guard zoomActive else { return }
+                zoomActive = false
+                let residue = zoomAccumulator.flush()
+                if gestureState == .zooming { gestureState = .idle }
+                Task {
+                    if residue != 0 { await manager.send(.scroll(Int16(clamping: residue))) }
+                    await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0))
+                    manager.endOrderedSession()
+                    if cancelled { await manager.releaseAll() }
+                }
+            },
+            cancel: {
+                stopMomentum()
+                let wasZooming = zoomActive
+                zoomActive = false
+                gestureState = .idle
+                pointerAccumulator.reset()
+                scrollAccumulator.reset()
+                zoomAccumulator.reset()
+                Task {
+                    if wasZooming { await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0)) }
+                    await coalescer.cancel()
+                    await scrollCoalescer.cancel()
+                    manager.endOrderedSession()
+                    await manager.releaseAll()
+                }
+            }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Remote trackpad")
+        .accessibilityValue(gestureState.overlayTitle)
+        .overlay {
+            Text(gestureState.overlayTitle)
+                .foregroundStyle(.secondary)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .topTrailing) { hintsButton }
+        .popover(isPresented: $showGestureHints) { gestureHints }
+        .padding()
+    }
+
+    private var hintsButton: some View {
+        Button {
+            showGestureHints = true
+            hintsSeen = true
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(8)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .accessibilityLabel("Trackpad gesture help")
+    }
+
+    private var gestureHints: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+            Text("Trackpad Gestures").font(.headline)
+            Label("One finger moves the pointer.", systemImage: "hand.point.up.left")
+            Label("Tap or double-tap to click.", systemImage: "hand.tap")
+            Label("Two fingers scroll.", systemImage: "arrow.up.arrow.down")
+            Label("Pinch to zoom.", systemImage: "arrow.up.left.and.arrow.down.right")
+            Label("Tap, then press and hold while moving to drag.", systemImage: "hand.press")
+            Label("Press and hold without moving to right-click.", systemImage: "cursorarrow.rays")
+            if !canZoom {
+                Label("Zoom needs mouse_scroll and keyboard_layout firmware support.", systemImage: "info.circle")
+            }
+        }
+        .font(.subheadline)
+        .padding()
+        .frame(maxWidth: 320, alignment: .leading)
+        .presentationCompactAdaptation(.popover)
+    }
+
+    private func startMomentum(velocityY: CGFloat) {
+        guard momentumEnabled else { return }
+        var generator = MomentumGenerator(velocity: velocityY, natural: naturalScrolling)
+        guard !generator.isFinished else { return }
+        let coalescer = scrollCoalescer
+        momentumTask?.cancel()
+        momentumTask = Task {
+            while !Task.isCancelled, !generator.isFinished {
+                let lines = generator.nextLine()
+                if lines != 0 { await coalescer.add(lines) }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    private func stopMomentum() {
+        momentumTask?.cancel()
+        momentumTask = nil
+    }
+
+    private func recoverFromError() {
+        stopMomentum()
+        let wasZooming = zoomActive
+        zoomActive = false
+        gestureState = .idle
+        pointerAccumulator.reset()
+        scrollAccumulator.reset()
+        zoomAccumulator.reset()
+        Task {
+            if wasZooming { await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0)) }
+            await coalescer.cancel()
+            await scrollCoalescer.cancel()
+            manager.endOrderedSession()
+            await manager.releaseAll()
+        }
     }
 }
 

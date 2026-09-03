@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+- Extend the trackpad with mutually exclusive gesture states, sub-pixel
+  pointer precision accumulation, natural-scrolling and momentum toggles with
+  decaying inertia, pinch-to-zoom over Ctrl+scroll, drag/zoom haptics, and a
+  dismissible gesture help popover.
 - Derive friendly Soft-AP/BLE names from the complete MAC with a 2,560-name
   deterministic space, migrate the short-lived Beta 2 automatic names, and
   recover once from stale CoreBluetooth GATT handles during secure setup.
+- Add a one-time protocol-1-to-protocol-2 migration firmware build whose
+  install metadata is accepted by app and firmware 0.8.8 while the installed
+  runtime advertises and enforces Secure Protocol v2.
 - Keep the optional fallback Soft-AP and its authenticated control services
   stable while an iPhone is attached; background station retries are deferred
   for active AP clients and otherwise run without tearing the AP down.
