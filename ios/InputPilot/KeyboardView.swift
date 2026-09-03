@@ -113,10 +113,11 @@ enum KeyboardTransmissionPacing {
         let region = min(sentPrefix, text.count)
         let prefix = text.prefix(region)
         if let lastBoundary = prefix.lastIndex(where: { $0 == " " || $0 == "\n" || $0 == "\t" }) {
-            return prefix.distance(from: prefix.startIndex, to: lastBoundary) + 1
+            let length = prefix.distance(from: prefix.startIndex, to: lastBoundary) + 1
+            return min(length, visualFlightCap)
         }
-        if isQuiet || region >= visualFlightCap { return region }
-        return nil
+        if isQuiet { return region }
+        return region >= visualFlightCap ? visualFlightCap : nil
     }
 }
 

@@ -101,7 +101,8 @@ final class KeyboardLatchesTests: XCTestCase {
     func testFlightLengthHoldsPartialWordsUntilQuiet() {
         XCTAssertNil(KeyboardTransmissionPacing.flightLength(text: "Hello", sentPrefix: 5, isQuiet: false))
         XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hello", sentPrefix: 5, isQuiet: true), 5)
-        XCTAssertNil(KeyboardTransmissionPacing.flightLength(text: "Hello wor", sentPrefix: 9, isQuiet: false))
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hello wor", sentPrefix: 9, isQuiet: false), 6)
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: "Hello wor", sentPrefix: 9, isQuiet: true), 6)
     }
 
     func testFlightLengthCapsRunawayInput() {
@@ -110,6 +111,11 @@ final class KeyboardLatchesTests: XCTestCase {
             KeyboardTransmissionPacing.flightLength(text: long, sentPrefix: 80, isQuiet: false),
             KeyboardTransmissionPacing.visualFlightCap
         )
+        XCTAssertEqual(
+            KeyboardTransmissionPacing.flightLength(text: long + " ", sentPrefix: 81, isQuiet: false),
+            KeyboardTransmissionPacing.visualFlightCap
+        )
+        XCTAssertEqual(KeyboardTransmissionPacing.flightLength(text: long, sentPrefix: 80, isQuiet: true), 80)
     }
 
     func testFlightLengthRequiresSentPrefixAndText() {
