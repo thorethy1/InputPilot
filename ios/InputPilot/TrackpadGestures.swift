@@ -41,9 +41,10 @@ struct FractionalAccumulator: Equatable, Sendable {
         return integer
     }
 
-    /// Emits the remaining fractional movement (rounded) and resets.
+    /// Emits the remaining fractional movement (rounded to the nearest step)
+    /// and resets.
     mutating func flush() -> Int {
-        let integer = Int(residue.rounded(.towardZero))
+        let integer = Int(residue.rounded(.toNearestOrAwayFromZero))
         residue = 0
         return integer
     }
