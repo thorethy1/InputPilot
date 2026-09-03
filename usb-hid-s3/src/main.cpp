@@ -83,6 +83,7 @@ static HIDDiagnosticsSnapshot g_hidStats;
 static portMUX_TYPE g_hidStatsMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE g_breadcrumbMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t g_mouseButtons = 0;
+static uint8_t g_heldKeyboardModifiers = 0;
 static char g_activeText[256]{};
 static size_t g_activeTextOffset = 0;
 static HIDEvent g_activeTextEvent;
@@ -256,6 +257,7 @@ static bool hidMouseButton(MouseBtn b, bool down) {
 
 static bool executeReleaseAll() {
   g_activeText[0] = '\0'; g_activeTextOffset = 0; g_mouseButtons = 0;
+  g_heldKeyboardModifiers = 0;
   hid_mouse_report_t mouse = {.buttons = 0, .x = 0, .y = 0, .wheel = 0, .pan = 0};
   hid_keyboard_report_t keyboard = {};
   const bool mouseOk = sendUSBReport(HID_RID_MOUSE, &mouse, sizeof(mouse),
@@ -281,9 +283,10 @@ static bool hidTypeCharacter(uint8_t character) {
   else if (usage & 0x40) { modifier |= 0x40; usage &= ~0x40; }
   if (usage == 0x32) usage = 0x64;
   hid_keyboard_report_t down = {};
-  down.modifier = modifier;
+  down.modifier = modifier | g_heldKeyboardModifiers;
   down.keycode[0] = usage;
   hid_keyboard_report_t up = {};
+  up.modifier = g_heldKeyboardModifiers;
   const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &down, sizeof(down),
                                     HIDExecutionPhase::UsbKeyboardReport);
   return sendUSBReport(HID_RID_KEYBOARD, &up, sizeof(up),
@@ -295,17 +298,32 @@ static bool hidKey(const KeyCode &kc) {
     LOG_HID("key skipped: not-ready");
     return false;
   }
-  hid_keyboard_report_t report = {};
-  report.modifier = kc.modifier;
-  report.keycode[0] = kc.keycode;
-  hid_keyboard_report_t empty = {};
-  const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &report, sizeof(report),
+  hid_keyboard_report_t down = {};
+  down.modifier = kc.modifier | g_heldKeyboardModifiers;
+  down.keycode[0] = kc.keycode;
+  hid_keyboard_report_t up = {};
+  up.modifier = g_heldKeyboardModifiers;
+  const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &down, sizeof(down),
                                     HIDExecutionPhase::UsbKeyboardReport);
-  return sendUSBReport(HID_RID_KEYBOARD, &empty, sizeof(empty),
+  return sendUSBReport(HID_RID_KEYBOARD, &up, sizeof(up),
                        HIDExecutionPhase::UsbKeyboardReport) && downOk;
 }
 
+// Modifier-only reports (keycode 0) hold or release modifier state across
+// subsequent reports; pinch-to-zoom relies on holding Ctrl while wheel
+// reports arrive on the mouse interface.
 static bool hidReport(uint8_t modifier, uint8_t keycode) {
+  if (!hidReady()) {
+    LOG_HID("report skipped: not-ready");
+    return false;
+  }
+  if (keycode == 0) {
+    g_heldKeyboardModifiers = modifier;
+    hid_keyboard_report_t report = {};
+    report.modifier = g_heldKeyboardModifiers;
+    return sendUSBReport(HID_RID_KEYBOARD, &report, sizeof(report),
+                         HIDExecutionPhase::UsbKeyboardReport);
+  }
   KeyCode kc;
   kc.found = true;
   kc.modifier = modifier;
@@ -481,7 +499,7 @@ static void printHelp() {
   LOG_INFO("  release all");
   LOG_INFO("  type <text>              type a string");
   LOG_INFO("  key <name[+name...]>     press a key/combo (enter,esc,cmd+space,...)");
-  LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report");
+  LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report; usage 0 holds (modifier != 0) or releases (modifier == 0) modifiers");
   LOG_INFO("  hidtest mouse|keyboard   exercise USB HID without a radio transport");
   LOG_INFO("  jiggle on|off|status|interval <ms>");
   LOG_INFO("  autoclick on|off|status|interval <ms>");
