@@ -2486,6 +2486,7 @@ struct TrackpadView: View {
     @State private var scrollAccumulator = FractionalAccumulator()
     @State private var zoomAccumulator = FractionalAccumulator()
     @State private var zoomActive = false
+    @State private var zoomControlTask: Task<Void, Never>?
     @State private var momentumTask: Task<Void, Never>?
     @State private var showGestureHints = false
     private let coalescer: MouseEventCoalescer
@@ -2544,20 +2545,28 @@ struct TrackpadView: View {
             click: { count in
                 guard manager.supports("mouse_click") else { return }
                 stopMomentum()
+                gestureState = .clicking
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                Task { for _ in 0..<count { await manager.send(.click(.left)) } }
+                Task {
+                    for _ in 0..<count { await manager.send(.click(.left)) }
+                    if gestureState == .clicking { gestureState = .idle }
+                }
             },
             drag: { active in
                 guard manager.supports("mouse_button_state") else { return }
                 stopMomentum()
                 if active {
-                    guard manager.beginOrderedSession(lowLatency: true) else { return }
+                    guard manager.beginOrderedSession(lowLatency: true) else {
+                        KeyboardHaptics.error()
+                        return
+                    }
                     gestureState = .dragging
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     Task {
                         guard await manager.send(.mouseDown(.left)) else {
                             gestureState = .idle
                             manager.endOrderedSession()
+                            KeyboardHaptics.error()
                             await manager.releaseAllPreservingError()
                             return
                         }
@@ -2578,34 +2587,54 @@ struct TrackpadView: View {
             rightClick: {
                 guard manager.supports("mouse_click") else { return }
                 stopMomentum()
+                gestureState = .clicking
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                Task { await manager.send(.click(.right)) }
+                Task {
+                    await manager.send(.click(.right))
+                    if gestureState == .clicking { gestureState = .idle }
+                }
             },
             middleClick: {
                 guard manager.supports("mouse_click") else { return }
                 stopMomentum()
+                gestureState = .clicking
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                Task { await manager.send(.click(.middle)) }
+                Task {
+                    await manager.send(.click(.middle))
+                    if gestureState == .clicking { gestureState = .idle }
+                }
             },
             zoom: { change in
                 guard canZoom else { return }
                 stopMomentum()
                 hintsSeen = true
                 if !zoomActive {
-                    guard manager.beginOrderedSession(lowLatency: true) else { return }
+                    guard manager.beginOrderedSession(lowLatency: true) else {
+                        KeyboardHaptics.error()
+                        return
+                    }
                     zoomActive = true
                     zoomAccumulator.reset()
                     gestureState = .zooming
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task { await manager.send(.keyboardReport(modifiers: HIDModifiers.ctrl, usage: 0)) }
+                    // The firmware holds modifier-only reports, so this Ctrl
+                    // press must be delivered before the first wheel line.
+                    zoomControlTask = Task {
+                        guard await manager.send(.keyboardReport(modifiers: HIDModifiers.ctrl, usage: 0)) else { return }
+                    }
                 }
                 let lines = zoomAccumulator.add(TrackpadGestures.zoomContribution(scaleChange: change))
                 guard lines != 0 else { return }
-                Task { await scrollCoalescer.add(lines) }
+                let holdCtrl = zoomControlTask
+                Task {
+                    await holdCtrl?.value
+                    await scrollCoalescer.add(lines)
+                }
             },
             zoomEnded: { cancelled in
                 guard zoomActive else { return }
                 zoomActive = false
+                zoomControlTask = nil
                 let residue = zoomAccumulator.flush()
                 if gestureState == .zooming { gestureState = .idle }
                 Task {
@@ -2622,6 +2651,7 @@ struct TrackpadView: View {
                 stopMomentum()
                 let wasZooming = zoomActive
                 zoomActive = false
+                zoomControlTask = nil
                 gestureState = .idle
                 pointerAccumulator.reset()
                 scrollAccumulator.reset()
@@ -2709,6 +2739,7 @@ struct TrackpadView: View {
         stopMomentum()
         let wasZooming = zoomActive
         zoomActive = false
+        zoomControlTask = nil
         gestureState = .idle
         pointerAccumulator.reset()
         scrollAccumulator.reset()
@@ -2721,22 +2752,6 @@ struct TrackpadView: View {
             await manager.releaseAll()
         }
     }
-}
-
-struct LiveKeyboardView: View {
-    @ObservedObject var manager: HIDConnectionManager; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
-    @State private var modifiers: UInt8 = 0
-    let keys = ["esc", "tab", "enter", "backspace", "delete", "home", "end", "pageup", "pagedown", "left", "up", "down", "right"]
-    private var layout: KeyboardLayout { KeyboardLayout(rawValue: layoutName) ?? .german }
-    var body: some View { ScrollView { VStack(spacing: 12) { Picker("Layout", selection: $layoutName) { ForEach(KeyboardLayout.allCases) { Text($0.rawValue).tag($0.rawValue) } }.pickerStyle(.segmented).disabled(!manager.supports("keyboard_layout")); KeyboardInputBridge { event in Task { switch event { case let .insert(text):
-                    if modifiers == 0 { await manager.sendText(text, layout: layout) }
-                    else if let strokes = try? layout.strokes(for: text), let first = strokes.first { let oneShot = modifiers; modifiers = 0; guard await manager.send(.keyboardReport(modifiers: first.modifiers | oneShot, usage: first.usage)) else { return }; for stroke in strokes.dropFirst() { guard await manager.send(.keyboardReport(modifiers: stroke.modifiers, usage: stroke.usage)) else { return } } }
-                case .deleteBackward: await manager.send(.key("backspace")) } } }.disabled(!manager.supports("keyboard_layout")).frame(minHeight: 90).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12));
-            HStack { modifierButton("Ctrl", 0x01); modifierButton("Shift", 0x02); modifierButton("Alt", 0x04); modifierButton("Win/Cmd", 0x08) }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 82))]) { ForEach(keys, id: \.self) { key in Button(key.capitalized) { UIImpactFeedbackGenerator(style: .light).impactOccurred(); let prefix = modifierNames; modifiers = 0; Task { await manager.send(prefix.isEmpty ? .key(key) : .keyCombo((prefix + [key]).joined(separator: "+"))) } }.buttonStyle(.bordered) } }; Text("Shortcuts").font(.headline); HStack { ForEach(["ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+shift+z", "ctrl+a", "ctrl+f", "alt+tab", "ctrl+shift+t", "cmd+space"], id: \.self) { combo in Button(combo) { Task { await manager.send(.keyCombo(combo)) } } }.buttonStyle(.borderedProminent) }.padding() } }
-    }
-    private var modifierNames: [String] { let values: [(UInt8, String)] = [(0x01, "ctrl"), (0x02, "shift"), (0x04, "alt"), (0x08, "cmd")]; return values.compactMap { modifiers & $0.0 == 0 ? nil : $0.1 } }
-    private func modifierButton(_ title: String, _ bit: UInt8) -> some View { Button(title) { modifiers ^= bit }.buttonStyle(.borderedProminent).tint(modifiers & bit == 0 ? .gray : .accentColor).accessibilityValue(modifiers & bit == 0 ? "Off" : "One shot") }
 }
 
 struct PresetsView: View {

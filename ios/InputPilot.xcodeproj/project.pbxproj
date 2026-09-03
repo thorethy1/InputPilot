@@ -41,6 +41,8 @@
 		A10000000000000000000034 /* HIDRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000037 /* HIDRemoteTests.swift */; };
 		A10000000000000000000037 /* TrackpadGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000041 /* TrackpadGestures.swift */; };
 		A10000000000000000000038 /* TrackpadGesturesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* TrackpadGesturesTests.swift */; };
+		A10000000000000000000039 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000043 /* KeyboardView.swift */; };
+		A10000000000000000000040 /* KeyboardLatchesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000044 /* KeyboardLatchesTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -91,6 +93,8 @@
 		A20000000000000000000037 /* HIDRemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDRemoteTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000041 /* TrackpadGestures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadGestures.swift; sourceTree = "<group>"; };
 		A20000000000000000000042 /* TrackpadGesturesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadGesturesTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000043 /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
+		A20000000000000000000044 /* KeyboardLatchesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLatchesTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000040 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ../Version.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -130,6 +134,7 @@
 				A20000000000000000000031 /* HIDControl.swift */,
 				A20000000000000000000032 /* KeyboardLayout.swift */,
 				A20000000000000000000033 /* KeyboardInputBridge.swift */,
+				A20000000000000000000043 /* KeyboardView.swift */,
 				A20000000000000000000038 /* SecurePairing.swift */,
 				A20000000000000000000034 /* MouseEventCoalescer.swift */,
 				A20000000000000000000035 /* TrackpadInputBridge.swift */,
@@ -160,6 +165,7 @@
 				A20000000000000000000037 /* HIDRemoteTests.swift */,
 				A20000000000000000000039 /* SecurePairingTests.swift */,
 				A20000000000000000000042 /* TrackpadGesturesTests.swift */,
+				A20000000000000000000044 /* KeyboardLatchesTests.swift */,
 			);
 			path = InputPilotTests;
 			sourceTree = "<group>";
@@ -340,6 +346,7 @@
 				A10000000000000000000031 /* MouseEventCoalescer.swift in Sources */,
 				A10000000000000000000032 /* TrackpadInputBridge.swift in Sources */,
 				A10000000000000000000037 /* TrackpadGestures.swift in Sources */,
+				A10000000000000000000039 /* KeyboardView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -359,6 +366,7 @@
 				A10000000000000000000034 /* HIDRemoteTests.swift in Sources */,
 				A10000000000000000000036 /* SecurePairingTests.swift in Sources */,
 				A10000000000000000000038 /* TrackpadGesturesTests.swift in Sources */,
+				A10000000000000000000040 /* KeyboardLatchesTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

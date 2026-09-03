@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Make pinch-to-zoom actually reach the host computer: the firmware now keeps
+  modifier-only `report <m> 0` commands held (and clears them on `report 0 0`
+  and release-all) so Ctrl stays pressed while the zoom wheel lines arrive, and
+  the app queues the first wheel lines only after the Ctrl hold is confirmed
+  while also showing an error haptic when a drag or zoom can no longer start.
+- Polish the keyboard tab after review: a stopped transmission now explains why
+  it stopped and keeps the unsent text for retry, the sent confirmation can no
+  longer be hidden early by a previous transmission, trackpad taps and holds
+  surface the Clicking gesture state, and all keyboard controls meet the 44 pt
+  interaction target.
+- Rebuild the keyboard tab as a native, Termius-inspired control surface: a visible
+  text composer that streams typed characters to the device in real time with a
+  per-chunk transmission animation and a sent confirmation, a clipboard paste flow
+  that pauses in review mode until Send is tapped, three-state modifier chips
+  (off, latched one-shot, locked) with distinct haptics, compact special-key and
+  arrow clusters, an icon-card quick shortcuts grid, an always-visible Release All
+  safety action, explicit keyboard dismissal and clear empty-clipboard feedback.
 - Make trackpad right-click reliable by keeping taps and double taps mutually
   exclusive with the long press, so a press-and-hold can no longer be followed
   by a stray tap click that immediately closes the context menu it opened.

@@ -168,17 +168,19 @@ Turn keyboard control and InputPilot's internal Shortcuts into one polished, saf
 
 The current implementation already includes keyboard layouts, one-shot modifiers and `releaseAll` support. Preserve and harden these capabilities.
 
-- [ ] Redesign keyboard shortcut controls into compact native layouts rather than stretched full-width buttons.
-- [ ] Improve modifier presentation and sticky/latched behavior where useful.
-- [ ] Keep an explicit `Release All Keys` safety action.
+- [x] Redesign keyboard shortcut controls into compact native layouts rather than stretched full-width buttons.
+- [x] Improve modifier presentation and sticky/latched behavior where useful.
+- [x] Keep an explicit `Release All Keys` safety action.
 - [ ] Ensure modifiers and held keys are released after all relevant error/disconnect paths.
-- [ ] Improve key/send visual feedback.
-- [ ] Improve keyboard dismissal and text-composer behavior.
-- [ ] Add explicit `Paste Clipboard` action that reads the clipboard only after user interaction.
-- [ ] Paste clipboard contents into the editable field before transmission so the user can review/edit them.
-- [ ] Handle empty/unavailable clipboard clearly.
-- [ ] Never unnecessarily log or persist clipboard contents.
-- [ ] Preserve intentional field clearing after text is sent, with appropriate success/failure feedback.
+- [x] Improve key/send visual feedback.
+- [x] Improve keyboard dismissal and text-composer behavior.
+- [x] Add explicit `Paste Clipboard` action that reads the clipboard only after user interaction.
+- [x] Paste clipboard contents into the editable field before transmission so the user can review/edit them.
+- [x] Handle empty/unavailable clipboard clearly.
+- [x] Never unnecessarily log or persist clipboard contents.
+- [x] Preserve intentional field clearing after text is sent, with appropriate success/failure feedback.
+
+The redesigned keyboard lives in `KeyboardView.swift`. Typed text now lands in a visible composer field and is transmitted to the device in real time with a per-chunk transmission animation (`typed text → send animation → device → field clears`); pasted clipboard content pauses in review mode until the user taps Send. Modifiers support three states (off, latched one-shot, locked), the shortcut grid uses compact icon cards, and an explicit `Release All` action plus capability notices are always visible.
 
 Clipboard verification must cover normal, empty, multiline, special-character and large input plus unavailable/denied cases where applicable.
 

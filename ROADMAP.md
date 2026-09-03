@@ -194,13 +194,13 @@ Improve:
 - reliable drag release
 - pinch-to-zoom
 - configurable sensitivity
-- natural scrolling option
+- natural scrolling as the fixed default (the toggle was intentionally removed for a gesture-first trackpad)
 
 Add subtle haptic feedback where appropriate.
 
 Provide lightweight first-use gesture hints without permanently cluttering the trackpad.
 
-Explicit left/middle/right controls may remain as a reliable fallback.
+Explicit left/middle/right controls have been removed now that every action is gesture-reachable (taps, holds and multi-finger taps cover left/right/middle); they may return as an accessibility fallback if hardware testing shows gaps.
 
 ### Gesture architecture
 
