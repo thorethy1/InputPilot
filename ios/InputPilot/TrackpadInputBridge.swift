@@ -368,13 +368,15 @@ struct TrackpadInputBridge: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            // Two-finger scroll/zoom stay mutually exclusive with every other
-            // gesture; only the pointer pan may run alongside the long-press
-            // drag so movement keeps flowing while the button is held.
-            if gestureRecognizer is TwoFingerGestureRecognizer || otherGestureRecognizer is TwoFingerGestureRecognizer {
-                return false
+            // Only the pointer pan may recognize alongside the long-press so
+            // movement keeps flowing while a drag is held. Taps and double
+            // taps must stay exclusive: as soon as the long press begins it
+            // force-fails the pending tap, so a slow right-click can never be
+            // followed by a stray tap click that closes its context menu.
+            if gestureRecognizer is UILongPressGestureRecognizer || otherGestureRecognizer is UILongPressGestureRecognizer {
+                return gestureRecognizer is UIPanGestureRecognizer || otherGestureRecognizer is UIPanGestureRecognizer
             }
-            return gestureRecognizer is UILongPressGestureRecognizer || otherGestureRecognizer is UILongPressGestureRecognizer
+            return false
         }
     }
 }

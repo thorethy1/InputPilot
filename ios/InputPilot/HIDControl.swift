@@ -2480,8 +2480,6 @@ struct HIDControlView: View {
 struct TrackpadView: View {
     @ObservedObject var manager: HIDConnectionManager
     @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
-    @AppStorage("trackpadNaturalScrolling") private var naturalScrolling = true
-    @AppStorage("trackpadMomentum") private var momentumEnabled = true
     @AppStorage("trackpadHintsSeen") private var hintsSeen = false
     @State private var gestureState: TrackpadGestureState = .idle
     @State private var pointerAccumulator = PointerAccumulator()
@@ -2501,18 +2499,13 @@ struct TrackpadView: View {
     }
 
     var body: some View {
-        VStack {
+        VStack(spacing: AppTheme.Spacing.compact) {
             trackpad
-            HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }
-                .buttonStyle(.borderedProminent)
-                .disabled(!manager.supports("mouse_click"))
-            VStack(spacing: AppTheme.Spacing.compact) {
-                HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }
-                Toggle("Natural Scrolling", isOn: $naturalScrolling)
-                Toggle("Momentum Scrolling", isOn: $momentumEnabled)
+            HStack {
+                Text("Sensitivity")
+                Slider(value: $sensitivity, in: 0.4...2.5)
             }
             .padding(.horizontal)
-            .padding(.bottom)
             if !hintsSeen {
                 Label("Tap the ? on the trackpad for gesture help.", systemImage: "hand.tap")
                     .font(.caption)
@@ -2538,7 +2531,7 @@ struct TrackpadView: View {
                 guard manager.supports("mouse_scroll") else { return }
                 stopMomentum()
                 if gestureState != .dragging { gestureState = .scrolling }
-                let lines = scrollAccumulator.add(TrackpadGestures.scrollContribution(panDeltaY: value, natural: naturalScrolling))
+                let lines = scrollAccumulator.add(TrackpadGestures.scrollContribution(panDeltaY: value, natural: true))
                 guard lines != 0 else { return }
                 Task { await scrollCoalescer.add(lines) }
             },
@@ -2653,6 +2646,7 @@ struct TrackpadView: View {
         }
         .overlay(alignment: .topTrailing) { hintsButton }
         .popover(isPresented: $showGestureHints) { gestureHints }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
     }
 
@@ -2693,8 +2687,7 @@ struct TrackpadView: View {
     }
 
     private func startMomentum(velocityY: CGFloat) {
-        guard momentumEnabled else { return }
-        var generator = MomentumGenerator(velocity: velocityY, natural: naturalScrolling)
+        var generator = MomentumGenerator(velocity: velocityY, natural: true)
         guard !generator.isFinished else { return }
         let coalescer = scrollCoalescer
         momentumTask?.cancel()

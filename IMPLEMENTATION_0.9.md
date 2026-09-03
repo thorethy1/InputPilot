@@ -141,8 +141,8 @@ The current code already contains useful trackpad behavior including movement, s
 - [x] Improve low-speed pointer precision.
 - [ ] Improve pointer smoothing and acceleration curve.
 - [x] Improve two-finger scrolling.
-- [x] Add/tune natural scrolling option.
-- [x] Add/tune momentum or inertial scrolling where it improves the experience.
+- [x] Natural scrolling as the fixed default (option removed for a gesture-first trackpad).
+- [x] Add/tune momentum or inertial scrolling where it improves the experience (always on, toggle removed).
 - [ ] Verify tap-to-click and double-click behavior.
 - [ ] Verify press/hold and/or two-finger secondary click behavior.
 - [x] Make drag-and-drop reliable, including guaranteed drag release.
@@ -150,7 +150,7 @@ The current code already contains useful trackpad behavior including movement, s
 - [x] Add configurable sensitivity.
 - [x] Add subtle haptic feedback where useful.
 - [x] Add lightweight first-use gesture hints without permanently cluttering the trackpad.
-- [x] Keep explicit click controls as a reliable fallback if they remain useful.
+- [x] Remove explicit click controls once every action is gesture-reachable (taps, holds and multi-finger taps cover left/right/middle).
 
 ## Exit criteria
 

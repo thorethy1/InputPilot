@@ -101,7 +101,7 @@ secure TCP session before saving it. There is no manual address or unencrypted
 setup path. Bluetooth and Wi-Fi then provide the same controls;
 the selected connection mode only changes transport preference.
 
-- **Trackpad:** coalesced relative one-finger movement, two-finger scrolling with momentum, pinch-to-zoom with scroll/zoom arbitration, tap/double-tap click, hold-to-drag, two-finger tap right-click, three-finger tap middle-click, mouse buttons, sensitivity and safety release.
+- **Trackpad:** gesture-first surface with coalesced relative one-finger movement, two-finger scrolling with momentum, pinch-to-zoom with scroll/zoom arbitration, tap/double-tap click, hold-to-drag, two-finger tap right-click, three-finger tap middle-click, sensitivity and safety release.
 - **Keyboard:** native event input (including Backspace, Enter, Tab and paste), navigation/editing keys, one-shot modifiers, shortcuts, and actual German QWERTZ or US QWERTY USB-HID mapping.
 - **Presets:** local SwiftData text/shortcut items with favorite, duplicate, delete, reorder, optional Enter, and typing-delay metadata.
 - **Macros:** records only actions produced inside this app, including timing. Playback supports 0.5×–2×, finite/infinite repeat and start delay. The visible STOP control cancels the queue and sends release-all.

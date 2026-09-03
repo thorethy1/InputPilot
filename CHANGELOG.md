@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Make trackpad right-click reliable by keeping taps and double taps mutually
+  exclusive with the long press, so a press-and-hold can no longer be followed
+  by a stray tap click that immediately closes the context menu it opened.
+- Simplify the trackpad surface: remove the on-screen left/middle/right click
+  buttons and the natural/momentum scrolling toggles, keep natural scrolling
+  with momentum always on, and let the trackpad grow into the freed space.
 - Rework the trackpad gesture engine so zoom, drag and every pointer action
   work reliably through gestures: a custom two-finger recognizer arbitrates
   scroll versus pinch from raw touch geometry (centroid translation against
