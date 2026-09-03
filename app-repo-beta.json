@@ -3,7 +3,7 @@
   "subtitle": "InputPilot beta releases for early testing.",
   "description": "Install and update InputPilot beta builds.",
   "website": "https://github.com/thorethy1/InputPilot",
-  "iconURL": "https://github.com/thorethy1/InputPilot/raw/main/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.7/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
   "tintColor": "#007AFF",
   "apps": [
     {
@@ -12,14 +12,25 @@
       "developerName": "thorethy",
       "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
       "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
-      "iconURL": "https://github.com/thorethy1/InputPilot/raw/main/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.7/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "#007AFF",
       "category": "utilities",
       "screenshots": [
-        "https://github.com/thorethy1/InputPilot/raw/main/docs/images/ios-device-list.jpg",
-        "https://github.com/thorethy1/InputPilot/raw/main/docs/images/ios-device-detail.jpg"
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.7/docs/images/ios-device-list.jpg",
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.7/docs/images/ios-device-detail.jpg"
       ],
       "versions": [
+        {
+          "version": "0.9.0",
+          "buildVersion": "73",
+          "marketingVersion": "0.9.0-beta.7",
+          "date": "2026-09-03",
+          "localizedDescription": "InputPilot 0.9.0-beta.7 beta release.",
+          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.9.0-beta.7/InputPilot-v0.9.0-beta.7-ios-unsigned.ipa",
+          "size": 2478409,
+          "sha256": "20d977bd036071eb05d261bed368f822a37f6aa666f1c38486f699c0f96869cb",
+          "minOSVersion": "17.0"
+        },
         {
           "version": "0.9.0-beta.5",
           "buildVersion": "62",
