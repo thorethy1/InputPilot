@@ -19,6 +19,15 @@
 #endif
 #define OTA_SCHEMA_VERSION 1
 #define OTA_PROTOCOL_VERSION 2
+// Protocol recorded inside this application image. Normal builds use the
+// runtime OTA protocol. The one-time v1-to-v2 migration build overrides only
+// this value so firmware 0.8.8 can validate and install the image; after boot,
+// discovery, secure transports, and all subsequent OTA requests remain v2.
+#ifndef FW_IMAGE_PROTOCOL_VERSION
+#define FW_IMAGE_PROTOCOL_VERSION OTA_PROTOCOL_VERSION
+#endif
+#define INPUTPILOT_STRINGIFY_INNER(value) #value
+#define INPUTPILOT_STRINGIFY(value) INPUTPILOT_STRINGIFY_INNER(value)
 #define FW_PRODUCT      "InputPilot"
 #define FW_BOARD        "esp32-s3-zero-4mb"
 #define FW_METADATA_PREFIX "INPUTPILOT-META:"

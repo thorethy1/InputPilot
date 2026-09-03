@@ -114,3 +114,22 @@ pyobjc `CGEventTap` to confirm the cursor actually moves and keystrokes arrive.
 Grant your terminal **Input Monitoring** and **Accessibility** permission.
 
 Cloud CI runs only the native unit tests + firmware compile (no Mac / no board).
+
+### One-time protocol 1 to protocol 2 migration
+
+Devices still running firmware 0.8.8 use OTA protocol 1, and the InputPilot
+0.8.8 app rejects an image whose embedded install metadata already says
+`protocol=2`. Build the dedicated bridge image from the current source with:
+
+```bash
+pio run -e esp32s3-migration-v1-to-v2
+python scripts/package_protocol_migration.py \
+  --firmware .pio/build/esp32s3-migration-v1-to-v2/firmware.bin \
+  --output .pio/build/protocol-migration-v1-to-v2
+```
+
+Select `firmware-migration-v1-to-v2.bin` manually in app 0.8.8. Its embedded
+install metadata is protocol 1 so both the app and the installed 0.8.8 firmware
+accept it. Once booted, the image advertises and enforces Secure Protocol v2;
+upgrade the app before reconnecting or installing later firmware. This image is
+only for the one-time transition and must not replace the normal release image.

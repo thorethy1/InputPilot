@@ -42,7 +42,9 @@
 // valid ESP32 image built for another product or board before activation.
 extern "C" const char inputPilotFirmwareMetadata[] __attribute__((used)) =
     FW_METADATA_PREFIX "product=" FW_PRODUCT ";board=" FW_BOARD ";version=" FW_VERSION
-    ";protocol=2;otaSchema=1;commit=" FW_GIT_COMMIT ";";
+    ";protocol=" INPUTPILOT_STRINGIFY(FW_IMAGE_PROTOCOL_VERSION)
+    ";otaSchema=" INPUTPILOT_STRINGIFY(OTA_SCHEMA_VERSION)
+    ";commit=" FW_GIT_COMMIT ";";
 
 // ---------------------------------------------------------------------------
 // USB devices (core stack). ARDUINO_USB_CDC_ON_BOOT=0, so the core does NOT
