@@ -182,6 +182,101 @@ jobs:
           echo "Verified release assets for $tag:"
           printf '%s\n' "$actual"
 
+      - name: Update rolling AltStore channel feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release.outputs.tag }}"
+          prerelease="${{ steps.release.outputs.prerelease }}"
+          sha="${{ steps.release.outputs.sha }}"
+          rm -rf altstore-channel && mkdir altstore-channel
+
+          if [[ "$prerelease" == "true" ]]; then
+            # The beta channel advertises a fixed rolling prerelease feed that
+            # lives on the "beta" release; refresh it with every beta.
+            served_tag="beta"
+            if ! gh api "repos/$GITHUB_REPOSITORY/releases/tags/$served_tag" \
+                > altstore-channel/feed-release.json 2>/dev/null; then
+              gh release create "$served_tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$sha" \
+                --title "InputPilot Beta Channel" \
+                --notes "Rolling AltStore feed for InputPilot beta releases." \
+                --prerelease
+              gh api "repos/$GITHUB_REPOSITORY/releases/tags/$served_tag" \
+                > altstore-channel/feed-release.json
+            fi
+          else
+            # Stable serves the newest full release's manifest; merge the
+            # previous stable feed so version history survives new releases.
+            served_tag="$tag"
+            previous_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false and .prerelease == false and .tag_name != "'"$tag"'")][0].tag_name // empty')"
+            if [[ -n "$previous_tag" ]] && gh api "repos/$GITHUB_REPOSITORY/releases/tags/$previous_tag" \
+                > altstore-channel/feed-release.json 2>/dev/null; then
+              echo "Merging AltStore history from $previous_tag."
+            else
+              printf '{}' > altstore-channel/feed-release.json
+            fi
+          fi
+
+          previous_asset_url="$(jq -r '[.assets[]? | select(.name == "altstore-source.json")][0].browser_download_url // empty' \
+            altstore-channel/feed-release.json)"
+          if [[ -n "$previous_asset_url" ]]; then
+            curl -fsSL "$previous_asset_url" -o altstore-channel/previous.json || true
+          fi
+          if [[ ! -s altstore-channel/previous.json ]]; then
+            printf '{"apps":[]}' > altstore-channel/previous.json
+          fi
+
+          python3 .github/scripts/update_altstore_feed.py \
+            --new-source release-assets/altstore-source.json \
+            --previous altstore-channel/previous.json \
+            --output altstore-channel/altstore-source.json
+
+          gh release upload "$served_tag" altstore-channel/altstore-source.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+          asset_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$served_tag" \
+            --jq '.assets[] | select(.name == "altstore-source.json") | .id')"
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+            -H "Accept: application/octet-stream" > altstore-channel/served.json
+          python3 - altstore-channel/served.json altstore-channel/altstore-source.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          served = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          served_versions = [
+              (v.get("version"), v.get("buildVersion"))
+              for v in served["apps"][0]["versions"]
+          ]
+          expected_entry = (
+              expected["apps"][0]["versions"][0].get("version"),
+              expected["apps"][0]["versions"][0].get("buildVersion"),
+          )
+          if expected_entry not in served_versions:
+              raise SystemExit(
+                  f"rolling AltStore feed does not contain the new release {expected_entry}"
+              )
+          if served_versions[0] != expected_entry:
+              print(
+                  "note: the feed serves a newer release first; "
+                  f"{expected_entry} was merged into history."
+              )
+          print(f"Verified rolling feed serves {len(served_versions)} versions.")
+          PY
+
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$served_tag/altstore-source.json"
+          {
+            echo
+            echo "## AltStore channel feed"
+            echo
+            echo "$url"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Updated AltStore channel feed: $url"
+
       - name: Publish repository app source
         shell: bash
         run: |

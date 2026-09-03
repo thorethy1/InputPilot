@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Update the rolling AltStore channel feeds automatically on every release:
+  beta releases refresh the fixed beta feed asset with merged version
+  history, and stable releases carry a history-merged manifest so the
+  latest-release feed keeps prior versions.
 - Extend the trackpad with mutually exclusive gesture states, sub-pixel
   pointer precision accumulation, natural-scrolling and momentum toggles with
   decaying inertia, pinch-to-zoom over Ctrl+scroll, drag/zoom haptics, and a
