@@ -145,7 +145,7 @@ The current code already contains useful trackpad behavior including movement, s
 - [x] Add/tune momentum or inertial scrolling where it improves the experience.
 - [ ] Verify tap-to-click and double-click behavior.
 - [ ] Verify press/hold and/or two-finger secondary click behavior.
-- [ ] Make drag-and-drop reliable, including guaranteed drag release.
+- [x] Make drag-and-drop reliable, including guaranteed drag release.
 - [x] Add pinch-to-zoom where the HID/protocol path can support it correctly.
 - [x] Add configurable sensitivity.
 - [x] Add subtle haptic feedback where useful.

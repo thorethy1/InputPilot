@@ -2573,6 +2573,9 @@ struct TrackpadView: View {
                     if gestureState == .dragging { gestureState = .idle }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     Task {
+                        // Deliver queued pointer movement before the button
+                        // lifts so the drop lands where the finger stopped.
+                        await coalescer.flush()
                         let sent = await manager.send(.mouseUp(.left))
                         manager.endOrderedSession()
                         if !sent { await manager.releaseAllPreservingError() }
@@ -2584,6 +2587,12 @@ struct TrackpadView: View {
                 stopMomentum()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 Task { await manager.send(.click(.right)) }
+            },
+            middleClick: {
+                guard manager.supports("mouse_click") else { return }
+                stopMomentum()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task { await manager.send(.click(.middle)) }
             },
             zoom: { change in
                 guard canZoom else { return }
@@ -2599,7 +2608,7 @@ struct TrackpadView: View {
                 }
                 let lines = zoomAccumulator.add(TrackpadGestures.zoomContribution(scaleChange: change))
                 guard lines != 0 else { return }
-                Task { await manager.send(.scroll(Int16(clamping: lines))) }
+                Task { await scrollCoalescer.add(lines) }
             },
             zoomEnded: { cancelled in
                 guard zoomActive else { return }
@@ -2607,7 +2616,10 @@ struct TrackpadView: View {
                 let residue = zoomAccumulator.flush()
                 if gestureState == .zooming { gestureState = .idle }
                 Task {
-                    if residue != 0 { await manager.send(.scroll(Int16(clamping: residue))) }
+                    // Flush every remaining zoom line first so the Ctrl key
+                    // can never be released while wheel lines are in flight.
+                    if residue != 0 { await scrollCoalescer.add(residue) }
+                    await scrollCoalescer.flush()
                     await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0))
                     manager.endOrderedSession()
                     if cancelled { await manager.releaseAll() }
@@ -2666,9 +2678,10 @@ struct TrackpadView: View {
             Label("One finger moves the pointer.", systemImage: "hand.point.up.left")
             Label("Tap or double-tap to click.", systemImage: "hand.tap")
             Label("Two fingers scroll.", systemImage: "arrow.up.arrow.down")
-            Label("Pinch to zoom.", systemImage: "arrow.up.left.and.arrow.down.right")
-            Label("Tap, then press and hold while moving to drag.", systemImage: "hand.press")
-            Label("Press and hold without moving to right-click.", systemImage: "cursorarrow.rays")
+            Label("Pinch with two fingers to zoom.", systemImage: "arrow.up.left.and.arrow.down.right")
+            Label("Hold, then move to drag.", systemImage: "hand.press")
+            Label("Hold and release without moving to right-click.", systemImage: "cursorarrow.rays")
+            Label("Tap with two fingers to right-click, with three for a middle click.", systemImage: "hand.tap.fill")
             if !canZoom {
                 Label("Zoom needs mouse_scroll and keyboard_layout firmware support.", systemImage: "info.circle")
             }

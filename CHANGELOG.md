@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Rework the trackpad gesture engine so zoom, drag and every pointer action
+  work reliably through gestures: a custom two-finger recognizer arbitrates
+  scroll versus pinch from raw touch geometry (centroid translation against
+  finger-distance change) and locks the winner for the whole gesture, so
+  pinching always zooms and never scrolls; zoom wheel lines run through the
+  scroll coalescer and always flush before the Ctrl key releases for smooth
+  pinch zoom with strict ordering; drag now engages from movement after any
+  press-and-hold instead of requiring an exact tap-first sequence; and
+  two-finger tap right-clicks plus three-finger tap middle-clicks make every
+  mouse action reachable without the on-screen buttons.
 - Update the rolling AltStore channel feeds automatically on every release:
   beta releases refresh the fixed beta feed asset with merged version
   history, and stable releases carry a history-merged manifest so the

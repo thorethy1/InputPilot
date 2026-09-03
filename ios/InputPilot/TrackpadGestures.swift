@@ -85,8 +85,61 @@ enum TrackpadGestures {
         (Double(scaleChange) - 1) * zoomLinesPerFullScale
     }
 
+    /// True once a press-and-hold has moved far enough that the finger
+    /// clearly wants to drag instead of waiting for a right-click.
+    static func isDragEngagement(dx: CGFloat, dy: CGFloat) -> Bool {
+        let distance = Double(dx * dx + dy * dy)
+        return distance >= dragEngageDistance * dragEngageDistance
+    }
+
     static let pixelsPerScrollLine: Double = 5
-    static let zoomLinesPerFullScale: Double = 10
+    static let zoomLinesPerFullScale: Double = 18
+    static let dragEngageDistance: Double = 10
+}
+
+/// Decides from raw two-finger geometry whether the fingers intend to
+/// scroll (centroid translation) or pinch-zoom (finger distance change).
+/// The first metric past its threshold wins and locks the gesture for its
+/// entire lifetime, so scroll and zoom can never fight each other.
+struct TwoFingerArbiter: Equatable, Sendable {
+    enum Mode: Equatable, Sendable {
+        case undetermined
+        case scroll
+        case zoom
+    }
+
+    static let panLockDistance: Double = 12
+    static let pinchLockDistance: Double = 10
+
+    private(set) var mode: Mode = .undetermined
+    private let startCentroidX: Double
+    private let startCentroidY: Double
+    private let startDistance: Double
+
+    init(centroidX: Double, centroidY: Double, distance: Double) {
+        startCentroidX = centroidX
+        startCentroidY = centroidY
+        startDistance = distance
+    }
+
+    /// Feeds current two-finger geometry and returns the newly locked mode,
+    /// or nil while the gesture is still undetermined. Pinch wins when both
+    /// metrics cross in the same update because pinching also drifts the
+    /// centroid slightly, while real scrolling keeps the finger distance.
+    mutating func update(centroidX: Double, centroidY: Double, distance: Double) -> Mode? {
+        guard mode == .undetermined else { return nil }
+        if abs(distance - startDistance) >= Self.pinchLockDistance {
+            mode = .zoom
+            return .zoom
+        }
+        let dx = centroidX - startCentroidX
+        let dy = centroidY - startCentroidY
+        if dx * dx + dy * dy >= Self.panLockDistance * Self.panLockDistance {
+            mode = .scroll
+            return .scroll
+        }
+        return nil
+    }
 }
 
 /// Generates decaying inertial scroll lines from the pan-end velocity.
