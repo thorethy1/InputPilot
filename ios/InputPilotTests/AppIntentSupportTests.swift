@@ -154,6 +154,6 @@ private final class IntentMockTransport: HIDControlTransport {
         XCTAssertEqual(AppIntentSupport.activeDevice(context: context)?.deviceId, "device-2")
 
         UserDefaults.standard.set("missing-device", forKey: "selectedDeviceId")
-        XCTAssertEqual(AppIntentSupport.activeDevice(context: context)?.deviceId, first.deviceId)
+        XCTAssertEqual(AppIntentSupport.activeDevice(context: context)?.deviceId, "device-2")
     }
 }

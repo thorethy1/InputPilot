@@ -82,6 +82,7 @@ extension PresetScript.Step {
         } catch {
             manager.lastError = error.localizedDescription
             execution = nil
+            runningPresetID = nil
             failedPresetID = preset.id
             lastError = error.localizedDescription
             return
