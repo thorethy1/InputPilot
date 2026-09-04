@@ -600,6 +600,13 @@ private struct ConnectionSettingsView: View {
                     NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
                 }
             }
+            Section("Secrets") {
+                NavigationLink {
+                    SecretsView()
+                } label: {
+                    Label("Manage Secrets", systemImage: "key")
+                }
+            }
             Section("Support") {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
                 NavigationLink("Status LED Matrix") { StatusLEDMatrixView() }

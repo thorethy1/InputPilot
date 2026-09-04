@@ -28,16 +28,17 @@ enum SecretStoreError: LocalizedError {
         self.context = context
     }
 
-    func save(name: String, value: String) throws {
+    func save(name: String, value: String, note: String = "") throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { throw SecretStoreError.invalidName }
         guard !value.isEmpty else { throw SecretStoreError.invalidValue }
         if let existing = try fetchSecret(named: trimmedName) {
             try upsertKeychainValue(value, account: existing.id.uuidString)
+            if !note.isEmpty { existing.note = note }
             existing.updatedAt = Date()
             try? context.save()
         } else {
-            let secret = StoredSecret(name: trimmedName)
+            let secret = StoredSecret(name: trimmedName, note: note)
             try upsertKeychainValue(value, account: secret.id.uuidString)
             context.insert(secret)
             try context.save()
