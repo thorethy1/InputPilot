@@ -225,13 +225,13 @@ The repository already contains useful Preset favorite/duplicate/delete/drag ord
 
 ## Presets
 
-- [ ] Ensure Run works reliably.
-- [ ] Improve cards/rows and management consistency.
-- [ ] Support Rename, Duplicate, Edit, Delete, ordering and favorites coherently.
-- [ ] Provide Run/Running/Completed/Failed feedback.
-- [ ] Prevent unsafe duplicate execution.
-- [ ] Support Secret references.
-- [ ] Guarantee failure cleans up held input.
+- [x] Ensure Run works reliably.
+- [x] Improve cards/rows and management consistency.
+- [x] Support Rename, Duplicate, Edit, Delete, ordering and favorites coherently.
+- [x] Provide Run/Running/Completed/Failed feedback.
+- [x] Prevent unsafe duplicate execution.
+- [x] Support Secret references.
+- [x] Guarantee failure cleans up held input.
 
 ## Macros
 
@@ -256,16 +256,16 @@ Storage contract:
 
 Never store plaintext Secret values in SwiftData.
 
-- [ ] Create Secret.
-- [ ] Rename Secret metadata.
-- [ ] Replace/update Secret value.
-- [ ] Delete Secret.
-- [ ] Explicitly reveal Secret only on deliberate user action.
-- [ ] Allow actions to select/reference a Secret without copying plaintext into their persistent model.
-- [ ] Handle deleted/missing/unavailable Keychain references safely and never substitute an empty value silently.
-- [ ] Clear temporary Secret UI state after use where practical.
-- [ ] Audit logging, diagnostics, errors, model descriptions and crash metadata so Secret values cannot leak.
-- [ ] Reduce accidental screenshot/app-switcher exposure where reasonably possible.
+- [x] Create Secret.
+- [x] Rename Secret metadata.
+- [x] Replace/update Secret value.
+- [x] Delete Secret.
+- [x] Explicitly reveal Secret only on deliberate user action.
+- [x] Allow actions to select/reference a Secret without copying plaintext into their persistent model.
+- [x] Handle deleted/missing/unavailable Keychain references safely and never substitute an empty value silently.
+- [x] Clear temporary Secret UI state after use where practical.
+- [x] Audit logging, diagnostics, errors, model descriptions and crash metadata so Secret values cannot leak.
+- [x] Reduce accidental screenshot/app-switcher exposure where reasonably possible.
 
 Preferred model:
 
@@ -300,15 +300,15 @@ Do not create independent BLE/TCP/REST implementations inside App Intents. Do no
 Prioritize:
 
 - [ ] Run InputPilot Shortcut.
-- [ ] Run Preset.
-- [ ] Run Macro.
-- [ ] Send Keyboard Shortcut.
-- [ ] Send Text.
-- [ ] Connect Device.
+- [x] Run Preset.
+- [ ] Run Macro. (deferred: `MacroController.play` can run standalone, but macro entity plumbing and speed/repeat parameters are not wired into intents yet)
+- [x] Send Keyboard Shortcut.
+- [x] Send Text.
+- [x] Connect Device.
 - [ ] Switch Device.
 - [ ] Start Mouse Move.
 - [ ] Stop Mouse Move.
-- [ ] Check Device Status using high-level product state.
+- [x] Check Device Status using high-level product state.
 
 Expose device/action parameters only where useful and avoid leaking protocol internals.
 

@@ -165,6 +165,9 @@
 				A20000000000000000000034 /* MouseEventCoalescer.swift */,
 				A20000000000000000000035 /* TrackpadInputBridge.swift */,
 				A20000000000000000000041 /* TrackpadGestures.swift */,
+				A20000000000000000000060 /* InputPilotIntents.swift */,
+				A20000000000000000000061 /* AppIntentSupport.swift */,
+				A20000000000000000000062 /* InputPilotShortcuts.swift */,
 				A70000000000000000000009 /* Views */,
 				A70000000000000000000005 /* Models */,
 				A70000000000000000000006 /* Services */,
@@ -229,9 +232,6 @@
 				A20000000000000000000020 /* AddDeviceWizardView.swift */,
 				A20000000000000000000056 /* SecretsView.swift */,
 				A20000000000000000000058 /* PresetsView.swift */,
-				A20000000000000000000060 /* InputPilotIntents.swift */,
-				A20000000000000000000061 /* AppIntentSupport.swift */,
-				A20000000000000000000062 /* InputPilotShortcuts.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
