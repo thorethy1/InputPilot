@@ -25,7 +25,7 @@ struct AppLogRecord: Identifiable, Equatable {
     func clear() { records.removeAll(keepingCapacity: true) }
 }
 enum AppLogContext { @TaskLocal static var eventID: UInt64? }
-private func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
+func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
 
 enum MouseButton: UInt8, Codable, CaseIterable { case left = 0, right = 1, middle = 2 }
 enum HIDEvent: Codable, Equatable {
@@ -1558,6 +1558,17 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     private var pendingSecureReplies: [PendingSecureReply] = []
     private var secureRequestInFlight = false
+    // A persisted CoreBluetooth identifier lets the transport reconnect to a
+    // known peripheral without scanning. That is what makes App Intents from
+    // Apple Shortcuts work on a cold start: background scanning is throttled
+    // and the advertisement carries the device identity in manufacturer data
+    // rather than a service UUID, so restore the identifier before the first
+    // scan attempt.
+    private static func persistedIdentifierKey(deviceId: String) -> String { "inputpilot.blePeripheral.\(deviceId.lowercased())" }
+    private func rememberPeripheralIdentifier(_ identifier: UUID) {
+        peripheralIdentifier = identifier
+        UserDefaults.standard.set(identifier.uuidString, forKey: Self.persistedIdentifierKey(deviceId: deviceId))
+    }
     static func writeType(for event: HIDEvent, properties: CBCharacteristicProperties) -> CBCharacteristicWriteType? {
         let highFrequency: Bool = {
             if case .mouseMove = event { return true }
@@ -1569,7 +1580,14 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         if properties.contains(.writeWithoutResponse) { return .withoutResponse }
         return nil
     }
-    init(deviceId: String, authTimeout: TimeInterval = 10, connectionTimeout: TimeInterval = 8) { self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout; self.connectionTimeout = connectionTimeout; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
+    init(deviceId: String, authTimeout: TimeInterval = 10, connectionTimeout: TimeInterval = 8) {
+        self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout; self.connectionTimeout = connectionTimeout
+        super.init()
+        if let stored = UserDefaults.standard.string(forKey: Self.persistedIdentifierKey(deviceId: deviceId)) {
+            peripheralIdentifier = UUID(uuidString: stored)
+        }
+        central = CBCentralManager(delegate: self, queue: .main)
+    }
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
         if reconnectGate.permitsCachedPeripheral, let peripheralIdentifier,
@@ -1651,7 +1669,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         appLog(.bluetooth, "discovered deviceId=\(deviceId) rssi=\(RSSI) connect requested")
         reconnectGate.advertisementObserved()
         self.peripheral = peripheral
-        peripheralIdentifier = peripheral.identifier
+        rememberPeripheralIdentifier(peripheral.identifier)
         scanTimeoutWork?.cancel()
         central.stopScan()
         state = .discovered
@@ -1659,7 +1677,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         state = .connecting
         startConnectionTimeout(for: peripheral, source: "scan")
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { guard self.peripheral === peripheral else { central.cancelPeripheralConnection(peripheral); return }; connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; reconnectGate.advertisementObserved(); appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { guard self.peripheral === peripheral else { central.cancelPeripheralConnection(peripheral); return }; connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; reconnectGate.advertisementObserved(); appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); if peripheralIdentifier == nil { rememberPeripheralIdentifier(peripheral.identifier) }; state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         guard self.peripheral === peripheral else { appLog(.bluetooth, "ignored stale BLE connect failure deviceId=\(deviceId)"); return }
         connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil
@@ -2209,15 +2227,19 @@ enum InputPilotWiFiManager {
     // connect() only starts the transports; BLE scan/auth and the Wi-Fi handshake
     // finish asynchronously. Callers that need a ready session immediately after
     // connecting (App Intents, automations) must wait for readiness first.
+    // Transports that are merely offline at the start (radio powering up, Wi-Fi
+    // handshake pending, BLE retry backoff) must keep the wait alive; only
+    // terminal states (authentication failed, radio unavailable, no transport at
+    // all) end it early.
     func waitUntilReady(timeout: TimeInterval = 10) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
-        while true {
+        while Date() < deadline {
             if allTransports.contains(where: { $0.isAvailable && $0.state == .ready }) { return true }
-            if allTransports.contains(where: { $0.state == .authenticationFailed }) { return false }
-            if allTransports.allSatisfy({ [.offline, .unavailable].contains($0.state) }) { return false }
-            if Date() >= deadline { return false }
+            let participating = allTransports.filter { !($0 is UnavailableHIDControlTransport) && $0.state != .unavailable }
+            if participating.isEmpty || participating.allSatisfy({ $0.state == .authenticationFailed }) { return false }
             try? await Task.sleep(for: .milliseconds(100))
         }
+        return false
     }
     func disconnect() async { await releaseAll(); activeTransport = nil }
     @discardableResult func send(_ event: HIDEvent) async -> Bool {
@@ -2274,10 +2296,21 @@ enum InputPilotWiFiManager {
         if ownsSession && !beginOrderedSession(lowLatency: false) { return false }
         defer { if ownsSession { endOrderedSession() } }
         do {
-            for stroke in try layout.strokes(for: text) {
+            let strokes = try layout.strokes(for: text)
+            // The firmware drains its HID queue at a fixed rate and rejects
+            // events when the 32-slot queue fills. Bluetooth writes are paced
+            // by the ATT acknowledgement, but the Wi-Fi socket acknowledges
+            // before the device consumes anything, so keep a minimum gap
+            // between keystrokes to protect the queue tail (e.g. enter-after).
+            let paces = (leasedTransport?.kind ?? TransportKind.tcp) == .tcp
+            for (index, stroke) in strokes.enumerated() {
                 if Task.isCancelled { return false }
                 guard await send(.keyboardReport(modifiers: stroke.modifiers, usage: stroke.usage)) else { return false }
-                if delayMilliseconds > 0 { try? await Task.sleep(for: .milliseconds(delayMilliseconds)) }
+                if delayMilliseconds > 0 {
+                    try? await Task.sleep(for: .milliseconds(delayMilliseconds))
+                } else if paces, index + 1 < strokes.count {
+                    try? await Task.sleep(for: .milliseconds(8))
+                }
             }
             return true
         } catch { lastError = error.localizedDescription; return false }
@@ -2360,7 +2393,13 @@ enum InputPilotWiFiManager {
     }
 }
 
-/// Deliberately small, line-oriented DuckyScript subset. Parse before sending any keys.
+/// Deliberately small, line-oriented preset script. Parse before sending any keys.
+///
+/// Syntax: a line wrapped in brackets is a command — `[ENTER]`, `[CTRL+A]`,
+/// `[SECRET name]` or `[DELAY 500]`. Every other line is typed as literal text
+/// and `#` starts a comment. Legacy DuckyScript lines (`STRING`, `REM`,
+/// unbracketed `DELAY`/`SECRET`/keys) are rewritten once by
+/// `migratedLegacyScript` so existing presets keep working.
 enum PresetScript {
     enum Step: Equatable { case text(String), key(String), delay(Int), secret(String) }
     struct ParseError: LocalizedError {
@@ -2371,24 +2410,35 @@ enum PresetScript {
     static let modifiers: Set<String> = ["CTRL", "CONTROL", "SHIFT", "ALT", "OPTION", "OPT", "GUI", "WIN", "CMD", "COMMAND", "SUPER", "META"]
     static let keys: Set<String> = Set("ENTER RETURN TAB ESC ESCAPE BACKSPACE BKSP SPACE SPACEBAR DELETE DEL INSERT INS HOME END PAGEUP PGUP PAGEDOWN PGDN RIGHT RIGHTARROW LEFT LEFTARROW DOWN DOWNARROW UP UPARROW CAPSLOCK CAPS PRINTSCREEN PRTSC".split(separator: " ").map(String.init)).union((1...12).map { "F\($0)" })
 
+    static func parseKeyCombo(_ combo: String) -> Step? {
+        let tokens = combo.uppercased().split(whereSeparator: { $0 == "+" || $0.isWhitespace }).map(String.init)
+        guard let first = tokens.first,
+              keys.contains(first) || modifiers.contains(first),
+              let last = tokens.last,
+              tokens.dropLast().allSatisfy({ modifiers.contains($0) }),
+              keys.contains(last) || (tokens.count > 1 && last.count == 1 && last.unicodeScalars.allSatisfy({ (65...90).contains(Int($0.value)) || (48...57).contains(Int($0.value)) })) else {
+            return nil
+        }
+        return .key(tokens.joined(separator: "+").lowercased())
+    }
+
     static func parse(_ source: String) throws -> [Step] {
         var steps: [Step] = []
         for (index, raw) in source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n").enumerated() {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
-            let bracketed = line.hasPrefix("[")
-            if bracketed && !line.hasSuffix("]") { throw ParseError(line: index + 1, reason: "Missing closing bracket.") }
-            let command = bracketed ? String(line.dropFirst().dropLast()) : line
+            if line.hasPrefix("#") { continue }
+            if !line.hasPrefix("[") {
+                steps.append(.text(raw))
+                continue
+            }
+            guard line.count >= 2, line.hasSuffix("]") else {
+                throw ParseError(line: index + 1, reason: "Missing closing bracket.")
+            }
+            let command = String(line.dropFirst().dropLast())
             let parts = command.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
             let name = parts.first.map(String.init)?.uppercased() ?? ""
             let argument = parts.count > 1 ? String(parts[1]) : ""
-            if name == "REM" && !bracketed { continue }
-            if name == "STRING" && !bracketed {
-                // Preserve spaces after the first command separator, including trailing spaces.
-                let content = raw.drop(while: { $0.isWhitespace }).dropFirst(6)
-                steps.append(.text(content.isEmpty ? "" : String(content.dropFirst())))
-                continue
-            }
             if name == "DELAY" {
                 let value = argument.trimmingCharacters(in: .whitespaces)
                 guard !value.isEmpty, value.allSatisfy({ $0.isASCII && $0.isNumber }), let ms = Int(value), (0...60000).contains(ms) else {
@@ -2399,23 +2449,66 @@ enum PresetScript {
             if name == "SECRET" {
                 let secretName = argument.trimmingCharacters(in: .whitespaces)
                 guard !secretName.isEmpty else {
-                    throw ParseError(line: index + 1, reason: "SECRET needs a name, e.g. SECRET work-password.")
+                    throw ParseError(line: index + 1, reason: "SECRET needs a name, e.g. [SECRET work-password].")
                 }
                 steps.append(.secret(secretName)); continue
             }
-            let tokens = command.uppercased().split(whereSeparator: { $0 == "+" || $0.isWhitespace }).map(String.init)
-            if let first = tokens.first, bracketed || keys.contains(first) || modifiers.contains(first) {
-                guard let last = tokens.last,
-                      tokens.dropLast().allSatisfy({ modifiers.contains($0) }),
-                      keys.contains(last) || (tokens.count > 1 && last.count == 1 && last.unicodeScalars.allSatisfy({ (65...90).contains(Int($0.value)) || (48...57).contains(Int($0.value)) })) else {
-                    throw ParseError(line: index + 1, reason: "Unknown key or unsupported command. Use STRING for literal text.")
-                }
-                steps.append(.key(tokens.joined(separator: "+").lowercased()))
-            } else {
-                steps.append(.text(raw))
+            if name == "REM" { continue }
+            guard let combo = parseKeyCombo(command) else {
+                throw ParseError(line: index + 1, reason: "Unknown command. Use [ENTER], [CTRL+A], [SECRET name] or [DELAY 500], or plain text without brackets.")
             }
+            steps.append(combo)
         }
         return steps
+    }
+
+    /// Rewrites legacy DuckyScript lines into the bracket syntax. Returns nil
+    /// when the script already uses the current syntax.
+    static func migratedLegacyScript(_ source: String) -> String? {
+        var changed = false
+        var output: [String] = []
+        for raw in source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n") {
+            // Legacy commands allowed leading whitespace but kept trailing
+            // whitespace in STRING content, so only strip the leading side.
+            let stripped = String(raw.drop(while: { $0.isWhitespace }))
+            if stripped.isEmpty || stripped.hasPrefix("#") {
+                output.append(raw)
+                continue
+            }
+            let upper = stripped.uppercased()
+            if upper == "STRING" || upper.hasPrefix("STRING ") || upper.hasPrefix("STRING\t") {
+                // Legacy kept the content after the keyword and one separator,
+                // including trailing spaces.
+                let content = stripped.dropFirst(6).dropFirst()
+                output.append(String(content))
+                changed = true
+                continue
+            }
+            if upper == "REM" || upper.hasPrefix("REM ") || upper.hasPrefix("REM\t") {
+                output.append("# " + String(stripped.dropFirst(3).dropFirst()))
+                changed = true
+                continue
+            }
+            if upper == "DELAY" || upper.hasPrefix("DELAY ") || upper == "SECRET" || upper.hasPrefix("SECRET ") {
+                output.append("[" + stripped + "]")
+                changed = true
+                continue
+            }
+            if let combo = legacyKeyComboLine(stripped) {
+                output.append("[" + combo + "]")
+                changed = true
+                continue
+            }
+            output.append(raw)
+        }
+        return changed ? output.joined(separator: "\n") : nil
+    }
+
+    /// Mirrors the legacy parser's key-line decision so migration reproduces
+    /// exactly what used to run.
+    private static func legacyKeyComboLine(_ line: String) -> String? {
+        guard let step = parseKeyCombo(line), case let .key(combo) = step else { return nil }
+        return combo.uppercased()
     }
 }
 

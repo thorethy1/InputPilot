@@ -402,47 +402,53 @@ private struct PresetTileContent: View {
     let state: PresetsViewModel.RunState
 
     var body: some View {
-        ZStack {
-            shape
-                .fill(LinearGradient(colors: [tint.opacity(0.85), tint.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            if #available(iOS 26.0, *) {
-                shape
-                    .fill(.clear)
-                    .glassEffect(.regular.tint(tint.opacity(0.35)), in: shape)
-            } else {
-                shape
-                    .strokeBorder(.white.opacity(0.35), lineWidth: 1)
-            }
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
-                HStack(alignment: .top) {
-                    Image(systemName: preset.icon)
-                        .font(.title2)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if preset.favorite {
-                        Image(systemName: "star.fill")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.9))
+        // Anchor the square tile on a content-independent view. Sizing the
+        // ZStack directly lets LazyVGrid estimate unstable row heights, which
+        // made tiles overlap and rows at the end of the grid drop out.
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                ZStack {
+                    shape
+                        .fill(LinearGradient(colors: [tint.opacity(0.85), tint.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    if #available(iOS 26.0, *) {
+                        shape
+                            .fill(.clear)
+                            .glassEffect(.regular.tint(tint.opacity(0.35)), in: shape)
+                    } else {
+                        shape
+                            .strokeBorder(.white.opacity(0.35), lineWidth: 1)
                     }
+                    VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+                        HStack(alignment: .top) {
+                            Image(systemName: preset.icon)
+                                .font(.title2)
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if preset.favorite {
+                                Image(systemName: "star.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.9))
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Text(preset.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2, reservesSpace: true)
+                            .multilineTextAlignment(.leading)
+                        HStack(spacing: 4) {
+                            Image(systemName: badgeSymbol)
+                                .font(.caption2)
+                            Text(badgeLabel)
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.white.opacity(0.85))
+                    }
+                    .padding(AppTheme.Spacing.standard)
+                    stateOverlay
                 }
-                Spacer(minLength: 0)
-                Text(preset.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2, reservesSpace: true)
-                    .multilineTextAlignment(.leading)
-                HStack(spacing: 4) {
-                    Image(systemName: badgeSymbol)
-                        .font(.caption2)
-                    Text(badgeLabel)
-                        .font(.caption2)
-                }
-                .foregroundStyle(.white.opacity(0.85))
             }
-            .padding(AppTheme.Spacing.standard)
-            stateOverlay
-        }
-        .aspectRatio(1, contentMode: .fit)
     }
 
     private var shape: RoundedRectangle {
@@ -556,7 +562,7 @@ private struct PresetEditorSheet: View {
                     Text(payloadHeader)
                 } footer: {
                     if type == .script {
-                        Text("One action per line: [TAB], [ENTER], [CTRL+A], [DELAY 500], SECRET <name> or plain text.")
+                        Text("One action per line. Bracketed lines are commands: [TAB], [ENTER], [CTRL+A], [SECRET name], [DELAY 500]. Everything else is typed as text; # starts a comment.")
                     }
                 }
                 if type == .script {
@@ -630,7 +636,7 @@ private struct PresetEditorSheet: View {
         switch type {
         case .text: "Text to type"
         case .shortcut: "enter"
-        case .script: "[TAB]\n[SECRET work-password]\n[DELAY 500]"
+        case .script: "[ENTER]\n[SECRET work-password]\n[DELAY 500]\nplain text"
         }
     }
 
@@ -712,9 +718,9 @@ private struct SecretInsertList: View {
             ForEach(secrets) { secret in
                 Button {
                     let prefix = payload.isEmpty || payload.hasSuffix("\n") ? "" : "\n"
-                    payload += prefix + "SECRET \(secret.name)"
+                    payload += prefix + "[SECRET \(secret.name)]"
                 } label: {
-                    Label("Insert SECRET \(secret.name)", systemImage: "key")
+                    Label("Insert [SECRET \(secret.name)]", systemImage: "key")
                 }
             }
         }

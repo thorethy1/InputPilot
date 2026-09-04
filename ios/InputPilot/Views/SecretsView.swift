@@ -322,7 +322,7 @@ private struct NewSecretSheet: View {
                 } header: {
                     Text("Note")
                 } footer: {
-                    Text("The value is stored in the iOS Keychain. Presets reference it by name with SECRET <name>.")
+                    Text("The value is stored in the iOS Keychain. Presets reference it by name with [SECRET name].")
                 }
             }
             .navigationTitle("New Secret")
@@ -365,7 +365,7 @@ private struct RenameSecretSheet: View {
                     if referencedPresets.isEmpty {
                         Text("No presets reference this secret by name.")
                     } else {
-                        Text("SECRET lines in \(referencedPresets.joined(separator: ", ")) are updated automatically.")
+                        Text("[SECRET] lines in \(referencedPresets.joined(separator: ", ")) are updated automatically.")
                     }
                 }
             }

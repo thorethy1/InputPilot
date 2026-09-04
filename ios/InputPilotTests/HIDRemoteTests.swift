@@ -273,16 +273,18 @@ final class PresetScriptTests: XCTestCase {
         ])
     }
 
-    func testDuckyScriptSubsetAndLiteralEscaping() throws {
-        XCTAssertEqual(try PresetScript.parse("REM form\r\nCTRL ALT DELETE\r\nSTRING [TAB]  \r\nDELAY 0\r\nENTER"), [
-            .key("ctrl+alt+delete"), .text("[TAB]  "), .delay(0), .key("enter")
-        ])
-        XCTAssertEqual(try PresetScript.parse("[CTRL+A]\n[SHIFT+TAB]\nF12"), [.key("ctrl+a"), .key("shift+tab"), .key("f12")])
+    func testBracketedCommandsAndPlainTextLines() throws {
+        XCTAssertEqual(try PresetScript.parse("[CTRL+A]\n[SHIFT+TAB]\n[F12]"), [.key("ctrl+a"), .key("shift+tab"), .key("f12")])
+        // Without brackets everything is typed literally, including bare key
+        // words and bracket-looking text that is not a full command line.
+        XCTAssertEqual(try PresetScript.parse("F12\nCTRL ALT DELETE"), [.text("F12"), .text("CTRL ALT DELETE")])
+        XCTAssertEqual(try PresetScript.parse("Press [ENTER] now"), [.text("Press [ENTER] now")])
+        XCTAssertEqual(try PresetScript.parse("# form filler\n[ENTER]"), [.key("enter")])
     }
 
     func testMalformedCommandsHaveLineNumbers() {
-        for command in ["[DELAY]", "DELAY -1", "DELAY 60001", "DELAY 999999999999999999999999999", "[TBA]", "[TAB", "[CTRL+BOGUS]", "[TAB ENTER]"] {
-            XCTAssertThrowsError(try PresetScript.parse("STRING valid\n" + command)) { error in
+        for command in ["[DELAY]", "[DELAY -1]", "[DELAY 60001]", "[DELAY 999999999999999999999999999]", "[TBA]", "[TAB", "[CTRL+BOGUS]", "[TAB ENTER]", "[SECRET]", "[]"] {
+            XCTAssertThrowsError(try PresetScript.parse("valid text\n" + command)) { error in
                 XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
             }
         }
@@ -290,23 +292,40 @@ final class PresetScriptTests: XCTestCase {
 
     func testBlankLinesDoNotSendEnterAndTextKeepsWhitespace() throws {
         XCTAssertEqual(try PresetScript.parse("\n  00001234  \n\n[ENTER]\n"), [.text("  00001234  "), .key("enter")])
-        XCTAssertEqual(try PresetScript.parse("STRING TAB\nSTRING ENTER\nSTRING DELAY 500"), [.text("TAB"), .text("ENTER"), .text("DELAY 500")])
+        XCTAssertEqual(try PresetScript.parse("TAB\nENTER\nDELAY 500\nSECRET x"), [.text("TAB"), .text("ENTER"), .text("DELAY 500"), .text("SECRET x")])
     }
 
     func testSecretLinesParseToSecretSteps() throws {
-        XCTAssertEqual(try PresetScript.parse("SECRET work-password\n[SECRET api-token]\nSTRING SECRET literal"), [
+        XCTAssertEqual(try PresetScript.parse("[SECRET work-password]\n[secret api-token]\nSECRET literal"), [
             .secret("work-password"), .secret("api-token"), .text("SECRET literal")
         ])
     }
 
     func testSecretWithEmptyNameThrows() {
-        for command in ["SECRET", "SECRET   ", "[SECRET]", "[SECRET  ]"] {
-            XCTAssertThrowsError(try PresetScript.parse("STRING valid\n" + command)) { error in
+        XCTAssertThrowsError(try PresetScript.parse("valid text\n[SECRET]")) { error in
+            XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
+            XCTAssertEqual((error as? PresetScript.ParseError)?.reason, "SECRET needs a name, e.g. [SECRET work-password].")
+        }
+        for command in ["[SECRET   ]", "[SECRET\t]"] {
+            XCTAssertThrowsError(try PresetScript.parse("valid text\n" + command)) { error in
                 XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
             }
         }
-        XCTAssertThrowsError(try PresetScript.parse("STRING valid\nSECRET   ")) { error in
-            XCTAssertEqual((error as? PresetScript.ParseError)?.reason, "SECRET needs a name, e.g. SECRET work-password.")
-        }
+    }
+
+    func testMigrationRewritesLegacyDuckyLines() {
+        XCTAssertEqual(
+            PresetScript.migratedLegacyScript("REM form\r\nCTRL ALT DELETE\r\nSTRING hello  \r\nDELAY 0\r\nENTER\r\nSECRET work-password\r\nplain text"),
+            "# form\n[CTRL+ALT+DELETE]\nhello  \n[DELAY 0]\n[ENTER]\n[SECRET work-password]\nplain text"
+        )
+        XCTAssertNil(PresetScript.migratedLegacyScript("hello\n[ENTER]\n[SECRET work-password]"))
+    }
+
+    func testMigratedLegacyScriptParsesToTheSameSteps() throws {
+        let legacy = "REM login\r\nCTRL ALT DELETE\r\nSTRING user@example.com\r\nENTER\r\nSECRET work-password"
+        let migrated = try XCTUnwrap(PresetScript.migratedLegacyScript(legacy))
+        XCTAssertEqual(try PresetScript.parse(migrated), [
+            .key("ctrl+alt+delete"), .text("user@example.com"), .key("enter"), .secret("work-password")
+        ])
     }
 }

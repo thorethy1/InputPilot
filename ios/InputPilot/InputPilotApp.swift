@@ -169,8 +169,36 @@ enum AppColors {
 @MainActor enum AppModelContainer {
     static let shared: ModelContainer = {
         let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self, StoredSecret.self])
-        return try! ModelContainer(for: schema)
+        do {
+            let container = try ModelContainer(for: schema)
+            migrateLegacyPresetScripts(in: container)
+            return container
+        } catch {
+            // App Intents launch the app in the background; a hard failure here
+            // would crash on every Shortcuts run. Degrade to an in-memory store
+            // so the app and its intents stay usable and report honest errors.
+            appLog(.errors, "SwiftData store could not be opened: \(error.localizedDescription). Using an in-memory fallback store.")
+            let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: configuration)
+        }
     }()
+
+    /// Rewrites legacy DuckyScript preset payloads (STRING/REM/unbracketed
+    /// commands) into the current bracket syntax exactly once per store open.
+    static func migrateLegacyPresetScripts(in container: ModelContainer) {
+        let context = ModelContext(container)
+        let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
+        var migrated = 0
+        for preset in presets where preset.script {
+            if let rewritten = PresetScript.migratedLegacyScript(preset.payload) {
+                preset.payload = rewritten
+                migrated += 1
+            }
+        }
+        guard migrated > 0 else { return }
+        try? context.save()
+        appLog(.errors, "Migrated \(migrated) preset script\(migrated == 1 ? "" : "s") to the bracket syntax.")
+    }
 }
 
 @main

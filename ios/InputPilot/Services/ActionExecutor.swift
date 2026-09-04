@@ -49,12 +49,13 @@ enum ActionExecutionError: LocalizedError {
         }
         defer { transport.endOrderedSession() }
         do {
+            var sentKeystrokes = false
             for step in steps {
                 try Task.checkCancellation()
                 let sent: Bool
                 switch step {
-                case let .text(text): sent = await transport.sendText(text, layout: layout, delayMilliseconds: typingDelayMs)
-                case let .key(key): sent = await transport.send(.keyCombo(key))
+                case let .text(text): sent = await transport.sendText(text, layout: layout, delayMilliseconds: typingDelayMs); sentKeystrokes = true
+                case let .key(key): sent = await transport.send(.keyCombo(key)); sentKeystrokes = true
                 case let .secret(name):
                     let value: String
                     do {
@@ -73,6 +74,7 @@ enum ActionExecutionError: LocalizedError {
                         return .failure(.transportFailure("The secret ‘\(name)’ contains a character that is not available in the selected host layout."))
                     }
                     sent = await transport.sendText(value, layout: layout, delayMilliseconds: typingDelayMs)
+                    sentKeystrokes = true
                 case let .delay(ms): try await Task.sleep(for: .milliseconds(ms)); continue
                 }
                 guard sent else {
@@ -82,6 +84,10 @@ enum ActionExecutionError: LocalizedError {
                 try await Task.sleep(for: .milliseconds(50))
             }
             try Task.checkCancellation()
+            // A firmware release-all clears the device's queued events, so give
+            // it a moment to drain the tail of the sequence (e.g. enter-after)
+            // before releasing held keys.
+            if sentKeystrokes { try? await Task.sleep(for: .milliseconds(200)) }
             await transport.releaseAllPreservingError()
             return .success(())
         } catch is CancellationError {

@@ -90,7 +90,7 @@ struct DeviceEntityQuery: EntityQuery {
 
 struct RunPresetIntent: AppIntent {
     static let title: LocalizedStringResource = "Run Preset"
-    static let description = IntentDescription("Runs an InputPilot preset on the active device.")
+    static let description = IntentDescription("Runs an InputPilot preset on the active device, connecting first when needed.")
     static let openAppWhenRun = false
 
     @Parameter(title: "Preset") var preset: InputPilotPresetEntity
@@ -101,22 +101,24 @@ struct RunPresetIntent: AppIntent {
     }
 
     @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
-        let context = AppIntentSupport.container.mainContext
-        let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
-        guard let model = presets.first(where: { $0.id == preset.id }) else {
-            return .result(dialog: IntentDialog(stringLiteral: "This preset is no longer available."))
+        let outcome = await AppIntentSupport.serialized { [preset, device] in
+            let context = AppIntentSupport.container.mainContext
+            let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
+            guard let model = presets.first(where: { $0.id == preset.id }) else {
+                return PresetRunOutcome(success: false, message: "This preset is no longer available.")
+            }
+            let storedDevice: StoredDevice?
+            if let device {
+                let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
+                storedDevice = devices.first { $0.deviceId == device.id }
+            } else {
+                storedDevice = AppIntentSupport.activeDevice(context: context)
+            }
+            guard let storedDevice else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.run(preset: model, device: storedDevice, context: context)
         }
-        let storedDevice: StoredDevice?
-        if let device {
-            let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
-            storedDevice = devices.first { $0.deviceId == device.id }
-        } else {
-            storedDevice = AppIntentSupport.activeDevice(context: context)
-        }
-        guard let storedDevice else {
-            return .result(dialog: IntentDialog(stringLiteral: "No InputPilot device is saved yet. Add one in the app first."))
-        }
-        let outcome = await AppIntentSupport.run(preset: model, device: storedDevice, context: context)
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
@@ -133,13 +135,15 @@ struct ConnectDeviceIntent: AppIntent {
     }
 
     @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
-        let context = AppIntentSupport.container.mainContext
-        let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
-        guard let model = devices.first(where: { $0.deviceId == device.id }) else {
-            return .result(dialog: IntentDialog(stringLiteral: "This device is no longer available."))
+        let outcome = await AppIntentSupport.serialized { [device] in
+            let context = AppIntentSupport.container.mainContext
+            let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
+            guard let model = devices.first(where: { $0.deviceId == device.id }) else {
+                return PresetRunOutcome(success: false, message: "This device is no longer available.")
+            }
+            return PresetRunOutcome(success: true, message: await AppIntentSupport.connectSummary(for: model))
         }
-        let summary = await AppIntentSupport.connectSummary(for: model)
-        return .result(dialog: IntentDialog(stringLiteral: summary))
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
 
@@ -155,19 +159,21 @@ struct CheckDeviceStatusIntent: AppIntent {
     }
 
     @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
-        let context = AppIntentSupport.container.mainContext
-        let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
-        let storedDevice: StoredDevice?
-        if let device {
-            storedDevice = devices.first { $0.deviceId == device.id }
-        } else {
-            storedDevice = AppIntentSupport.activeDevice(context: context)
+        let outcome = await AppIntentSupport.serialized { [device] in
+            let context = AppIntentSupport.container.mainContext
+            let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
+            let storedDevice: StoredDevice?
+            if let device {
+                storedDevice = devices.first { $0.deviceId == device.id }
+            } else {
+                storedDevice = AppIntentSupport.activeDevice(context: context)
+            }
+            guard let storedDevice else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return PresetRunOutcome(success: true, message: await AppIntentSupport.connectSummary(for: storedDevice))
         }
-        guard let storedDevice else {
-            return .result(dialog: IntentDialog(stringLiteral: "No InputPilot device is saved yet. Add one in the app first."))
-        }
-        let summary = await AppIntentSupport.connectSummary(for: storedDevice)
-        return .result(dialog: IntentDialog(stringLiteral: summary))
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
 
@@ -182,11 +188,13 @@ struct SendKeyboardShortcutIntent: AppIntent {
         guard let steps = AppIntentSupport.keyComboSteps(keyCombo) else {
             return .result(dialog: IntentDialog(stringLiteral: "Use a key like ENTER or a combination like CTRL+A."))
         }
-        let context = AppIntentSupport.container.mainContext
-        guard let device = AppIntentSupport.activeDevice(context: context) else {
-            return .result(dialog: IntentDialog(stringLiteral: "No InputPilot device is saved yet. Add one in the app first."))
+        let outcome = await AppIntentSupport.serialized {
+            let context = AppIntentSupport.container.mainContext
+            guard let device = AppIntentSupport.activeDevice(context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.run(steps: steps, typingDelayMs: 0, device: device, context: context)
         }
-        let outcome = await AppIntentSupport.run(steps: steps, typingDelayMs: 0, device: device, context: context)
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
@@ -200,16 +208,20 @@ struct SendTextIntent: AppIntent {
     @Parameter(title: "Typing Delay (ms)") var typingDelayMs: Int?
 
     @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
-        let context = AppIntentSupport.container.mainContext
-        guard let device = AppIntentSupport.activeDevice(context: context) else {
-            return .result(dialog: IntentDialog(stringLiteral: "No InputPilot device is saved yet. Add one in the app first."))
+        let text = self.text
+        let delay = max(0, typingDelayMs ?? 0)
+        let outcome = await AppIntentSupport.serialized {
+            let context = AppIntentSupport.container.mainContext
+            guard let device = AppIntentSupport.activeDevice(context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.run(
+                steps: [.text(text)],
+                typingDelayMs: delay,
+                device: device,
+                context: context
+            )
         }
-        let outcome = await AppIntentSupport.run(
-            steps: [.text(text)],
-            typingDelayMs: max(0, typingDelayMs ?? 0),
-            device: device,
-            context: context
-        )
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }

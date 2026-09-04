@@ -8,6 +8,10 @@
 	<string>$(INPUTPILOT_CHANNEL)</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Connect InputPilot to your authorized ESP32-S3 device.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>InputPilot</string>
 	<key>NSAppTransportSecurity</key>

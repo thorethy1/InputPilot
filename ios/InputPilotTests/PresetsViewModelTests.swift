@@ -79,8 +79,8 @@ private final class ScriptedTransport: HIDControlTransport {
     }
 
     func testParseValidationFlagReportsLineAndReason() {
-        XCTAssertNil(PresetsViewModel.parseIssue(for: "STRING ok\n[ENTER]"))
-        let issue = PresetsViewModel.parseIssue(for: "STRING valid\n[DELAY]")
+        XCTAssertNil(PresetsViewModel.parseIssue(for: "ok\n[ENTER]"))
+        let issue = PresetsViewModel.parseIssue(for: "valid\n[DELAY]")
         XCTAssertEqual(issue?.line, 2)
         XCTAssertNotNil(issue?.reason)
     }
