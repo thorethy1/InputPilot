@@ -50,6 +50,8 @@
 		A10000000000000000000055 /* SecretStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000055 /* SecretStoreTests.swift */; };
 		A10000000000000000000056 /* SecretsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000056 /* SecretsView.swift */; };
 		A10000000000000000000057 /* SecretReferenceScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000057 /* SecretReferenceScannerTests.swift */; };
+		A10000000000000000000058 /* PresetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000058 /* PresetsView.swift */; };
+		A10000000000000000000059 /* PresetsViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000059 /* PresetsViewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -110,6 +112,8 @@
 		A20000000000000000000055 /* SecretStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretStoreTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000056 /* SecretsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretsView.swift; sourceTree = "<group>"; };
 		A20000000000000000000057 /* SecretReferenceScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretReferenceScannerTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000058 /* PresetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000059 /* PresetsViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -183,6 +187,7 @@
 				A20000000000000000000052 /* ActionExecutorTests.swift */,
 				A20000000000000000000055 /* SecretStoreTests.swift */,
 				A20000000000000000000057 /* SecretReferenceScannerTests.swift */,
+				A20000000000000000000059 /* PresetsViewModelTests.swift */,
 			);
 			path = InputPilotTests;
 			sourceTree = "<group>";
@@ -214,6 +219,7 @@
 				A20000000000000000000016 /* DeviceDetailView.swift */,
 				A20000000000000000000020 /* AddDeviceWizardView.swift */,
 				A20000000000000000000056 /* SecretsView.swift */,
+				A20000000000000000000058 /* PresetsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -372,6 +378,7 @@
 				A10000000000000000000053 /* StoredSecret.swift in Sources */,
 				A10000000000000000000054 /* SecretStore.swift in Sources */,
 				A10000000000000000000056 /* SecretsView.swift in Sources */,
+				A10000000000000000000058 /* PresetsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -395,6 +402,7 @@
 				A10000000000000000000052 /* ActionExecutorTests.swift in Sources */,
 				A10000000000000000000055 /* SecretStoreTests.swift in Sources */,
 				A10000000000000000000057 /* SecretReferenceScannerTests.swift in Sources */,
+				A10000000000000000000059 /* PresetsViewModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -2408,9 +2408,12 @@ enum PresetScript {
 
 @Model final class HIDPreset {
     var script: Bool = false
+    var id: UUID = UUID()
+    var icon: String = "keyboard"
     var name: String; var payload: String; var shortcut: Bool; var favorite: Bool; var order: Int; var enterAfter: Bool; var typingDelayMs: Int
-    init(name: String, payload: String, shortcut: Bool = false, favorite: Bool = false, order: Int = 0, enterAfter: Bool = false, typingDelayMs: Int = 0, script: Bool = false) { self.script = script; self.name = name; self.payload = payload; self.shortcut = shortcut; self.favorite = favorite; self.order = order; self.enterAfter = enterAfter; self.typingDelayMs = typingDelayMs }
+    init(name: String, payload: String, shortcut: Bool = false, favorite: Bool = false, order: Int = 0, enterAfter: Bool = false, typingDelayMs: Int = 0, script: Bool = false, icon: String = "keyboard") { self.script = script; self.id = UUID(); self.icon = icon; self.name = name; self.payload = payload; self.shortcut = shortcut; self.favorite = favorite; self.order = order; self.enterAfter = enterAfter; self.typingDelayMs = typingDelayMs }
 }
+
 struct RecordedEvent: Codable { let offset: TimeInterval; let event: HIDEvent }
 @Model final class HIDMacro {
     var name: String; var macroDescription: String = ""; var encodedEvents: Data; var createdAt: Date
@@ -2757,39 +2760,6 @@ struct TrackpadView: View {
             await scrollCoalescer.cancel()
             manager.endOrderedSession()
             await manager.releaseAll()
-        }
-    }
-}
-
-struct PresetsView: View {
-    @ObservedObject var manager: HIDConnectionManager; @Environment(\.modelContext) private var context; @Query(sort: \HIDPreset.order) private var presets: [HIDPreset]; @State private var name = ""; @State private var payload = ""; @State private var shortcut = false; @State private var script = false; @State private var execution: Task<Void, Never>?; @State private var favorite = false; @State private var enterAfter = false; @State private var typingDelayMs = 0; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
-    var body: some View { NavigationStack { List { if let error = manager.lastError { Section("Execution error") { Text(error).foregroundStyle(.red) } }; Section("New preset") { TextField("Name", text: $name); TextField("Text or shortcut", text: $payload, axis: .vertical); Picker("Type", selection: $shortcut) { Text("Text").tag(false); Text("Keyboard Shortcut").tag(true) }; Toggle("Script (keys, text & delays)", isOn: $script).disabled(shortcut); Text("Script: [TAB], [ENTER], [CTRL+A], [DELAY 500] or DuckyScript TAB, STRING text, DELAY 500. One action per line.").font(.caption).foregroundStyle(.secondary); Toggle("Favorite", isOn: $favorite); Toggle("Enter after", isOn: $enterAfter).disabled(shortcut); Picker("Typing speed", selection: $typingDelayMs) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(shortcut); Button("Add Preset") { context.insert(HIDPreset(name: name.isEmpty ? "Preset" : name, payload: payload, shortcut: shortcut, favorite: favorite, order: presets.count, enterAfter: enterAfter, typingDelayMs: typingDelayMs, script: script)); name = ""; payload = ""; shortcut = false; script = false; favorite = false; enterAfter = false; typingDelayMs = 0 } }; Section("Presets") { ForEach(presets) { preset in VStack(alignment: .leading, spacing: 8) { HStack { Button { preset.favorite.toggle() } label: { Image(systemName: preset.favorite ? "star.fill" : "star") }.buttonStyle(.borderless); TextField("Name", text: Binding(get: { preset.name }, set: { preset.name = $0 })); Spacer(); Button("Run") { run(preset) }.buttonStyle(.borderedProminent).disabled(execution != nil) }; TextField("Content", text: Binding(get: { preset.payload }, set: { preset.payload = $0 }), axis: .vertical).font(.caption); Toggle("Shortcut", isOn: Binding(get: { preset.shortcut }, set: { preset.shortcut = $0 })); Toggle("Script", isOn: Binding(get: { preset.script }, set: { preset.script = $0 })).disabled(preset.shortcut); Toggle("Enter after", isOn: Binding(get: { preset.enterAfter }, set: { preset.enterAfter = $0 })); Picker("Typing speed", selection: Binding(get: { preset.typingDelayMs }, set: { preset.typingDelayMs = $0 })) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(preset.shortcut) }.buttonStyle(.borderless).swipeActions { Button(role: .destructive) { context.delete(preset) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDPreset(name: preset.name + " Copy", payload: preset.payload, shortcut: preset.shortcut, favorite: preset.favorite, order: presets.count, enterAfter: preset.enterAfter, typingDelayMs: preset.typingDelayMs, script: preset.script)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } }.onMove { source, destination in var ordered = presets; ordered.move(fromOffsets: source, toOffset: destination); for (index, item) in ordered.enumerated() { item.order = index } } } }.toolbar { EditButton(); if execution != nil { Button("Stop") { execution?.cancel() } } }.onDisappear { execution?.cancel() } } }
-    private func run(_ preset: HIDPreset) {
-        guard execution == nil else { return }
-        let layout = KeyboardLayout(rawValue: layoutName) ?? .german
-        let delay = max(0, preset.typingDelayMs)
-        var steps: [PresetScript.Step]
-        do {
-            if preset.shortcut { steps = [.key(preset.payload)] }
-            else if preset.script { steps = try PresetScript.parse(preset.payload) }
-            else { steps = [.text(preset.payload)] }
-            // Reject unsupported characters before partially filling a form.
-            for step in steps { if case let .text(text) = step { _ = try layout.strokes(for: text) } }
-            if preset.enterAfter { steps.append(.key("enter")) }
-        } catch { manager.lastError = error.localizedDescription; return }
-        let modelContext = context
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        execution = Task { @MainActor in
-            defer { execution = nil }
-            let result = await ActionExecutor().run(steps: steps, layout: layout, typingDelayMs: delay, transport: manager, secretResolver: { name in
-                try SecretStore(context: modelContext).value(forName: name)
-            })
-            if case .failure(let error) = result {
-                switch error {
-                case .unsupportedCharacter, .secretMissing: manager.lastError = error.localizedDescription
-                case .transportFailure, .cancelled: break
-                }
-            }
         }
     }
 }
