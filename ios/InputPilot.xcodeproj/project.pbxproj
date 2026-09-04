@@ -43,6 +43,11 @@
 		A10000000000000000000038 /* TrackpadGesturesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* TrackpadGesturesTests.swift */; };
 		A10000000000000000000039 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000043 /* KeyboardView.swift */; };
 		A10000000000000000000040 /* KeyboardLatchesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000044 /* KeyboardLatchesTests.swift */; };
+		A10000000000000000000051 /* ActionExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000051 /* ActionExecutor.swift */; };
+		A10000000000000000000052 /* ActionExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000052 /* ActionExecutorTests.swift */; };
+		A10000000000000000000053 /* StoredSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000053 /* StoredSecret.swift */; };
+		A10000000000000000000054 /* SecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000054 /* SecretStore.swift */; };
+		A10000000000000000000055 /* SecretStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000055 /* SecretStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -96,6 +101,11 @@
 		A20000000000000000000043 /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
 		A20000000000000000000044 /* KeyboardLatchesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLatchesTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000040 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ../Version.xcconfig; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000051 /* ActionExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionExecutor.swift; sourceTree = "<group>"; };
+		A20000000000000000000052 /* ActionExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionExecutorTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000053 /* StoredSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredSecret.swift; sourceTree = "<group>"; };
+		A20000000000000000000054 /* SecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000055 /* SecretStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -166,6 +176,8 @@
 				A20000000000000000000039 /* SecurePairingTests.swift */,
 				A20000000000000000000042 /* TrackpadGesturesTests.swift */,
 				A20000000000000000000044 /* KeyboardLatchesTests.swift */,
+				A20000000000000000000052 /* ActionExecutorTests.swift */,
+				A20000000000000000000055 /* SecretStoreTests.swift */,
 			);
 			path = InputPilotTests;
 			sourceTree = "<group>";
@@ -186,6 +198,7 @@
 				A20000000000000000000014 /* DeviceEndpointResolver.swift */,
 				A20000000000000000000026 /* DevicePresenceStatus.swift */,
 				A20000000000000000000028 /* SavedDeviceIndex.swift */,
+				A20000000000000000000053 /* StoredSecret.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -205,6 +218,8 @@
 				A20000000000000000000004 /* DeviceAPIClient.swift */,
 				A20000000000000000000015 /* DeviceRepository.swift */,
 				A20000000000000000000005 /* BonjourBrowser.swift */,
+				A20000000000000000000051 /* ActionExecutor.swift */,
+				A20000000000000000000054 /* SecretStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -347,6 +362,9 @@
 				A10000000000000000000032 /* TrackpadInputBridge.swift in Sources */,
 				A10000000000000000000037 /* TrackpadGestures.swift in Sources */,
 				A10000000000000000000039 /* KeyboardView.swift in Sources */,
+				A10000000000000000000051 /* ActionExecutor.swift in Sources */,
+				A10000000000000000000053 /* StoredSecret.swift in Sources */,
+				A10000000000000000000054 /* SecretStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -367,6 +385,8 @@
 				A10000000000000000000036 /* SecurePairingTests.swift in Sources */,
 				A10000000000000000000038 /* TrackpadGesturesTests.swift in Sources */,
 				A10000000000000000000040 /* KeyboardLatchesTests.swift in Sources */,
+				A10000000000000000000052 /* ActionExecutorTests.swift in Sources */,
+				A10000000000000000000055 /* SecretStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

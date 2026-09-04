@@ -292,4 +292,21 @@ final class PresetScriptTests: XCTestCase {
         XCTAssertEqual(try PresetScript.parse("\n  00001234  \n\n[ENTER]\n"), [.text("  00001234  "), .key("enter")])
         XCTAssertEqual(try PresetScript.parse("STRING TAB\nSTRING ENTER\nSTRING DELAY 500"), [.text("TAB"), .text("ENTER"), .text("DELAY 500")])
     }
+
+    func testSecretLinesParseToSecretSteps() throws {
+        XCTAssertEqual(try PresetScript.parse("SECRET work-password\n[SECRET api-token]\nSTRING SECRET literal"), [
+            .secret("work-password"), .secret("api-token"), .text("SECRET literal")
+        ])
+    }
+
+    func testSecretWithEmptyNameThrows() {
+        for command in ["SECRET", "SECRET   ", "[SECRET]", "[SECRET  ]"] {
+            XCTAssertThrowsError(try PresetScript.parse("STRING valid\n" + command)) { error in
+                XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
+            }
+        }
+        XCTAssertThrowsError(try PresetScript.parse("STRING valid\nSECRET   ")) { error in
+            XCTAssertEqual((error as? PresetScript.ParseError)?.reason, "SECRET needs a name, e.g. SECRET work-password.")
+        }
+    }
 }

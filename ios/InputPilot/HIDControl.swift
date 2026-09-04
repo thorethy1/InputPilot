@@ -2349,7 +2349,7 @@ enum InputPilotWiFiManager {
 
 /// Deliberately small, line-oriented DuckyScript subset. Parse before sending any keys.
 enum PresetScript {
-    enum Step: Equatable { case text(String), key(String), delay(Int) }
+    enum Step: Equatable { case text(String), key(String), delay(Int), secret(String) }
     struct ParseError: LocalizedError {
         let line: Int
         let reason: String
@@ -2382,6 +2382,13 @@ enum PresetScript {
                     throw ParseError(line: index + 1, reason: "DELAY needs 0–60000 milliseconds, e.g. [DELAY 500].")
                 }
                 steps.append(.delay(ms)); continue
+            }
+            if name == "SECRET" {
+                let secretName = argument.trimmingCharacters(in: .whitespaces)
+                guard !secretName.isEmpty else {
+                    throw ParseError(line: index + 1, reason: "SECRET needs a name, e.g. SECRET work-password.")
+                }
+                steps.append(.secret(secretName)); continue
             }
             let tokens = command.uppercased().split(whereSeparator: { $0 == "+" || $0.isWhitespace }).map(String.init)
             if let first = tokens.first, bracketed || keys.contains(first) || modifiers.contains(first) {
@@ -2761,39 +2768,27 @@ struct PresetsView: View {
         guard execution == nil else { return }
         let layout = KeyboardLayout(rawValue: layoutName) ?? .german
         let delay = max(0, preset.typingDelayMs)
-        let steps: [PresetScript.Step]
+        var steps: [PresetScript.Step]
         do {
             if preset.shortcut { steps = [.key(preset.payload)] }
             else if preset.script { steps = try PresetScript.parse(preset.payload) }
             else { steps = [.text(preset.payload)] }
             // Reject unsupported characters before partially filling a form.
             for step in steps { if case let .text(text) = step { _ = try layout.strokes(for: text) } }
+            if preset.enterAfter { steps.append(.key("enter")) }
         } catch { manager.lastError = error.localizedDescription; return }
-        let enterAfter = preset.enterAfter
+        let modelContext = context
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         execution = Task { @MainActor in
             defer { execution = nil }
-            guard manager.beginOrderedSession(lowLatency: false) else { return }
-            defer { manager.endOrderedSession() }
-            do {
-                for step in steps {
-                    try Task.checkCancellation()
-                    let sent: Bool
-                    switch step {
-                    case let .text(text): sent = await manager.sendText(text, layout: layout, delayMilliseconds: delay)
-                    case let .key(key): sent = await manager.send(.keyCombo(key))
-                    case let .delay(ms): try await Task.sleep(for: .milliseconds(ms)); continue
-                    }
-                    guard sent else { await manager.releaseAllPreservingError(); return }
-                    try await Task.sleep(for: .milliseconds(50))
+            let result = await ActionExecutor().run(steps: steps, layout: layout, typingDelayMs: delay, transport: manager, secretResolver: { name in
+                try SecretStore(context: modelContext).value(forName: name)
+            })
+            if case .failure(let error) = result {
+                switch error {
+                case .unsupportedCharacter, .secretMissing: manager.lastError = error.localizedDescription
+                case .transportFailure, .cancelled: break
                 }
-                try Task.checkCancellation()
-                if enterAfter { _ = await manager.send(.key("enter")) }
-            } catch is CancellationError {
-                await manager.releaseAllPreservingError()
-            } catch {
-                manager.lastError = error.localizedDescription
-                await manager.releaseAllPreservingError()
             }
         }
     }

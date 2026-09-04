@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add Keychain-backed secrets for presets: secret values live only in the iOS Keychain while SwiftData keeps name metadata, `SECRET <name>` lines in preset scripts type the current value at run time through the shared executor with the preset's typing speed, a missing or renamed secret fails the run clearly as "Secret 'x' is missing" after releasing held keys, and secret values are validated against the host keyboard layout and never appear in logs, diagnostics or error messages.
+- Extract preset execution into a shared, testable ActionExecutor service: one execution path now validates all text against the host keyboard layout before sending, runs steps through a single ordered transport session, and guarantees release-all on every exit path including success, send failure and cancellation; the Presets tab Run button reuses it with its existing duplicate-run guard, enter-after and error-banner behavior unchanged.
 - Make pinch-to-zoom actually reach the host computer: the firmware now keeps
   modifier-only `report <m> 0` commands held (and clears them on `report 0 0`
   and release-all) so Ctrl stays pressed while the zoom wheel lines arrive, and

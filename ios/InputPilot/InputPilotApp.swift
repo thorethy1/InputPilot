@@ -174,7 +174,7 @@ struct InputPilotApp: App {
     @AppStorage("appInterfaceStyle") private var interfaceStyleName = AppInterfaceStyle.standard.rawValue
 
     private let container: ModelContainer = {
-        let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self])
+        let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self, StoredSecret.self])
         return try! ModelContainer(for: schema)
     }()
 
