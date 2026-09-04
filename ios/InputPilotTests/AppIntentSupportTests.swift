@@ -147,7 +147,7 @@ private final class IntentMockTransport: HIDControlTransport {
         let context = try makeContext()
         let ble = IntentMockTransport(kind: .bluetooth, state: .connecting)
         let tcp = IntentMockTransport(kind: .tcp, state: .unavailable)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["keyboard_key", "keyboard_type", "keyboard_layout", "release_all"], protocolVersion: 2)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport", "keyboard_key", "keyboard_type", "keyboard_layout", "release_all"], protocolVersion: 2)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(200))
             ble.state = .ready
