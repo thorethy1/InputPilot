@@ -39,6 +39,17 @@ struct PresetRunOutcome: Equatable, Sendable {
         return outcome
     }
 
+    static func run(steps: [PresetScript.Step],
+                    typingDelayMs: Int,
+                    device: StoredDevice,
+                    context: ModelContext) async -> PresetRunOutcome {
+        let manager = HIDConnectionManager(device: device)
+        await manager.connect()
+        let outcome = await execute(steps: steps, typingDelayMs: typingDelayMs, transport: manager, context: context)
+        await manager.disconnect()
+        return outcome
+    }
+
     static func run(preset: HIDPreset, manager: HIDConnectionManager, context: ModelContext) async -> PresetRunOutcome {
         let steps: [PresetScript.Step]
         do {

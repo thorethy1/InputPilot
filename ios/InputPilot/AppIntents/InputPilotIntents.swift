@@ -21,23 +21,25 @@ struct InputPilotPresetEntity: AppEntity {
     }
 }
 
-@MainActor struct PresetEntityQuery: EntityQuery {
+struct PresetEntityQuery: EntityQuery {
     func entities(for identifiers: [UUID]) async throws -> [InputPilotPresetEntity] {
-        let context = AppIntentSupport.container.mainContext
-        let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
-        return presets.filter { identifiers.contains($0.id) }
-            .map { InputPilotPresetEntity(id: $0.id, name: $0.name, icon: $0.icon) }
+        await MainActor.run {
+            let context = AppIntentSupport.container.mainContext
+            let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
+            return presets.filter { identifiers.contains($0.id) }
+                .map { InputPilotPresetEntity(id: $0.id, name: $0.name, icon: $0.icon) }
+        }
     }
 
     func suggestedEntities() async throws -> [InputPilotPresetEntity] {
-        allPresets()
+        await MainActor.run { allPresets() }
     }
 
     func defaultResult() async throws -> InputPilotPresetEntity? {
-        allPresets().first
+        await MainActor.run { allPresets().first }
     }
 
-    private func allPresets() -> [InputPilotPresetEntity] {
+    @MainActor private func allPresets() -> [InputPilotPresetEntity] {
         let context = AppIntentSupport.container.mainContext
         let presets = (try? context.fetch(FetchDescriptor<HIDPreset>(sortBy: [SortDescriptor(\.order)]))) ?? []
         return presets.map { InputPilotPresetEntity(id: $0.id, name: $0.name, icon: $0.icon) }
@@ -61,30 +63,32 @@ struct InputPilotDeviceEntity: AppEntity {
     }
 }
 
-@MainActor struct DeviceEntityQuery: EntityQuery {
+struct DeviceEntityQuery: EntityQuery {
     func entities(for identifiers: [String]) async throws -> [InputPilotDeviceEntity] {
-        let context = AppIntentSupport.container.mainContext
-        let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
-        return devices.filter { identifiers.contains($0.deviceId) }
-            .map { InputPilotDeviceEntity(id: $0.deviceId, name: $0.displayName) }
+        await MainActor.run {
+            let context = AppIntentSupport.container.mainContext
+            let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
+            return devices.filter { identifiers.contains($0.deviceId) }
+                .map { InputPilotDeviceEntity(id: $0.deviceId, name: $0.displayName) }
+        }
     }
 
     func suggestedEntities() async throws -> [InputPilotDeviceEntity] {
-        allDevices()
+        await MainActor.run { allDevices() }
     }
 
     func defaultResult() async throws -> InputPilotDeviceEntity? {
-        allDevices().first
+        await MainActor.run { allDevices().first }
     }
 
-    private func allDevices() -> [InputPilotDeviceEntity] {
+    @MainActor private func allDevices() -> [InputPilotDeviceEntity] {
         let context = AppIntentSupport.container.mainContext
         let devices = (try? context.fetch(FetchDescriptor<StoredDevice>(sortBy: [SortDescriptor(\.displayName)]))) ?? []
         return devices.map { InputPilotDeviceEntity(id: $0.deviceId, name: $0.displayName) }
     }
 }
 
-@MainActor struct RunPresetIntent: AppIntent {
+struct RunPresetIntent: AppIntent {
     static let title: LocalizedStringResource = "Run Preset"
     static let description = IntentDescription("Runs an InputPilot preset on the active device.")
     static let openAppWhenRun = false
@@ -96,7 +100,7 @@ struct InputPilotDeviceEntity: AppEntity {
         Summary("Run \(\.$preset) on \(\.$device)")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
         let context = AppIntentSupport.container.mainContext
         let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
         guard let model = presets.first(where: { $0.id == preset.id }) else {
@@ -117,7 +121,7 @@ struct InputPilotDeviceEntity: AppEntity {
     }
 }
 
-@MainActor struct ConnectDeviceIntent: AppIntent {
+struct ConnectDeviceIntent: AppIntent {
     static let title: LocalizedStringResource = "Connect Device"
     static let description = IntentDescription("Connects an InputPilot device and reports the connection state.")
     static let openAppWhenRun = false
@@ -128,7 +132,7 @@ struct InputPilotDeviceEntity: AppEntity {
         Summary("Connect \(\.$device)")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
         let context = AppIntentSupport.container.mainContext
         let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
         guard let model = devices.first(where: { $0.deviceId == device.id }) else {
@@ -139,7 +143,7 @@ struct InputPilotDeviceEntity: AppEntity {
     }
 }
 
-@MainActor struct CheckDeviceStatusIntent: AppIntent {
+struct CheckDeviceStatusIntent: AppIntent {
     static let title: LocalizedStringResource = "Check Device Status"
     static let description = IntentDescription("Reports whether an InputPilot device is connected, connecting or offline.")
     static let openAppWhenRun = false
@@ -150,7 +154,7 @@ struct InputPilotDeviceEntity: AppEntity {
         Summary("Check status of \(\.$device)")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
         let context = AppIntentSupport.container.mainContext
         let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
         let storedDevice: StoredDevice?
@@ -167,14 +171,14 @@ struct InputPilotDeviceEntity: AppEntity {
     }
 }
 
-@MainActor struct SendKeyboardShortcutIntent: AppIntent {
+struct SendKeyboardShortcutIntent: AppIntent {
     static let title: LocalizedStringResource = "Send Keyboard Shortcut"
     static let description = IntentDescription("Sends a keyboard shortcut like ENTER or CTRL+A to the active InputPilot device.")
     static let openAppWhenRun = false
 
     @Parameter(title: "Key Combo", default: "enter") var keyCombo: String
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
         guard let steps = AppIntentSupport.keyComboSteps(keyCombo) else {
             return .result(dialog: IntentDialog(stringLiteral: "Use a key like ENTER or a combination like CTRL+A."))
         }
@@ -182,15 +186,12 @@ struct InputPilotDeviceEntity: AppEntity {
         guard let device = AppIntentSupport.activeDevice(context: context) else {
             return .result(dialog: IntentDialog(stringLiteral: "No InputPilot device is saved yet. Add one in the app first."))
         }
-        let manager = HIDConnectionManager(device: device)
-        await manager.connect()
-        let outcome = await AppIntentSupport.execute(steps: steps, typingDelayMs: 0, transport: manager, context: context)
-        await manager.disconnect()
+        let outcome = await AppIntentSupport.run(steps: steps, typingDelayMs: 0, device: device, context: context)
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
 
-@MainActor struct SendTextIntent: AppIntent {
+struct SendTextIntent: AppIntent {
     static let title: LocalizedStringResource = "Send Text"
     static let description = IntentDescription("Types text on the computer connected to the active InputPilot device.")
     static let openAppWhenRun = false
@@ -198,20 +199,17 @@ struct InputPilotDeviceEntity: AppEntity {
     @Parameter(title: "Text") var text: String
     @Parameter(title: "Typing Delay (ms)") var typingDelayMs: Int?
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
         let context = AppIntentSupport.container.mainContext
         guard let device = AppIntentSupport.activeDevice(context: context) else {
             return .result(dialog: IntentDialog(stringLiteral: "No InputPilot device is saved yet. Add one in the app first."))
         }
-        let manager = HIDConnectionManager(device: device)
-        await manager.connect()
-        let outcome = await AppIntentSupport.execute(
+        let outcome = await AppIntentSupport.run(
             steps: [.text(text)],
             typingDelayMs: max(0, typingDelayMs ?? 0),
-            transport: manager,
+            device: device,
             context: context
         )
-        await manager.disconnect()
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
