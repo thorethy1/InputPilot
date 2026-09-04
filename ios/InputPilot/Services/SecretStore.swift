@@ -52,7 +52,7 @@ enum SecretStoreError: LocalizedError {
         let status: OSStatus
         if Self.usesInMemoryKeychain {
             if let data = InMemoryKeychain.copy(service: Self.service, account: id.uuidString) {
-                result = data
+                result = data as NSData
                 status = errSecSuccess
             } else {
                 status = errSecItemNotFound

@@ -166,6 +166,13 @@ enum AppColors {
     static let destructive = error
 }
 
+@MainActor enum AppModelContainer {
+    static let shared: ModelContainer = {
+        let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self, StoredSecret.self])
+        return try! ModelContainer(for: schema)
+    }()
+}
+
 @main
 struct InputPilotApp: App {
     @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
@@ -173,10 +180,7 @@ struct InputPilotApp: App {
     @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
     @AppStorage("appInterfaceStyle") private var interfaceStyleName = AppInterfaceStyle.standard.rawValue
 
-    private let container: ModelContainer = {
-        let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self, StoredSecret.self])
-        return try! ModelContainer(for: schema)
-    }()
+    private let container: ModelContainer = AppModelContainer.shared
 
     var body: some Scene {
         WindowGroup {

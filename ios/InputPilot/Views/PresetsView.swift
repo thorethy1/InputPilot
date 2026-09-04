@@ -245,7 +245,7 @@ struct PresetsView: View {
             }
         }
         .sheet(item: $editorMode) { mode in
-            PresetEditorSheet(mode: mode)
+            PresetEditorSheet(mode: mode, nextOrder: (presets.map(\.order).max() ?? -1) + 1)
         }
         .confirmationDialog(
             "Delete ‘\(deleteTarget?.name ?? "")’?",
@@ -255,7 +255,7 @@ struct PresetsView: View {
         ) { target in
             Button("Delete Preset", role: .destructive) { context.delete(target) }
             Button("Cancel", role: .cancel) {}
-        } message: {
+        } message: { _ in
             Text("The preset is removed from this device.")
         }
         .onAppear {
@@ -415,7 +415,7 @@ private struct PresetTileContent: View {
         .aspectRatio(1, contentMode: .fit)
     }
 
-    private var shape: some View {
+    private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
     }
 
@@ -473,6 +473,7 @@ private struct PresetTileButtonStyle: ButtonStyle {
 
 private struct PresetEditorSheet: View {
     let mode: PresetEditorMode
+    let nextOrder: Int
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -652,7 +653,7 @@ private struct PresetEditorSheet: View {
                 payload: payload,
                 shortcut: type == .shortcut,
                 favorite: favorite,
-                order: (presets.map(\.order).max() ?? -1) + 1,
+                order: nextOrder,
                 enterAfter: enterAfter && type != .shortcut,
                 typingDelayMs: type == .shortcut ? 0 : typingDelayMs,
                 script: type == .script,
