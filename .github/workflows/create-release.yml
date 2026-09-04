@@ -37,6 +37,29 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Require green CI on main head
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse origin/main)"
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --commit "$head_sha" --limit 20 \
+            --json databaseId,status,conclusion,url)"
+          latest="$(jq -r 'if length > 0 then .[0] else empty end' <<<"$runs")"
+          if [[ -z "$latest" ]]; then
+            echo "::error::No CI run found for main head $head_sha. Push changes and let CI run first."
+            exit 1
+          fi
+          status="$(jq -r '.status' <<<"$latest")"
+          conclusion="$(jq -r '.conclusion // "none"' <<<"$latest")"
+          url="$(jq -r '.url' <<<"$latest")"
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+            echo "::error::Latest CI run on main ($head_sha) is status=$status conclusion=$conclusion: $url"
+            echo "This workflow never starts its own CI. Fix or wait for CI to be green, then retry."
+            exit 1
+          fi
+          echo "Latest CI run on main head $head_sha is green: $url"
+
       - name: Set stable release version
         id: version
         shell: bash
@@ -63,23 +86,20 @@ jobs:
             git commit -m "Release InputPilot $version"
           fi
           sha="$(git rev-parse HEAD)"
-          branch="release/$tag-$GITHUB_RUN_ID"
-          git push origin "HEAD:refs/heads/$branch"
+          # The release commit goes straight to the branch so the regular
+          # push-triggered CI covers it; this workflow never dispatches CI.
+          git push origin "HEAD:refs/heads/main"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Reuse or start CI for release commit
+      - name: Require green branch CI on the release commit
         id: ci
         shell: bash
         run: |
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
-          release_ref='${{ steps.version.outputs.branch }}'
-          run_id=""
-          reused="false"
 
           has_required_artifacts() {
             local candidate="$1"
@@ -94,68 +114,41 @@ jobs:
               ' <<<"$artifacts" >/dev/null
           }
 
-          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-            --commit "$sha" --limit 30 \
-            --json databaseId,status,conclusion,url)"
+          run_id=""
+          for attempt in $(seq 1 120); do
+            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+              --commit "$sha" --limit 30 \
+              --json databaseId,status,conclusion,url)"
 
-          while read -r candidate; do
-            if has_required_artifacts "$candidate"; then
-              run_id="$candidate"
-              reused="true"
-              echo "Reusing successful CI run $run_id for exact commit $sha."
+            run_id="$(jq -r '[.[] | select(.status == "completed" and .conclusion == "success")][0].databaseId // empty' <<<"$runs")"
+            if [[ -n "$run_id" ]] && has_required_artifacts "$run_id"; then
               break
             fi
-          done < <(jq -r '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId' <<<"$runs")
+            run_id=""
 
-          if [[ -z "$run_id" ]]; then
             active_id="$(jq -r '[.[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")][0].databaseId // empty' <<<"$runs")"
             if [[ -n "$active_id" ]]; then
-              echo "Waiting for existing CI run $active_id on exact commit $sha."
-              if gh run watch "$active_id" --repo "$GITHUB_REPOSITORY" --exit-status && has_required_artifacts "$active_id"; then
-                run_id="$active_id"
-                reused="true"
-                echo "Reusing completed CI run $run_id."
-              else
-                echo "Existing CI run $active_id failed or did not retain all release artifacts; starting a fallback run."
+              echo "Observing the branch CI run $active_id on commit $sha (attempt $attempt/120)..."
+              gh run watch "$active_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 15 || true
+            else
+              completed="$(jq '[.[] | select(.status == "completed")] | length' <<<"$runs")"
+              if (( completed > 0 )); then
+                echo "::error::CI already completed for $sha without a successful run holding both release artifacts."
+                jq -r '.[] | "run \(.databaseId): status=\(.status) conclusion=\(.conclusion) \(.url)"' <<<"$runs"
+                exit 1
               fi
+              echo "Waiting for the branch CI run to appear for $sha (attempt $attempt/120)..."
             fi
-          fi
+            sleep 5
+          done
 
           if [[ -z "$run_id" ]]; then
-            declare -A previous_runs=()
-            while read -r existing_id; do previous_runs["$existing_id"]=1; done \
-              < <(jq -r '.[].databaseId' <<<"$runs")
-
-            echo "No reusable CI run with release artifacts exists; dispatching CI for $sha."
-            gh workflow run ci.yml --ref "$release_ref" --repo "$GITHUB_REPOSITORY"
-
-            for attempt in $(seq 1 60); do
-              dispatched="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-                --commit "$sha" --event workflow_dispatch --limit 30 \
-                --json databaseId,status,conclusion,url)"
-              while read -r candidate; do
-                if [[ -z "${previous_runs[$candidate]:-}" ]]; then
-                  run_id="$candidate"
-                  break
-                fi
-              done < <(jq -r '.[].databaseId' <<<"$dispatched")
-              if [[ -n "$run_id" ]]; then break; fi
-              echo "Waiting for dispatched CI run on $sha (attempt $attempt/60)..."
-              sleep 5
-            done
-            if [[ -z "$run_id" ]]; then
-              echo "::error::CI did not start for $sha."
-              exit 1
-            fi
-            gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
-            if ! has_required_artifacts "$run_id"; then
-              echo "::error::CI run $run_id did not produce both required release artifacts."
-              exit 1
-            fi
+            echo "::error::No successful branch CI run with both release artifacts appeared for $sha."
+            exit 1
           fi
 
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "reused=$reused" >> "$GITHUB_OUTPUT"
+          echo "Green branch CI run $run_id verified for $sha."
 
       - name: Tag and publish release
         shell: bash
@@ -163,7 +156,6 @@ jobs:
           set -euo pipefail
           tag='${{ steps.version.outputs.tag }}'
           sha='${{ steps.version.outputs.sha }}'
-          git push origin "$sha:refs/heads/main"
           git tag -a "$tag" "$sha" -m "InputPilot ${{ steps.version.outputs.version }}"
           git push origin "$tag"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
@@ -200,13 +192,7 @@ jobs:
             echo "## InputPilot ${{ steps.version.outputs.version }}"
             echo
             echo "Stable version prepared from ${{ steps.version.outputs.previous }} using Version.xcconfig."
-            echo "CI run: ${{ steps.ci.outputs.run_id }}"
-            echo "Existing CI reused: ${{ steps.ci.outputs.reused }}"
+            echo "Branch CI run: ${{ steps.ci.outputs.run_id }}"
             echo "Release asset run: $run_id"
             echo "The public release and its verified assets are complete."
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Remove temporary release branch
-        if: always() && steps.version.outputs.branch != ''
-        shell: bash
-        run: git push origin --delete '${{ steps.version.outputs.branch }}' || true

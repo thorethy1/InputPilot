@@ -50,7 +50,7 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 
 ## Release assets (public)
 
-The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the stable release entry point. Choose `none` when promoting an already-versioned beta, or a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. It updates the release configuration on a temporary branch, starts CI for that exact commit, and promotes the commit to `main` only after CI succeeds. [`create-beta-release.yml`](/.github/workflows/create-beta-release.yml) applies the same exact-commit gate to versioned prereleases from `beta`. Both dispatch [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
+The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the stable release entry point. Choose `none` when promoting an already-versioned beta, or a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. Release workflows never start their own CI: they first require the latest CI run on the branch head to be green (failing immediately otherwise), then push the version commit straight to `main`/`beta` and observe the regular push-triggered CI run on that exact commit, including both release artifacts. [`create-beta-release.yml`](/.github/workflows/create-beta-release.yml) applies the same exact-commit gate to versioned prereleases from `beta`. Both dispatch [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
 
 - validates the release tag against `Version.xcconfig`;
 - waits for a successful CI run on the exact tag commit;
