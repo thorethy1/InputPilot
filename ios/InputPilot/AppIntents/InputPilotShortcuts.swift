@@ -1,7 +1,8 @@
 import AppIntents
 
 struct InputPilotAppShortcuts: AppShortcutsProvider {
-    @AppShortcutsBuilder var appShortcuts: [AppShortcut] {
+    @AppShortcutsBuilder
+    static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: RunPresetIntent(),
             phrases: ["Run \(.applicationName) preset"],
