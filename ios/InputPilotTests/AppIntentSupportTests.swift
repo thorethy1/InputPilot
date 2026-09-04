@@ -107,7 +107,56 @@ private final class IntentMockTransport: HIDControlTransport {
         let outcome = await AppIntentSupport.run(preset: preset, manager: makeManager(ready: false), context: context)
 
         XCTAssertFalse(outcome.success)
-        XCTAssertEqual(outcome.message, "The device is not ready to receive input.")
+        XCTAssertEqual(outcome.message, "The device did not finish connecting in time (Offline).")
+    }
+
+    func testWaitUntilReadyReturnsOnceTransportBecomesReady() async throws {
+        let ble = IntentMockTransport(kind: .bluetooth, state: .connecting)
+        let tcp = IntentMockTransport(kind: .tcp, state: .connecting)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            ble.state = .ready
+        }
+        let ready = await manager.waitUntilReady()
+        XCTAssertTrue(ready)
+    }
+
+    func testWaitUntilReadyTimesOutWhenNeverReady() async throws {
+        let ble = IntentMockTransport(kind: .bluetooth, state: .connecting)
+        let tcp = IntentMockTransport(kind: .tcp, state: .connecting)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+
+        let ready = await manager.waitUntilReady(timeout: 0.4)
+
+        XCTAssertFalse(ready)
+    }
+
+    func testWaitUntilReadyFailsImmediatelyOnAuthenticationFailure() async throws {
+        let ble = IntentMockTransport(kind: .bluetooth, state: .authenticationFailed)
+        let tcp = IntentMockTransport(kind: .tcp, state: .authenticationFailed)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+
+        let start = Date()
+        let ready = await manager.waitUntilReady()
+        XCTAssertFalse(ready)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
+    }
+
+    func testColdStartPresetRunWaitsForDelayedReadyTransportAndSucceeds() async throws {
+        let context = try makeContext()
+        let ble = IntentMockTransport(kind: .bluetooth, state: .connecting)
+        let tcp = IntentMockTransport(kind: .tcp, state: .unavailable)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["keyboard_key", "keyboard_type", "keyboard_layout", "release_all"], protocolVersion: 2)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            ble.state = .ready
+        }
+        let preset = HIDPreset(name: "Cold", payload: "hello")
+
+        let outcome = await AppIntentSupport.run(preset: preset, manager: manager, context: context)
+
+        XCTAssertTrue(outcome.success, outcome.message)
     }
 
     func testSecretBackedPresetFailsWithMissingSecretWhenKeychainItemAbsent() async throws {

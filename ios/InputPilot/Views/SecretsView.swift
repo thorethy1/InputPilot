@@ -13,6 +13,40 @@ enum SecretReferenceScanner {
         }
         return referenced
     }
+
+    // Rewrites SECRET <oldName> lines to the new name so renames never break
+    // preset references. Returns the number of updated payloads.
+    static func updateReferences(from oldName: String, to newName: String, in presets: [HIDPreset]) -> Int {
+        let pattern = "(?i)(\\bSECRET[ \\t]+)" + NSRegularExpression.escapedPattern(for: oldName)
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 0 }
+        var updated = 0
+        for preset in presets {
+            let source = preset.payload
+            let ns = source as NSString
+            let full = NSRange(location: 0, length: ns.length)
+            guard regex.firstMatch(in: source, range: full) != nil else { continue }
+            var pieces: [String] = []
+            var cursor = 0
+            regex.enumerateMatches(in: source, range: full) { match, _, _ in
+                guard let match else { return }
+                guard match.range.location >= cursor else { return }
+                pieces.append(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+                // Keep the original SECRET keyword, brackets and whitespace;
+                // only the name itself is replaced.
+                let prefix = ns.substring(with: match.range(at: 1))
+                pieces.append(prefix)
+                pieces.append(newName)
+                cursor = match.range.location + match.range.length
+            }
+            pieces.append(ns.substring(from: cursor))
+            let rewritten = pieces.joined()
+            if rewritten != source {
+                preset.payload = rewritten
+                updated += 1
+            }
+        }
+        return updated
+    }
 }
 
 struct SecretsView: View {
@@ -64,7 +98,11 @@ struct SecretsView: View {
         .sheet(item: $renameTarget) { secret in
             RenameSecretSheet(
                 currentName: secret.name,
-                otherNames: secrets.filter { $0.id != secret.id }.map(\.name)
+                otherNames: secrets.filter { $0.id != secret.id }.map(\.name),
+                referencedPresets: SecretReferenceScanner.presetNames(
+                    referencing: secret.name,
+                    among: presets.map { (name: $0.name, payload: $0.payload) }
+                )
             ) { newName in
                 rename(secret: secret, to: newName)
             }
@@ -220,7 +258,9 @@ struct SecretsView: View {
 
     private func rename(secret: StoredSecret, to newName: String) {
         do {
+            let oldName = secret.name
             try SecretStore(context: context).rename(id: secret.id, to: newName)
+            SecretReferenceScanner.updateReferences(from: oldName, to: newName, in: presets)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -228,7 +268,7 @@ struct SecretsView: View {
 
     private func replaceValue(of secret: StoredSecret, with value: String) {
         do {
-            try SecretStore(context: context).save(name: secret.name, value: value)
+            try SecretStore(context: context).replaceValue(id: secret.id, with: value)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -306,6 +346,7 @@ private struct NewSecretSheet: View {
 private struct RenameSecretSheet: View {
     let currentName: String
     let otherNames: [String]
+    let referencedPresets: [String]
     let onSave: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -321,7 +362,11 @@ private struct RenameSecretSheet: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } footer: {
-                    Text("Presets reference this secret by name. Update SECRET <name> lines after renaming.")
+                    if referencedPresets.isEmpty {
+                        Text("No presets reference this secret by name.")
+                    } else {
+                        Text("SECRET lines in \(referencedPresets.joined(separator: ", ")) are updated automatically.")
+                    }
                 }
             }
             .navigationTitle("Rename Secret")

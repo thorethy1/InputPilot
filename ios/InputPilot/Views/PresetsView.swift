@@ -6,9 +6,41 @@ enum PresetIcon {
                           "key", "bolt", "flag", "star", "folder", "tray.full",
                           "terminal", "gamecontroller", "music.note", "clock"]
 
+    static let labels: [String: String] = [
+        "keyboard": "Keyboard",
+        "doc.text": "Document",
+        "person.crop.circle": "Person",
+        "envelope": "Mail",
+        "globe": "Globe",
+        "lock": "Lock",
+        "key": "Key",
+        "bolt": "Bolt",
+        "flag": "Flag",
+        "star": "Star",
+        "folder": "Folder",
+        "tray.full": "Inbox",
+        "terminal": "Terminal",
+        "gamecontroller": "Game",
+        "music.note": "Music",
+        "clock": "Clock"
+    ]
+
+    static func label(for symbol: String) -> String { labels[symbol] ?? symbol }
+
     static func tint(for name: String) -> Color {
-        let hash = abs(name.unicodeScalars.reduce(0) { ($0 &* 31) &+ Int($1.value) })
+        let hash = name.unicodeScalars.reduce(UInt64(0)) { ($0 &* 31) &+ UInt64($1.value) }
         return Color(hue: Double(hash % 360) / 360.0, saturation: 0.42, brightness: 0.92)
+    }
+
+    static func badge(for preset: HIDPreset) -> (symbol: String, label: String) {
+        if preset.shortcut { return ("keyboard", "Key Combo") }
+        if preset.script {
+            if let first = try? PresetScript.parse(preset.payload).first {
+                return (first.typeBadgeSymbol, "Script")
+            }
+            return ("terminal", "Script")
+        }
+        return ("textformat", "Text")
     }
 }
 
@@ -275,7 +307,7 @@ struct PresetsView: View {
                         .foregroundStyle(PresetIcon.tint(for: preset.name))
                     Text(preset.name)
                     Spacer()
-                    Image(systemName: typeBadgeSymbol(for: preset))
+                    Image(systemName: PresetIcon.badge(for: preset).symbol)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -291,10 +323,11 @@ struct PresetsView: View {
     private func tile(_ preset: HIDPreset) -> some View {
         let state = model.state(for: preset.id)
         let tint = PresetIcon.tint(for: preset.name)
+        let badge = PresetIcon.badge(for: preset)
         return Button {
             model.run(preset, layoutName: layoutName)
         } label: {
-            PresetTileContent(preset: preset, tint: tint, state: state)
+            PresetTileContent(preset: preset, tint: tint, badgeSymbol: badge.symbol, badgeLabel: badge.label, state: state)
         }
         .buttonStyle(PresetTileButtonStyle(reduceMotion: reduceMotion))
         .disabled(model.isBusy)
@@ -347,12 +380,6 @@ struct PresetsView: View {
         context.insert(copy)
     }
 
-    private func typeBadgeSymbol(for preset: HIDPreset) -> String {
-        if preset.shortcut { return "keyboard" }
-        if preset.script { return (try? PresetScript.parse(preset.payload).first)?.typeBadgeSymbol ?? "terminal" }
-        return "textformat"
-    }
-
     private func accessibilityValue(for state: PresetsViewModel.RunState) -> String {
         switch state {
         case .running: "Running"
@@ -370,6 +397,8 @@ struct PresetsView: View {
 private struct PresetTileContent: View {
     let preset: HIDPreset
     let tint: Color
+    let badgeSymbol: String
+    let badgeLabel: String
     let state: PresetsViewModel.RunState
 
     var body: some View {
@@ -418,18 +447,6 @@ private struct PresetTileContent: View {
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
-    }
-
-    private var badgeSymbol: String {
-        if preset.shortcut { return "keyboard" }
-        if preset.script { return (try? PresetScript.parse(preset.payload).first)?.typeBadgeSymbol ?? "terminal" }
-        return "textformat"
-    }
-
-    private var badgeLabel: String {
-        if preset.shortcut { return "Key Combo" }
-        if preset.script { return "Script" }
-        return "Text"
     }
 
     @ViewBuilder
@@ -499,9 +516,9 @@ private struct PresetEditorSheet: View {
         return nil
     }
 
-    private var isScriptInvalid: Bool { type == .script && parseIssue != nil }
+    private var isPayloadInvalid: Bool { parseIssue != nil }
     private var canSave: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty && !isScriptInvalid
+        !name.trimmingCharacters(in: .whitespaces).isEmpty && !isPayloadInvalid
     }
 
     var body: some View {
@@ -511,7 +528,7 @@ private struct PresetEditorSheet: View {
                     TextField("Name", text: $name)
                     Picker("Icon", selection: $icon) {
                         ForEach(PresetIcon.curated, id: \.self) { symbol in
-                            Label(symbol, systemImage: symbol).tag(symbol)
+                            Label(PresetIcon.label(for: symbol), systemImage: symbol).tag(symbol)
                         }
                     }
                 }
@@ -530,8 +547,8 @@ private struct PresetEditorSheet: View {
                         .lineLimit(4...10)
                         .textInputAutocapitalization(type == .script ? .never : nil)
                         .autocorrectionDisabled(type == .script)
-                    if type == .script, let parseIssue {
-                        Text("Line \(parseIssue.line): \(parseIssue.reason)")
+                    if let parseIssue {
+                        Text(parseIssue.line > 0 ? "Line \(parseIssue.line): \(parseIssue.reason)" : parseIssue.reason)
                             .font(.caption)
                             .foregroundStyle(AppColors.error)
                     }
@@ -629,12 +646,22 @@ private struct PresetEditorSheet: View {
         validate(payload)
     }
 
-    private func validate(_ script: String) {
-        guard type == .script else {
+    private func validate(_ payload: String) {
+        switch type {
+        case .script:
+            parseIssue = PresetsViewModel.parseIssue(for: payload)
+        case .shortcut:
+            let trimmed = payload.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                parseIssue = (0, "Enter a key like ENTER or a combination like CTRL+A.")
+            } else if AppIntentSupport.keyComboSteps(trimmed) == nil {
+                parseIssue = (0, "Use a single key or key combination like ENTER or CTRL+A.")
+            } else {
+                parseIssue = nil
+            }
+        case .text:
             parseIssue = nil
-            return
         }
-        parseIssue = PresetsViewModel.parseIssue(for: script)
     }
 
     private func save() {

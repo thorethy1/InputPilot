@@ -40,7 +40,7 @@ ENTER
 
 `SECRET <name>` references a secret stored in the iOS Keychain by name; the preset itself stores only the name. The value travels from the Keychain straight to the device input path at run time: it is never written to SwiftData, never shown in logs or diagnostics, and never included in error messages. The characters of a secret value are validated against the selected host layout before typing, and a value the layout cannot type fails the run without printing the character.
 
-A missing or renamed secret makes the preset fail loudly with "Secret 'x' is missing" and releases any held keys — an empty value is never substituted. Renaming or deleting a secret breaks presets that reference the old name; update those presets afterwards. Replacing a secret's value keeps its references working.
+A missing or deleted secret makes the preset fail loudly with "Secret 'x' is missing" and releases any held keys — an empty value is never substituted. Renaming a secret rewrites `SECRET <old>` lines in presets that reference it, and the rename sheet lists the affected presets; deleting shows the same list and then breaks those presets until they are updated. Replacing a secret's value keeps its references working.
 
 Actions use the existing BLE/Wi-Fi ordered transport session and selected text keyboard layout. There is a 50 ms pause after each text/key action; typing speed controls the additional per-character delay. Add explicit delays for slow forms. Key combinations use the existing firmware key mapping.
 

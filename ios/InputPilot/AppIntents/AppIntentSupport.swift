@@ -45,12 +45,18 @@ struct PresetRunOutcome: Equatable, Sendable {
                     context: ModelContext) async -> PresetRunOutcome {
         let manager = HIDConnectionManager(device: device)
         await manager.connect()
+        guard await manager.waitUntilReady() else {
+            return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
+        }
         let outcome = await execute(steps: steps, typingDelayMs: typingDelayMs, transport: manager, context: context)
         await manager.disconnect()
         return outcome
     }
 
     static func run(preset: HIDPreset, manager: HIDConnectionManager, context: ModelContext) async -> PresetRunOutcome {
+        guard await manager.waitUntilReady() else {
+            return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
+        }
         let steps: [PresetScript.Step]
         do {
             steps = try AppIntentSupport.steps(for: preset)
@@ -78,6 +84,9 @@ struct PresetRunOutcome: Equatable, Sendable {
     static func connectSummary(for device: StoredDevice) async -> String {
         let manager = HIDConnectionManager(device: device)
         await manager.connect()
+        // connect() only starts the transports; give the connection a bounded
+        // chance to finish before reporting a summary.
+        _ = await manager.waitUntilReady()
         let summary = manager.connectionSummary
         await manager.disconnect()
         return summary

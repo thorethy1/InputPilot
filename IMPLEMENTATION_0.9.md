@@ -443,6 +443,11 @@ Mocks and simulators do not replace these hardware gates.
 - [ ] missing/deleted Secret reference behavior.
 - [ ] restart/migration/restore behavior where applicable.
 
+Note: CI unit tests run against an in-memory Keychain stand-in (`SecretStore` detects
+the missing keychain entitlement under XCTest), so the real `Security` framework
+path is only exercised on hardware. The first gate item must be verified on a
+physical device, not just from green CI.
+
 ### Apple Shortcuts gate
 
 - [ ] foreground execution.

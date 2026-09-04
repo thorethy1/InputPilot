@@ -2206,6 +2206,19 @@ enum InputPilotWiFiManager {
         self.ble = ble; self.tcp = tcp; self.capabilities = capabilities; self.protocolVersion = protocolVersion
     }
     func connect() async { isConnecting = true; async let b: Void = ble.connect(); async let t: Void = tcp.connect(); _ = await (b, t); isConnecting = false }
+    // connect() only starts the transports; BLE scan/auth and the Wi-Fi handshake
+    // finish asynchronously. Callers that need a ready session immediately after
+    // connecting (App Intents, automations) must wait for readiness first.
+    func waitUntilReady(timeout: TimeInterval = 10) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if allTransports.contains(where: { $0.isAvailable && $0.state == .ready }) { return true }
+            if allTransports.contains(where: { $0.state == .authenticationFailed }) { return false }
+            if allTransports.allSatisfy({ [.offline, .unavailable].contains($0.state) }) { return false }
+            if Date() >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
     func disconnect() async { await releaseAll(); activeTransport = nil }
     @discardableResult func send(_ event: HIDEvent) async -> Bool {
         nextEventID &+= 1; let eventID = nextEventID

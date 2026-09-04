@@ -36,16 +36,55 @@ import XCTest
         XCTAssertNil(InMemoryKeychain.copy(service: SecretStore.service, account: secret.id.uuidString))
     }
 
-    func testSaveWithExistingNameUpdatesValueAndKeepsID() throws {
+    func testSaveWithExistingNameThrowsDuplicateInsteadOfOverwriting() throws {
         let (store, context) = try makeStore()
         try store.save(name: "work-password", value: "hunter2")
         let originalID = try XCTUnwrap(try allSecrets(context).first).id
 
-        try store.save(name: "work-password", value: "correct horse battery staple")
+        XCTAssertThrowsError(try store.save(name: "work-password", value: "other")) { error in
+            XCTAssertEqual((error as? SecretStoreError)?.errorDescription, "A secret named ‘work-password’ already exists.")
+        }
+
+        XCTAssertEqual(try store.value(forName: "work-password"), "hunter2")
+        XCTAssertEqual(try allSecrets(context).count, 1)
+        XCTAssertEqual(try allSecrets(context).first?.id, originalID)
+    }
+
+    func testReplaceValueUpdatesKeychainAndKeepsIdentityAndName() throws {
+        let (store, context) = try makeStore()
+        try store.save(name: "work-password", value: "hunter2", note: "note")
+        let secret = try XCTUnwrap(try allSecrets(context).first)
+        let originalUpdatedAt = secret.updatedAt
+
+        try store.replaceValue(id: secret.id, with: "correct horse battery staple")
 
         XCTAssertEqual(try store.value(forName: "work-password"), "correct horse battery staple")
         XCTAssertEqual(try allSecrets(context).count, 1)
-        XCTAssertEqual(try allSecrets(context).first?.id, originalID)
+        XCTAssertEqual(try allSecrets(context).first?.id, secret.id)
+        XCTAssertEqual(try allSecrets(context).first?.name, "work-password")
+        XCTAssertEqual(try allSecrets(context).first?.note, "note")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(try allSecrets(context).first).updatedAt, originalUpdatedAt)
+    }
+
+    func testReplaceValueRejectsEmptyValueAndUnknownID() throws {
+        let (store, _) = try makeStore()
+        XCTAssertThrowsError(try store.replaceValue(id: UUID(), with: "x")) { error in
+            guard case SecretStoreError.notFound = error else { return XCTFail("Expected notFound, got \(error)") }
+        }
+        XCTAssertThrowsError(try store.replaceValue(id: UUID(), with: "")) { error in
+            guard case SecretStoreError.invalidValue = error else { return XCTFail("Expected invalidValue, got \(error)") }
+        }
+    }
+
+    func testMissingKeychainItemErrorNamesSecretInsteadOfUUID() throws {
+        let (store, context) = try makeStore()
+        try store.save(name: "work-password", value: "hunter2")
+        let secret = try XCTUnwrap(try allSecrets(context).first)
+        InMemoryKeychain.delete(service: SecretStore.service, account: secret.id.uuidString)
+
+        XCTAssertThrowsError(try store.value(forID: secret.id)) { error in
+            XCTAssertEqual((error as? SecretStoreError)?.errorDescription, "Secret ‘work-password’ is missing.")
+        }
     }
 
     func testValueForMissingNameThrowsNotFound() throws {

@@ -34,17 +34,19 @@ enum SecretStoreError: LocalizedError {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { throw SecretStoreError.invalidName }
         guard !value.isEmpty else { throw SecretStoreError.invalidValue }
-        if let existing = try fetchSecret(named: trimmedName) {
-            try upsertKeychainValue(value, account: existing.id.uuidString)
-            if !note.isEmpty { existing.note = note }
-            existing.updatedAt = Date()
-            try? context.save()
-        } else {
-            let secret = StoredSecret(name: trimmedName, note: note)
-            try upsertKeychainValue(value, account: secret.id.uuidString)
-            context.insert(secret)
-            try context.save()
-        }
+        guard try fetchSecret(named: trimmedName) == nil else { throw SecretStoreError.duplicateName(trimmedName) }
+        let secret = StoredSecret(name: trimmedName, note: note)
+        try upsertKeychainValue(value, account: secret.id.uuidString)
+        context.insert(secret)
+        try context.save()
+    }
+
+    func replaceValue(id: UUID, with newValue: String) throws {
+        guard !newValue.isEmpty else { throw SecretStoreError.invalidValue }
+        guard let secret = try fetchSecret(id: id) else { throw SecretStoreError.notFound(id.uuidString) }
+        try upsertKeychainValue(newValue, account: secret.id.uuidString)
+        secret.updatedAt = Date()
+        try context.save()
     }
 
     func value(forID id: UUID) throws -> String {
@@ -64,7 +66,12 @@ enum SecretStoreError: LocalizedError {
             status = SecItemCopyMatching(query as CFDictionary, &result)
         }
         guard status == errSecSuccess else {
-            throw status == errSecItemNotFound ? SecretStoreError.notFound(id.uuidString) : SecretStoreError.keychain(status)
+            if status == errSecItemNotFound {
+                // Prefer the human-readable name over the raw UUID in user-facing errors.
+                let metadata = (try? fetchSecret(id: id)) ?? nil
+                throw SecretStoreError.notFound(metadata?.name ?? id.uuidString)
+            }
+            throw SecretStoreError.keychain(status)
         }
         guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
             throw SecretStoreError.keychain(errSecParam)
