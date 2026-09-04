@@ -1,9 +1,13 @@
-import Security
 import SwiftData
 import XCTest
 @testable import InputPilot
 
 @MainActor final class SecretStoreTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        InMemoryKeychain.reset()
+    }
+
     private func makeStore() throws -> (SecretStore, ModelContext) {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: StoredSecret.self, configurations: configuration)
@@ -29,12 +33,7 @@ import XCTest
             guard case SecretStoreError.notFound = error else { return XCTFail("Expected notFound, got \(error)") }
         }
         XCTAssertTrue(try allSecrets(context).isEmpty)
-        let keychainStatus = SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: SecretStore.service,
-            kSecAttrAccount as String: secret.id.uuidString
-        ] as CFDictionary)
-        XCTAssertTrue(keychainStatus == errSecSuccess || keychainStatus == errSecItemNotFound)
+        XCTAssertNil(InMemoryKeychain.copy(service: SecretStore.service, account: secret.id.uuidString))
     }
 
     func testSaveWithExistingNameUpdatesValueAndKeepsID() throws {

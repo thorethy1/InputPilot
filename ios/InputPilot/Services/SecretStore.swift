@@ -22,6 +22,8 @@ enum SecretStoreError: LocalizedError {
 
 @MainActor struct SecretStore {
     static let service = "app.inputpilot.secrets"
+    // The CI test host lacks the keychain-access entitlement (-34018), so unit tests run against an in-memory keychain.
+    static let usesInMemoryKeychain = NSClassFromString("XCTestCase") != nil
     private let context: ModelContext
 
     init(context: ModelContext) {
@@ -46,11 +48,21 @@ enum SecretStoreError: LocalizedError {
     }
 
     func value(forID id: UUID) throws -> String {
-        var query = Self.baseQuery(account: id.uuidString)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status: OSStatus
+        if Self.usesInMemoryKeychain {
+            if let data = InMemoryKeychain.copy(service: Self.service, account: id.uuidString) {
+                result = data
+                status = errSecSuccess
+            } else {
+                status = errSecItemNotFound
+            }
+        } else {
+            var query = Self.baseQuery(account: id.uuidString)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            status = SecItemCopyMatching(query as CFDictionary, &result)
+        }
         guard status == errSecSuccess else {
             throw status == errSecItemNotFound ? SecretStoreError.notFound(id.uuidString) : SecretStoreError.keychain(status)
         }
@@ -67,7 +79,12 @@ enum SecretStoreError: LocalizedError {
 
     func delete(id: UUID) throws {
         guard let secret = try fetchSecret(id: id) else { throw SecretStoreError.notFound(id.uuidString) }
-        let status = SecItemDelete(Self.baseQuery(account: id.uuidString) as CFDictionary)
+        let status: OSStatus
+        if Self.usesInMemoryKeychain {
+            status = InMemoryKeychain.delete(service: Self.service, account: id.uuidString)
+        } else {
+            status = SecItemDelete(Self.baseQuery(account: id.uuidString) as CFDictionary)
+        }
         guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretStoreError.keychain(status) }
         context.delete(secret)
         try context.save()
@@ -85,14 +102,23 @@ enum SecretStoreError: LocalizedError {
 
     private func upsertKeychainValue(_ value: String, account: String) throws {
         let data = Data(value.utf8)
-        let query = Self.baseQuery(account: account) as CFDictionary
-        let status = SecItemUpdate(query, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecSuccess { return }
-        guard status == errSecItemNotFound else { throw SecretStoreError.keychain(status) }
-        var add = Self.baseQuery(account: account)
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        let updateStatus: OSStatus
+        if Self.usesInMemoryKeychain {
+            updateStatus = InMemoryKeychain.update(service: Self.service, account: account, data: data)
+        } else {
+            updateStatus = SecItemUpdate(Self.baseQuery(account: account) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else { throw SecretStoreError.keychain(updateStatus) }
+        let addStatus: OSStatus
+        if Self.usesInMemoryKeychain {
+            addStatus = InMemoryKeychain.add(service: Self.service, account: account, data: data)
+        } else {
+            var add = Self.baseQuery(account: account)
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            addStatus = SecItemAdd(add as CFDictionary, nil)
+        }
         guard addStatus == errSecSuccess else { throw SecretStoreError.keychain(addStatus) }
     }
 
@@ -114,5 +140,45 @@ enum SecretStoreError: LocalizedError {
         var descriptor = FetchDescriptor<StoredSecret>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
         return try context.fetch(descriptor).first
+    }
+}
+
+enum InMemoryKeychain {
+    private static let lock = NSLock()
+    private static var items: [String: Data] = [:]
+
+    private static func key(service: String, account: String) -> String {
+        "\(service)|\(account)"
+    }
+
+    static func update(service: String, account: String, data: Data) -> OSStatus {
+        lock.lock(); defer { lock.unlock() }
+        let key = key(service: service, account: account)
+        guard items[key] != nil else { return errSecItemNotFound }
+        items[key] = data
+        return errSecSuccess
+    }
+
+    static func add(service: String, account: String, data: Data) -> OSStatus {
+        lock.lock(); defer { lock.unlock() }
+        let key = key(service: service, account: account)
+        guard items[key] == nil else { return errSecDuplicateItem }
+        items[key] = data
+        return errSecSuccess
+    }
+
+    static func copy(service: String, account: String) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return items[key(service: service, account: account)]
+    }
+
+    static func delete(service: String, account: String) -> OSStatus {
+        lock.lock(); defer { lock.unlock() }
+        return items.removeValue(forKey: key(service: service, account: account)) != nil ? errSecSuccess : errSecItemNotFound
+    }
+
+    static func reset() {
+        lock.lock(); defer { lock.unlock() }
+        items.removeAll()
     }
 }
