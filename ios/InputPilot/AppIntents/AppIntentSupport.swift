@@ -10,7 +10,7 @@ struct PresetRunOutcome: Equatable, Sendable {
     static var container: ModelContainer { AppModelContainer.shared }
 
     private static var cachedManagers: [String: (manager: HIDConnectionManager, host: String)] = [:]
-    private static var executionTail: Task<Void, Never>?
+    private static var executionTail: Task<PresetRunOutcome, Never>?
 
     static func activeDevice(context: ModelContext) -> StoredDevice? {
         let devices = (try? context.fetch(FetchDescriptor<StoredDevice>(sortBy: [SortDescriptor(\.displayName)]))) ?? []
@@ -38,7 +38,7 @@ struct PresetRunOutcome: Equatable, Sendable {
     static func serialized(_ work: @MainActor @escaping () async -> PresetRunOutcome) async -> PresetRunOutcome {
         let previous = executionTail
         let task = Task<PresetRunOutcome, Never> { @MainActor [previous] in
-            await previous?.value
+            _ = await previous?.value
             return await work()
         }
         executionTail = task
