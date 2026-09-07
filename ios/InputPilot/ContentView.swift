@@ -36,7 +36,7 @@ struct ContentView: View {
                 AddDeviceWizardView()
             }
           }
-          .tabItem { Label("Devices", systemImage: "computermouse") }
+          .tabItem { Label("Devices", systemImage: "memorychip") }
           NavigationStack { ControlRootView(devices: storedDevices) }
             .tabItem { Label("Control", systemImage: "rectangle.and.hand.point.up.left") }
           NavigationStack { FirmwareRootView(devices: storedDevices) }
