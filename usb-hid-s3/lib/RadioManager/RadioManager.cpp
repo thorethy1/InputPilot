@@ -24,6 +24,7 @@
 #include "BLEDiagnostics.h"
 #include "BLEAdvertisingRecovery.h"
 #include "BLESessionOwnership.h"
+#include "BLEHandshakeDelivery.h"
 #include "OTAEngine.h"
 #include "KeyMap.h"
 #include "PairingSecretStore.h"
@@ -68,6 +69,7 @@ constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
 constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
 volatile uint32_t s_bleConnectionGeneration = 0;
 uint32_t s_bleProcessedGeneration = 0;
+BLEHandshakeDelivery s_bleHandshakeDelivery;
 volatile bool s_bleControlQueueOverflow = false;
 constexpr size_t TCP_CONTROL_TEXT_MAX = 768;
 constexpr size_t TCP_OTA_BINARY_PLAINTEXT_MAX =
@@ -100,7 +102,15 @@ bool sendBleNotification(const uint8_t *value, size_t length) {
 void sendControlReply(const char *source, const char *reply) {
   if (!reply) return;
   if (strcmp(source, "ble") == 0 && s_bleTx && s_bleOwner.connected()) {
-    sendBleNotification(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
+    const std::string text(reply);
+    if (text.rfind("secure challenge ", 0) == 0 ||
+        text.rfind("secure ready ", 0) == 0 || text == "secure failed") {
+      // A reconnect can still have ATT's default MTU of 23. Never discard
+      // its challenge/proof: deliver ordered fragments, retrying backpressure.
+      s_bleHandshakeDelivery.queue(text, s_bleConnectionGeneration, millis());
+    } else {
+      sendBleNotification(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
+    }
   } else if (strcmp(source, "wifi") == 0 && s_tcpClient && s_tcpClient.connected()) {
     s_tcpClient.print(reply);
     s_tcpClient.print("\n");
@@ -1418,6 +1428,11 @@ void RadioManager::loop() {
   // Drain Secure Protocol traffic before evaluating its deadline. A proof
   // queued just before expiry must be allowed to establish the session.
   processBLEControlFrames();
+  s_bleHandshakeDelivery.flush(
+      s_bleConnectionGeneration, s_bleOwner.connected(),
+      s_bleServer && s_bleOwner.connected()
+          ? s_bleServer->getPeerMTU(s_bleOwner.owner()) : 0,
+      millis(), sendBleNotification);
   if (s_bleOwner.authenticationExpired(
           millis(), bleSessionEstablished())) {
     const uint16_t handle = s_bleOwner.owner();

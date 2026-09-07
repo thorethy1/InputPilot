@@ -8,7 +8,7 @@
  *
  * Transport-neutral priority (highest first):
  *   1) OTA active             → amber, fast blink
- *   2) Fallback AP active     → magenta, slow blink
+ *   2) Fallback AP active     → violet for 180 ms every 4 s; normal status between pulses
  *   3) Keep Awake active      → cyan, breathing pulse
  *   4) Secure controller      → blue, solid
  *   5) BLE/Wi-Fi ready        → green, dim solid

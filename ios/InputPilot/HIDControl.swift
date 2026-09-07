@@ -1539,12 +1539,36 @@ struct BLEReconnectGate: Equatable {
     mutating func advertisementObserved() { requiresAdvertisement = false }
 }
 
+/// Handshake replies have fixed ASCII lengths. Accept both legacy whole
+/// notifications and fragments delivered at ATT's default 23-byte MTU.
+struct BLEHandshakeReplyBuffer {
+    private var bytes = Data()
+
+    mutating func reset() { bytes.removeAll() }
+
+    mutating func append(_ data: Data) -> String? {
+        bytes.append(data)
+        guard bytes.count <= 128 else { reset(); return nil }
+        guard let reply = String(data: bytes, encoding: .utf8) else { reset(); return nil }
+        let expected: Int
+        if reply.hasPrefix("secure challenge ") { expected = 64 }
+        else if reply.hasPrefix("secure ready ") { expected = 77 }
+        else if reply == "secure failed" { expected = 13 }
+        else { return nil }
+        guard bytes.count == expected else { return nil }
+        reset()
+        return reply
+    }
+}
+
 final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
     let kind = TransportKind.bluetooth
     @Published private(set) var isAvailable = false
     @Published private(set) var state: TransportConnectionState = .offline
     @Published private(set) var radioState: BluetoothRadioState = .unknown
     private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var characteristics: [CBUUID: CBCharacteristic] = [:]
+    private var handshakeReplies = BLEHandshakeReplyBuffer()
+    private var handshakeStarted = false
     private var secureChannel: SecureChannel?
     private let deviceId: String
     private let service = CBUUID(string: "7D9F0001-4F4D-4F56-4552-484944000001")
@@ -1694,6 +1718,8 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     private func resetForUnavailableRadio() {
         reconnectWork?.cancel(); scanTimeoutWork?.cancel(); connectionTimeoutWork?.cancel()
+        authTimeoutWork?.cancel(); authTimeoutWork = nil
+        handshakeReplies.reset(); handshakeStarted = false
         central.stopScan()
         if let peripheral { central.cancelPeripheralConnection(peripheral) }
         peripheral = nil; isAvailable = false; secureChannel = nil
@@ -1745,8 +1771,9 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         reconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { appLog(.errors, "BLE service discovery error=\(error?.localizedDescription ?? "empty")"); central.cancelPeripheralConnection(peripheral); return }; appLog(.bluetooth, "services discovered count=\(services.count)"); pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard self.peripheral === peripheral, state == .connected else { return }; guard error == nil, let services = peripheral.services, !services.isEmpty else { appLog(.errors, "BLE service discovery error=\(error?.localizedDescription ?? "empty")"); central.cancelPeripheralConnection(peripheral); return }; appLog(.bluetooth, "services discovered count=\(services.count)"); pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard self.peripheral === peripheral, state == .connected, pendingServices > 0 else { return }
         if error == nil { service.characteristics?.forEach { characteristic in characteristics[characteristic.uuid] = characteristic; appLog(.bluetooth, "characteristic uuid=\(characteristic.uuid.uuidString) properties=\(characteristic.properties.rawValue)") } }
         pendingServices -= 1
         guard pendingServices == 0 else { return }
@@ -1757,21 +1784,26 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             failAuthentication(peripheral); return
         }
         secureChannel = channel
+        handshakeReplies.reset()
+        handshakeStarted = false
         state = .authenticating
+        startAuthTimeout(peripheral)
         peripheral.setNotifyValue(true, for: tx)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == secureStatus, state == .authenticating else { return }
+        guard self.peripheral === peripheral, characteristic.uuid == secureStatus,
+              state == .authenticating, !handshakeStarted else { return }
         guard error == nil, characteristic.isNotifying, let rx = characteristics[control] else { failAuthentication(peripheral); return }
-        startAuthTimeout(peripheral)
+        handshakeStarted = true
         peripheral.writeValue(Data("secure begin".utf8), for: rx, type: .withResponse)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard self.peripheral === peripheral else { return }
         if characteristic.uuid == otaStatus { firmwareUpdater.receive(characteristic.value, error: error); return }
         guard characteristic.uuid == secureStatus, error == nil,
               let data = characteristic.value else { return }
         if state == .authenticating, let secureChannel {
-            guard let reply = String(data: data, encoding: .utf8) else { return }
+            guard let reply = handshakeReplies.append(data) else { return }
             do {
                 if reply.hasPrefix("secure challenge "), let rx = characteristics[control] {
                     peripheral.writeValue(Data(try secureChannel.hello(for: reply).utf8), for: rx, type: .withResponse)
@@ -1827,11 +1859,11 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         peripheral.setNotifyValue(true, for: status)
     }
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) { firmwareUpdater.writerReady(); drainWrites(peripheral) }
-    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.retryAfterAuthenticationTimeout(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
+    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.peripheral === peripheral, self.state == .authenticating else { return }; self.retryAfterAuthenticationTimeout(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
     private func failAuthentication(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; central.cancelPeripheralConnection(peripheral) }
     private func retryAfterAuthenticationTimeout(_ peripheral: CBPeripheral) {
         authTimeoutWork?.cancel(); authTimeoutWork = nil
-        appLog(.bluetooth, "Secure handshake timed out; reconnecting without invalidating USB trust")
+        appLog(.bluetooth, "Secure handshake timed out deviceId=\(deviceId) notifyStarted=\(handshakeStarted) writePayload=\(peripheral.maximumWriteValueLength(for: .withoutResponse)); reconnecting without invalidating USB trust")
         isAvailable = false; secureChannel = nil
         state = shouldReconnect ? .reconnecting : .offline
         central.cancelPeripheralConnection(peripheral)

@@ -137,3 +137,27 @@ connection time, transport and the exact shortcut result for each run.
 - Upgrade order: updated app + old firmware must still discover in the
   foreground and reconnect through a cached identifier; then update firmware
   and verify background discovery without the cached identifier.
+
+
+## BLE reconnect after prolonged inactivity and AP status LED
+
+- Leave the ESP32 running with no controller connected for at least 30 minutes,
+  including fallback AP mode with the configured router unavailable. Reconnect
+  over BLE without rebooting either device. Repeat with the iOS app terminated.
+  Verify the connection progresses through authentication to Ready and input
+  works, without cycling through reconnect/connect/authenticate indefinitely.
+- In a development build, force the BLE notification payload to 20 bytes (ATT
+  MTU 23). Both the 64-byte challenge and 77-byte server proof must arrive in
+  order and authenticate. Restore normal MTU and repeat. Temporarily reject
+  notification sends to verify backpressure retries resume at the same offset.
+- Disconnect halfway through a fragmented reply, reconnect, and verify no
+  fragment from the previous connection reaches the new handshake. On failure,
+  capture serial BLE logs and the app's Bluetooth logs before rebooting.
+- With AP enabled, check 180 ms of violet every four seconds, followed by the
+  normal state: connected blue, Keep Awake cyan, ready green. An AP available
+  for control counts as radio-ready even without a router or BLE. OTA retains
+  its uninterrupted amber pattern. Turn off the AP and verify violet stops.
+
+Update the app before firmware when testing handshake fragmentation. Whole
+handshake replies at a sufficiently large MTU remain compatible with older apps;
+small-MTU fragmented replies require the updated app.

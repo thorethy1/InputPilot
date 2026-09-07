@@ -1,6 +1,8 @@
 #ifndef STATUS_LED_POLICY_H
 #define STATUS_LED_POLICY_H
 
+#include <cstdint>
+
 namespace StatusLedPolicy {
 
 enum class State {
@@ -20,9 +22,9 @@ struct Inputs {
   bool controlRadioReady = false;
 };
 
-inline State resolve(const Inputs &inputs) {
+inline State resolve(const Inputs &inputs, uint32_t nowMs = 0) {
   if (inputs.otaActive) return State::Ota;
-  if (inputs.fallbackApActive) return State::FallbackAp;
+  if (inputs.fallbackApActive && nowMs % 4000 < 180) return State::FallbackAp;
   if (inputs.keepAwakeActive) return State::KeepAwake;
   if (inputs.controllerConnected) return State::ControllerConnected;
   if (inputs.controlRadioReady) return State::Ready;

@@ -29,8 +29,8 @@ void StatusLed::show(uint8_t r, uint8_t g, uint8_t b) {
 void StatusLed::loop() {
   const uint8_t peak = STATUS_LED_BRIGHTNESS;
   const uint32_t now = millis();
-  const bool stationReady = g_radio.wifiEnabled() && !g_radio.isSoftAp() &&
-                            WiFi.status() == WL_CONNECTED;
+  const bool wifiReady = g_radio.wifiEnabled() &&
+                         (g_radio.isSoftAp() || WiFi.status() == WL_CONNECTED);
   const bool bluetoothReady = g_radio.bleEnabled() &&
                               (g_radio.isBleAdvertising() ||
                                g_radio.isBleConnected());
@@ -39,8 +39,8 @@ void StatusLed::loop() {
       g_radio.wifiEnabled() && g_radio.isSoftAp(),
       deviceJiggleEnabled() || deviceAutoClickEnabled(),
       g_radio.isControlSessionConnected(),
-      stationReady || bluetoothReady,
-  });
+      wifiReady || bluetoothReady,
+  }, now);
 
   switch (state) {
     case StatusLedPolicy::State::Ota: {
@@ -50,9 +50,7 @@ void StatusLed::loop() {
       return;
     }
     case StatusLedPolicy::State::FallbackAp: {
-      const bool on = ((now / 500) % 2) == 0;
-      if (on) show(peak, 0, peak);
-      else off();
+      show(peak, 0, peak);
       return;
     }
     case StatusLedPolicy::State::KeepAwake: {

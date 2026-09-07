@@ -3,6 +3,31 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    func testHandshakeRepliesAssembleAtDefaultMTUAndAcceptLegacyPackets() {
+        let replies = ["secure challenge 1 aabbccddeeff " + String(repeating: "A", count: 32),
+                       "secure ready " + String(repeating: "B", count: 64), "secure failed"]
+        for reply in replies {
+            var buffer = BLEHandshakeReplyBuffer()
+            XCTAssertEqual(buffer.append(Data(reply.utf8)), reply)
+            let data = Data(reply.utf8)
+            for offset in stride(from: 0, to: data.count, by: 20) {
+                let end = min(offset + 20, data.count)
+                let result = buffer.append(data.subdata(in: offset..<end))
+                if end == data.count { XCTAssertEqual(result, reply) }
+                else { XCTAssertNil(result) }
+            }
+        }
+    }
+
+    func testHandshakeBufferResetDropsPartialPreviousConnection() {
+        var buffer = BLEHandshakeReplyBuffer()
+        XCTAssertNil(buffer.append(Data("secure challenge 1 ".utf8)))
+        buffer.reset()
+        XCTAssertEqual(buffer.append(Data("secure failed".utf8)), "secure failed")
+        XCTAssertNil(buffer.append(Data(repeating: 65, count: 129)))
+        XCTAssertEqual(buffer.append(Data("secure failed".utf8)), "secure failed")
+    }
+
     func testBLEMetadataRecoveryRecognizesBothInvalidHandleDomains() {
         let att = NSError(
             domain: CBATTErrorDomain,
