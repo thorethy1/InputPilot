@@ -116,7 +116,7 @@ private final class IntentMockTransport: HIDControlTransport {
         // initially, which must not fail the wait before they had a chance.
         let ble = IntentMockTransport(kind: .bluetooth, state: .offline)
         let tcp = IntentMockTransport(kind: .tcp, state: .offline)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport"], protocolVersion: 2)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(150))
             ble.state = .ready
@@ -130,7 +130,7 @@ private final class IntentMockTransport: HIDControlTransport {
     func testWaitUntilReadyFailsFastWhenOnlyUnavailableTransportsRemain() async throws {
         let ble = IntentMockTransport(kind: .bluetooth, state: .unavailable)
         let tcp = UnavailableHIDControlTransport(kind: .tcp)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport"], protocolVersion: 2)
 
         let start = Date()
         let ready = await manager.waitUntilReady(timeout: 5)
@@ -145,17 +145,28 @@ private final class IntentMockTransport: HIDControlTransport {
         for mode in [ConnectionMode.wifiOnly, .bluetoothOnly] {
             let ble = IntentMockTransport(kind: .bluetooth, state: mode == .wifiOnly ? .ready : .connecting)
             let tcp = IntentMockTransport(kind: .tcp, state: mode == .bluetoothOnly ? .ready : .connecting)
-            let manager = HIDConnectionManager(ble: ble, tcp: tcp)
+            let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport"])
             manager.mode = mode
             let ready = await manager.waitUntilReady(timeout: 0.2)
             XCTAssertFalse(ready)
         }
     }
 
+    func testReadinessRejectsReadyTransportsWithoutFirmwareCapabilities() async {
+        let ble = IntentMockTransport(kind: .bluetooth, state: .ready)
+        let tcp = IntentMockTransport(kind: .tcp, state: .ready)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [])
+
+        let ready = await manager.waitUntilReady(timeout: 1)
+
+        XCTAssertFalse(ready)
+        XCTAssertFalse(manager.beginOrderedSession(lowLatency: false))
+    }
+
     func testWiFiColdStartSucceedsWhenBluetoothUnavailable() async throws {
         let ble = UnavailableHIDControlTransport(kind: .bluetooth)
         let tcp = IntentMockTransport(kind: .tcp, state: .offline)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["keyboard_layout", "release_all"])
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["wifi_transport", "keyboard_layout", "release_all"])
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(100))
             tcp.state = .ready
@@ -262,7 +273,7 @@ private final class IntentMockTransport: HIDControlTransport {
     func testWaitUntilReadyReturnsOnceTransportBecomesReady() async throws {
         let ble = IntentMockTransport(kind: .bluetooth, state: .connecting)
         let tcp = IntentMockTransport(kind: .tcp, state: .connecting)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport"], protocolVersion: 2)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(150))
             ble.state = .ready
@@ -274,7 +285,7 @@ private final class IntentMockTransport: HIDControlTransport {
     func testWaitUntilReadyTimesOutWhenNeverReady() async throws {
         let ble = IntentMockTransport(kind: .bluetooth, state: .connecting)
         let tcp = IntentMockTransport(kind: .tcp, state: .connecting)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport"], protocolVersion: 2)
 
         let ready = await manager.waitUntilReady(timeout: 0.4)
 
@@ -284,7 +295,7 @@ private final class IntentMockTransport: HIDControlTransport {
     func testWaitUntilReadyFailsImmediatelyOnAuthenticationFailure() async throws {
         let ble = IntentMockTransport(kind: .bluetooth, state: .authenticationFailed)
         let tcp = IntentMockTransport(kind: .tcp, state: .authenticationFailed)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: [], protocolVersion: 2)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["ble_transport", "wifi_transport"], protocolVersion: 2)
 
         let start = Date()
         let ready = await manager.waitUntilReady()
