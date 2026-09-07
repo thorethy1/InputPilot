@@ -711,6 +711,7 @@ private struct StatusLEDMatrixView: View {
     private enum LEDPattern {
         case solid(opacity: Double)
         case blinking(period: TimeInterval)
+        case pulse(period: TimeInterval, duration: TimeInterval)
         case breathing(period: TimeInterval)
     }
 
@@ -724,7 +725,7 @@ private struct StatusLEDMatrixView: View {
 
     private let states = [
         LEDState(id: "Firmware Update", color: .orange, pattern: .blinking(period: 0.36), patternDescription: "Amber · fast blinking", meaning: "An OTA firmware update is active."),
-        LEDState(id: "Fallback AP", color: .purple, pattern: .blinking(period: 1.0), patternDescription: "Magenta · slow blinking", meaning: "The optional fallback network is active because configured Wi-Fi is unavailable."),
+        LEDState(id: "Fallback AP", color: .purple, pattern: .pulse(period: 4.0, duration: 0.18), patternDescription: "Violet · brief pulse every 4 seconds", meaning: "The optional fallback network is active. A 180 ms violet pulse briefly interrupts the normal status color, then the LED returns to blue, breathing cyan, or dim green."),
         LEDState(id: "Keep Awake", color: .cyan, pattern: .breathing(period: 1.2), patternDescription: "Cyan · breathing", meaning: "Automatic pointer movement or clicking is enabled, independent of the active transport."),
         LEDState(id: "Controller Connected", color: .blue, pattern: .solid(opacity: 1), patternDescription: "Blue · solid", meaning: "An authenticated iOS control session is connected over Bluetooth or Wi-Fi."),
         LEDState(id: "Ready", color: .green, pattern: .solid(opacity: 0.45), patternDescription: "Green · dim solid", meaning: "At least one control transport is ready, including Bluetooth-only operation."),
@@ -748,7 +749,7 @@ private struct StatusLEDMatrixView: View {
                     .accessibilityElement(children: .combine)
                 }
             } footer: {
-                Text("The fallback AP stays active while an iPhone is connected. Bluetooth advertising recovery is automatic and uses no separate LED pattern.")
+                Text("During OTA updates, amber blinking takes priority and suppresses the AP pulse. The fallback AP stays active while an iPhone is connected. Bluetooth advertising recovery is automatic and uses no separate LED pattern.")
             }
         }
         .navigationTitle("Status LED Matrix")
@@ -777,6 +778,8 @@ private struct StatusLEDMatrixView: View {
             case let .solid(opacity): return opacity
             case let .blinking(period):
                 return time.truncatingRemainder(dividingBy: period) < period / 2 ? 1 : 0.08
+            case let .pulse(period, duration):
+                return time.truncatingRemainder(dividingBy: period) < duration ? 1 : 0.08
             case let .breathing(period):
                 return 0.2 + 0.8 * ((sin((time / period) * 2 * Double.pi) + 1) / 2)
             }

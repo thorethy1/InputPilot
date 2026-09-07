@@ -55,7 +55,7 @@ jobs:
           url="$(jq -r '.url' <<<"$latest")"
           if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
             echo "::error::Latest CI run on main ($head_sha) is status=$status conclusion=$conclusion: $url"
-            echo "This workflow never starts its own CI. Fix or wait for CI to be green, then retry."
+            echo "Fix or wait for CI to be green, then retry."
             exit 1
           fi
           echo "Latest CI run on main head $head_sha is green: $url"
@@ -65,8 +65,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main --tags
-          git checkout -B main origin/main
+          # Keep the exact checkout that passed the green-CI gate.
+          original_sha="$(git rev-parse HEAD)"
           previous="$(python3 versioning.py show)"
           if [[ '${{ inputs.bump }}' == 'none' ]]; then
             version="$(python3 versioning.py show)"
@@ -86,9 +86,11 @@ jobs:
             git commit -m "Release InputPilot $version"
           fi
           sha="$(git rev-parse HEAD)"
-          # The release commit goes straight to the branch so the regular
-          # push-triggered CI covers it; this workflow never dispatches CI.
+          # GITHUB_TOKEN pushes do not trigger push workflows.
           git push origin "HEAD:refs/heads/main"
+          if [[ "$sha" != "$original_sha" ]]; then
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main
+          fi
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -171,7 +173,7 @@ jobs:
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
           gh workflow run release-assets.yml --repo "$GITHUB_REPOSITORY" \
-            --ref main -f tag='${{ steps.version.outputs.tag }}'
+            --ref '${{ steps.version.outputs.tag }}' -f tag='${{ steps.version.outputs.tag }}'
           run_id=""
           for attempt in $(seq 1 60); do
             runs="$(gh run list --repo "$GITHUB_REPOSITORY" \

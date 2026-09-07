@@ -50,7 +50,7 @@ jobs:
           url="$(jq -r '.url' <<<"$latest")"
           if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
             echo "::error::Latest CI run on beta ($head_sha) is status=$status conclusion=$conclusion: $url"
-            echo "This workflow never starts its own CI. Fix or wait for CI to be green, then retry."
+            echo "Fix or wait for CI to be green, then retry."
             exit 1
           fi
           echo "Latest CI run on beta head $head_sha is green: $url"
@@ -62,8 +62,8 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          git fetch origin beta --tags
-          git checkout -B beta origin/beta
+          # Keep the exact checkout that passed the green-CI gate.
+          original_sha="$(git rev-parse HEAD)"
           version="$RELEASE_VERSION"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
             echo "::error::Beta version must match MAJOR.MINOR.PATCH-beta.NUMBER; got '$version'."
@@ -83,9 +83,11 @@ jobs:
             git commit -m "Release InputPilot $version"
           fi
           sha="$(git rev-parse HEAD)"
-          # The release commit goes straight to the branch so the regular
-          # push-triggered CI covers it; this workflow never dispatches CI.
+          # GITHUB_TOKEN pushes do not trigger push workflows.
           git push origin "HEAD:refs/heads/beta"
+          if [[ "$sha" != "$original_sha" ]]; then
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref beta
+          fi
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -169,7 +171,7 @@ jobs:
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
           gh workflow run release-assets.yml --repo "$GITHUB_REPOSITORY" \
-            --ref beta -f tag='${{ steps.version.outputs.tag }}'
+            --ref '${{ steps.version.outputs.tag }}' -f tag='${{ steps.version.outputs.tag }}'
           run_id=""
           for attempt in $(seq 1 60); do
             runs="$(gh run list --repo "$GITHUB_REPOSITORY" \

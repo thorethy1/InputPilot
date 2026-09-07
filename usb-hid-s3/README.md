@@ -84,11 +84,14 @@ v2.
 | Appearance | Meaning |
 |------------|---------|
 | Fast amber blink | OTA firmware update active |
-| Slow magenta blink | Optional fallback AP active (for example `InputPilot-Halo9`) |
+| Brief violet pulse (180 ms every 4 seconds) | Optional fallback AP active (for example `InputPilot-Halo9`); normal status resumes between pulses |
 | Cyan breathing | Keep Awake movement or clicking enabled |
 | Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
 | Dim solid green | At least one BLE/Wi-Fi control path is ready |
 | Slow red blink | No control radio is currently ready |
+
+The AP pulse briefly overlays the normal status (blue, breathing cyan, or dim
+green). OTA updates take priority: amber blinking continues without AP pulses.
 
 Protocol and hardware validation: [`../docs/SECURE_PROTOCOL_V2.md`](../docs/SECURE_PROTOCOL_V2.md)
 
