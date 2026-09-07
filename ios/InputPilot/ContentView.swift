@@ -150,7 +150,7 @@ private struct DeviceRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: presence.systemImage)
+            Image(systemName: "memorychip")
                 .foregroundStyle(presence.color)
                 .frame(width: 20)
                 .accessibilityHidden(true)

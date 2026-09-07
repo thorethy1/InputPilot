@@ -2641,7 +2641,7 @@ struct HIDControlView: View {
                     Menu {
                         ActiveDevicePicker(devices: devices, selection: $selectedDeviceId)
                     } label: {
-                        Label("Switch Device", systemImage: "computermouse")
+                        Label("Switch Device", systemImage: "memorychip")
                     }
                     .disabled(macros.isPlaying || macros.isRecording || !macros.recorded.isEmpty)
                 }
