@@ -1,6 +1,7 @@
 #include "RadioManager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <vector>
 #include <WiFi.h>
@@ -43,10 +44,14 @@ namespace {
 
 NimBLEServer *s_bleServer = nullptr;
 NimBLECharacteristic *s_bleTx = nullptr;
-// Set while stopBle() is releasing the stack so the disconnect callback does
-// NOT restart advertising mid-teardown (which crashes deinit(true)).
+// Prevent advertising recovery while stopBle() is quiescing the transport.
 volatile bool s_bleTearingDown = false;
 bool s_bleReady = false;
+// A disconnect callback must not take the HID mutex, write USB logs or restart
+// advertising on NimBLE's 4 KiB host stack. Coalesce owner disconnects until
+// the firmware loop can perform cleanup, keeping the most recent reason.
+constexpr int BLE_NO_DISCONNECT = -1;
+std::atomic<int> s_bleDisconnectReason{BLE_NO_DISCONNECT};
 
 BLESessionOwnership s_bleOwner(BLE_SECURE_AUTH_TIMEOUT_MS);
 bool s_wifiOtaWindowed = false;
@@ -83,6 +88,7 @@ bool bleSessionEstablished() {
   // A new connection generation must never inherit the prior connection's
   // established flag during that handoff window.
   return s_bleOwner.connected() &&
+         s_bleDisconnectReason.load() == BLE_NO_DISCONNECT &&
          s_bleProcessedGeneration == s_bleConnectionGeneration &&
          s_bleSecureSession.established();
 }
@@ -639,7 +645,9 @@ void processBLEControlFrames(size_t budget = 8) {
   }
   BLEControlFrame frame;
   for (size_t processed = 0;
-       processed < budget && xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
+       processed < budget &&
+       s_bleDisconnectReason.load() == BLE_NO_DISCONNECT &&
+       xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
        ++processed) {
     if (frame.generation != s_bleConnectionGeneration ||
         !s_bleOwner.owns(frame.connectionHandle)) {
@@ -856,37 +864,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
     const uint16_t handle = info.getConnHandle();
-    if (!s_bleOwner.release(handle)) {
-      LOG_BLE("non-owner central disconnected handle=%u reason=%d owner=%u",
-              handle, reason, s_bleOwner.owner());
-      return;
-    }
-    g_bleOta.disconnected();
-    requestReleaseAll("ble-disconnect");
-    if (s_bleTearingDown) {
-      LOG_BLE("central disconnected reason=%d during teardown", reason);
-      return;
-    }
-    const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
-    const char *reasonName = "UNKNOWN";
-    switch (reason) {
-      case 0x08: reasonName = "CONNECTION_TIMEOUT"; break;
-      case 0x13: reasonName = "REMOTE_USER_TERMINATED"; break;
-      case 0x16: reasonName = "LOCAL_HOST_TERMINATED"; break;
-      case 0x3e: reasonName = "CONNECTION_ESTABLISHMENT_FAILED"; break;
-    }
-    LOG_BLE("central disconnected reason=%d reasonName=%s uptime=%lu heap=%u lastBleRxType=%u lastBleRxLength=%lu lastHidSequence=%lu lastQueuedEvent=%s lastExecutedEvent=%s; re-advertising",
-            reason, reasonName, static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
-            hid.lastBleRxType, static_cast<unsigned long>(hid.lastBleRxLength),
-            static_cast<unsigned long>(hid.lastSequence), hid.lastQueuedEvent, hid.lastExecutedEvent);
-    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-    if (!s_bleReady || !adv || !adv->start() || !adv->isAdvertising()) {
-      g_radio.setBleAdvertisingStatus(false);
-      LOG_BLE("advertising restart failed");
-      return;
-    }
-    g_radio.setBleAdvertisingStatus(true);
-    LOG_BLE("advertising restarted");
+    // Revoke access immediately, including when stopBle() is waiting for it.
+    // A rejected secondary central must never clear the owner's HID/session.
+    if (!s_bleOwner.release(handle)) return;
+    s_bleDisconnectReason.store(reason);
   }
 };
 
@@ -1267,6 +1248,7 @@ void RadioManager::startBle() {
       return;
     }
     s_bleServer->setCallbacks(&s_serverCallbacks);
+    s_bleServer->advertiseOnDisconnect(false);  // recovery belongs to loop()
     LOG_BLE("server created");
 
     NimBLEService *hidSvc = s_bleServer->createService(BLE_HID_SERVICE_UUID);
@@ -1369,9 +1351,35 @@ bool RadioManager::isControlSessionConnected() const {
   return bleSessionEstablished() || s_tcpSecureSession.established();
 }
 
-void RadioManager::serviceBleAdvertising() {
+bool RadioManager::serviceBleDisconnect() {
+  const int reason = s_bleDisconnectReason.exchange(BLE_NO_DISCONNECT);
+  if (reason == BLE_NO_DISCONNECT) return false;
+
+  // Run before accepting any newly queued protocol traffic. This also covers
+  // a fast reconnect that arrived before loop() observed the disconnection.
+  const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
+  requestReleaseAll("ble-disconnect");
+  s_bleSecureSession.reset();
+  s_bleHandshakeDelivery = BLEHandshakeDelivery{};
+  g_bleOta.disconnected();
+
+  const char *reasonName = "UNKNOWN";
+  switch (reason) {
+    case 0x08: case BLE_HS_HCI_ERR(0x08): reasonName = "CONNECTION_TIMEOUT"; break;
+    case 0x13: case BLE_HS_HCI_ERR(0x13): reasonName = "REMOTE_USER_TERMINATED"; break;
+    case 0x16: case BLE_HS_HCI_ERR(0x16): reasonName = "LOCAL_HOST_TERMINATED"; break;
+    case 0x3e: case BLE_HS_HCI_ERR(0x3e): reasonName = "CONNECTION_ESTABLISHMENT_FAILED"; break;
+  }
+  LOG_BLE("central disconnected reason=%d reasonName=%s uptime=%lu heap=%u lastBleRxType=%u lastBleRxLength=%lu lastHidSequence=%lu lastQueuedEvent=%s lastExecutedEvent=%s; cleanup in loop",
+          reason, reasonName, static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
+          hid.lastBleRxType, static_cast<unsigned long>(hid.lastBleRxLength),
+          static_cast<unsigned long>(hid.lastSequence), hid.lastQueuedEvent, hid.lastExecutedEvent);
+  return true;
+}
+
+void RadioManager::serviceBleAdvertising(bool immediate) {
   const uint32_t now = millis();
-  if (now - lastBleAdvertisingCheckMs_ < BLE_ADVERTISING_CHECK_INTERVAL_MS) return;
+  if (!immediate && now - lastBleAdvertisingCheckMs_ < BLE_ADVERTISING_CHECK_INTERVAL_MS) return;
   lastBleAdvertisingCheckMs_ = now;
 
   const bool connected = isBleConnected();
@@ -1425,6 +1433,8 @@ void RadioManager::stopBle() {
 
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
+  const bool disconnected = serviceBleDisconnect();
+  serviceBleAdvertising(disconnected);
   // Drain Secure Protocol traffic before evaluating its deadline. A proof
   // queued just before expiry must be allowed to establish the session.
   processBLEControlFrames();
@@ -1447,7 +1457,6 @@ void RadioManager::loop() {
   // Decode binary writes outside NimBLE's host callback. This keeps STL,
   // KeyMap, logging and HID queue work off the 4 KiB BLE host stack.
   g_bleOta.loop();
-  serviceBleAdvertising();
   if (s_managementRebootAtMs &&
       static_cast<int32_t>(millis() - s_managementRebootAtMs) >= 0) {
     esp_restart();

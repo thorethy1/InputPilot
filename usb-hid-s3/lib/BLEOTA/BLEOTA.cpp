@@ -48,7 +48,6 @@ struct BLEOTAControlCommand {
 
 QueueHandle_t s_dataQueue = nullptr;
 QueueHandle_t s_controlQueue = nullptr;
-volatile bool s_disconnectedPending = false;
 enum class PendingAbort : uint8_t {
   None,
   InvalidChunk,
@@ -291,16 +290,13 @@ void BLEOTA::processData(size_t budget) {
 }
 
 void BLEOTA::disconnected() {
-  s_disconnectedPending = true;
+  if (s_controlQueue) xQueueReset(s_controlQueue);
+  if (s_dataQueue) xQueueReset(s_dataQueue);
+  s_pendingAbort = PendingAbort::None;
+  if (active()) g_otaEngine.abort("connection_lost");
 }
 
 void BLEOTA::loop() {
-  if (s_disconnectedPending) {
-    s_disconnectedPending = false;
-    if (s_controlQueue) xQueueReset(s_controlQueue);
-    if (s_dataQueue) xQueueReset(s_dataQueue);
-    if (active()) g_otaEngine.abort("connection_lost");
-  }
   const PendingAbort pendingAbort = s_pendingAbort;
   if (pendingAbort != PendingAbort::None) {
     s_pendingAbort = PendingAbort::None;

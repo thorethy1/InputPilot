@@ -61,6 +61,27 @@ fixed 32-entry HID event queue. A dedicated executor task is the only runtime
 context that calls the USB mouse/keyboard report APIs; adjacent mouse moves are
 coalesced and six queue slots are reserved for release-critical events.
 
+BLE disconnect callbacks only revoke session ownership and signal the firmware
+loop. The loop clears the secure session and OTA queues, releases held inputs,
+logs the disconnect reason and recovers advertising. USB stays initialized.
+
+To check disconnect recovery on hardware, leave BLE enabled, disconnect the
+iPhone, install `bleak`, and run the opt-in regression against the same board:
+
+```sh
+RUN_BLE=1 ESP_PORT=/dev/cu.usbmodem... INPUTPILOT_BLE_ADDRESS=... \
+  python -m pytest tests/e2e/test_ble_disconnect.py -v
+```
+
+Use the Bluetooth address, or the CoreBluetooth peripheral UUID on macOS.
+The test repeats five connect/disconnect cycles and checks advertising, USB
+responsiveness through the original serial handle, and increasing uptime.
+Also check with the iPhone app connected: close the app, then separately turn
+Bluetooth off in iOS Settings. Neither action should cause USB re-enumeration;
+after reconnecting, diagnostics should show continuing uptime. If it resets,
+capture `reset_reason` from the next boot and decode the core dump with
+`scripts/read_coredump.sh` using the ELF from the installed firmware build.
+
 On STA the device also advertises **mDNS** as `inputpilot-xxxx.local` (lowercase
 suffix; HTTP service on port 80 with TXT `path`, `id`, `fw`), so apps can
 discover it without a hard-coded IP. `GET /api/status` returns `mdns` and

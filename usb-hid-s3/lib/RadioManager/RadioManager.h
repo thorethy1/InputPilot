@@ -35,7 +35,7 @@ public:
   // Short human-readable status, e.g. "none", "ble:adv", "wifi:1.2.3.4", "wifi:ap".
   const char *statusStr();
 
-  // Called by the NimBLE disconnect callback after re-advertising is checked.
+  // Updated by advertising recovery in the firmware loop.
   void setBleAdvertisingStatus(bool active);
 
   // Live BLE state for diagnostics. Advertising is queried from NimBLE and is
@@ -65,7 +65,8 @@ private:
   void stopWifi();
   void startBle();
   void stopBle();
-  void serviceBleAdvertising();
+  bool serviceBleDisconnect();
+  void serviceBleAdvertising(bool immediate = false);
   void startSoftAp();
   void startSta(const String &ssid, const String &pass, size_t credentialIndex,
                 bool preserveSoftAp = false);
