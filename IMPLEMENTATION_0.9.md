@@ -8,6 +8,12 @@ This document defines the implementation strategy for the InputPilot 0.9 generat
 
 Development should continue through the existing beta/prerelease workflow. See [Stable and Beta Release Channels](RELEASE_CHANNELS.md).
 
+## Latest RC audit
+
+The [2026-09-07 RC audit](docs/RC_0.9_AUDIT.md) records the Macro/UI overhaul,
+persistent Disable AP setting, validation results and remaining roadmap gaps.
+Implementation completion does not mark the iOS/hardware release gates passed.
+
 ## Engineering principles
 
 Work is organized by product feature rather than artificial calendar milestones. Each feature should include its UI states, accessibility, failure behavior, automated coverage where practical and a short manual verification checklist.
@@ -235,14 +241,20 @@ The repository already contains useful Preset favorite/duplicate/delete/drag ord
 
 ## Macros
 
-- [ ] Improve list/card presentation and management.
-- [ ] Support Rename, Duplicate and confirmed Delete.
-- [ ] Support event editing/deletion/reordering where technically safe.
-- [ ] Show playback progress, repeat count and approximate duration where available.
-- [ ] Allow immediate cancellation.
-- [ ] Support Secret references where appropriate.
-- [ ] Provide Running/Completed/Cancelled/Failed feedback.
-- [ ] Guarantee cancellation/failure cleans up held input.
+- [x] Improve list/card presentation and management.
+- [x] Support Rename, Duplicate and confirmed Delete.
+- [x] Support event editing/deletion/reordering where technically safe.
+- [x] Show playback progress, repeat count and approximate duration where available.
+- [x] Allow immediate cancellation.
+- [x] Support Secret references where appropriate.
+- [x] Provide Running/Completed/Cancelled/Failed feedback.
+- [x] Guarantee cancellation/failure cleans up held input.
+
+Implementation is present; XCTest/macOS and physical-device validation are still
+pending. The existing SwiftData attributes are retained; Secret UUIDs are optional
+fields inside the event payload. See [RC audit](docs/RC_0.9_AUDIT.md) for evidence,
+limitations and the focused manual checklist. Raw keyboard reports retain their
+recorded values; timing, order and deletion remain editable.
 
 ## Secrets
 

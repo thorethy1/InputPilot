@@ -47,6 +47,12 @@ current concentration of control UI, transport code and models in `HIDControl.sw
 each milestone should extract only the area it actively changes so that refactoring
 does not become a parallel rewrite.
 
+## RC implementation audit
+
+See [0.9 RC audit — 2026-09-07](RC_0.9_AUDIT.md) for the current Macro/UI/AP
+implementation, local checks and remaining feature and hardware gates. The
+schedule below is not proof that a release gate has passed.
+
 ## Milestone progress
 
 ### M0: Foundation

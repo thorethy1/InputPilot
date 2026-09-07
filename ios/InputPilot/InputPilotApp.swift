@@ -59,15 +59,6 @@ enum AppAccent: String, CaseIterable, Identifiable {
     }
 }
 
-enum AppInterfaceStyle: String, CaseIterable, Identifiable {
-    case standard = "Standard"
-    case rounded = "Rounded"
-
-    var id: Self { self }
-    var fontDesign: Font.Design { self == .rounded ? .rounded : .default }
-    var controlRadius: CGFloat { self == .rounded ? 22 : 12 }
-}
-
 enum AccentColorCodec {
     static let defaultCustomHex = "#8E8CD8"
 
@@ -166,6 +157,29 @@ enum AppColors {
     static let destructive = error
 }
 
+// Native menu pickers can retain the tint of their UIKit backing control.
+// Observe the preference here and rebuild only the picker when its accent
+// changes. Selection bindings and the surrounding navigation stay intact.
+private struct LivePickerAccent: ViewModifier {
+    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+
+    private var accent: AppAccent { AppAccent.resolve(accentName) }
+    private var identity: String {
+        accent == .custom ? "\(accent.rawValue):\(customAccentHex)" : accent.rawValue
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .tint(accent.color(customHex: customAccentHex))
+            .id(identity)
+    }
+}
+
+extension View {
+    func livePickerAccent() -> some View { modifier(LivePickerAccent()) }
+}
+
 @MainActor enum AppModelContainer {
     static let shared: ModelContainer = {
         let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self, StoredSecret.self])
@@ -206,7 +220,6 @@ struct InputPilotApp: App {
     @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
     @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
-    @AppStorage("appInterfaceStyle") private var interfaceStyleName = AppInterfaceStyle.standard.rawValue
 
     private let container: ModelContainer = AppModelContainer.shared
 
@@ -215,8 +228,6 @@ struct InputPilotApp: App {
             ContentView()
                 .tint(accent.color(customHex: customAccentHex))
                 .preferredColorScheme(appearance.colorScheme)
-                .fontDesign(interfaceStyle.fontDesign)
-                .buttonBorderShape(.roundedRectangle(radius: interfaceStyle.controlRadius))
                 .onAppear { applyUIKitTint() }
                 .onChange(of: accentName) { _, _ in applyUIKitTint() }
                 .onChange(of: customAccentHex) { _, _ in applyUIKitTint() }
@@ -230,10 +241,6 @@ struct InputPilotApp: App {
 
     private var accent: AppAccent {
         AppAccent.resolve(accentName)
-    }
-
-    private var interfaceStyle: AppInterfaceStyle {
-        AppInterfaceStyle(rawValue: interfaceStyleName) ?? .standard
     }
 
     @MainActor

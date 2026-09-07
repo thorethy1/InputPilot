@@ -53,6 +53,7 @@ struct SecretsView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \StoredSecret.name) private var secrets: [StoredSecret]
     @Query private var presets: [HIDPreset]
+    @Query private var macros: [HIDMacro]
     @State private var showNewSecret = false
     @State private var renameTarget: StoredSecret?
     @State private var replaceTarget: StoredSecret?
@@ -67,7 +68,7 @@ struct SecretsView: View {
                 ContentUnavailableView {
                     Label("No Secrets", systemImage: "key")
                 } description: {
-                    Text("Add a password or token to reuse it in presets.")
+                    Text("Add a password or token to reuse it in presets and macros.")
                 } actions: {
                     Button("New Secret") { showNewSecret = true }
                         .buttonStyle(.borderedProminent)
@@ -217,10 +218,11 @@ struct SecretsView: View {
 
     private func deleteMessage(for secret: StoredSecret) -> String {
         let referenced = SecretReferenceScanner.presetNames(referencing: secret.name, among: presets.map { (name: $0.name, payload: $0.payload) })
+            + macros.filter { $0.events.contains { $0.secretID == secret.id } }.map { "Macro: " + $0.name }
         if referenced.isEmpty {
-            return "The secret is removed from this device. Presets that reference it will fail until they are updated."
+            return "The secret is removed from this device. Actions that reference it will fail until they are updated."
         }
-        return "Used by: \(referenced.joined(separator: ", ")). These presets will fail until the secret is replaced."
+        return "Used by: \(referenced.joined(separator: ", ")). These actions will fail until their secret reference is updated."
     }
 
     private func toggleReveal(_ secret: StoredSecret) {

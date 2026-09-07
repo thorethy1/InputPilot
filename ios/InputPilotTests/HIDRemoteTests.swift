@@ -3,6 +3,28 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    @MainActor func testRapidReleasesStillReleaseNewHeldInput() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["release_all", "mouse_button_state"])
+        await manager.releaseAll()
+        _ = await manager.send(.mouseDown(.left))
+        await manager.releaseAll()
+        XCTAssertEqual(ble.events, [.releaseAll, .mouseDown(.left), .releaseAll])
+    }
+
+    @MainActor func testPresetSecretInputIsExcludedFromMacroRecording() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["release_all", "keyboard_layout", "keyboard_key"])
+        var captured: [HIDEvent] = []
+        manager.onEvent = { captured.append($0) }
+        let result = await ActionExecutor().run(steps: [.secret("password")], layout: .us, typingDelayMs: 0, transport: manager, secretResolver: { _ in "private" })
+        guard case .success = result else { return XCTFail("Secret action failed") }
+        XCTAssertFalse(ble.events.isEmpty)
+        XCTAssertTrue(captured.isEmpty)
+        _ = await manager.send(.keyCombo("ctrl+a"))
+        XCTAssertEqual(captured, [.keyCombo("ctrl+a")])
+    }
+
     func testHandshakeRepliesAssembleAtDefaultMTUAndAcceptLegacyPackets() {
         let replies = ["secure challenge 1 aabbccddeeff " + String(repeating: "A", count: 32),
                        "secure ready " + String(repeating: "B", count: 64), "secure failed"]

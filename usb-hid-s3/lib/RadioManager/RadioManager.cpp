@@ -204,6 +204,8 @@ class FirmwareWifiManagementBackend final : public WifiManagement::Backend {
   }
 
   bool clear() override { return WifiCredentials::clear(); }
+  bool setFallbackAP(bool enabled) override { return WifiCredentials::setFallbackApEnabled(enabled); }
+  void applyFallbackAP() override { g_radio.applyFallbackApPreference(); }
 
   void apply(const std::string &provisionedSsid) override {
     g_radio.applyWifiCredentials(String(provisionedSsid.c_str()));
@@ -240,6 +242,20 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
   }
   if (message == "WIFI STATUS") {
     sendSecureReply(source, session, g_radio.wifiStatusJson());
+    return true;
+  }
+  if (message == "WIFI AP GET") {
+    sendSecureReply(source, session, WifiCredentials::fallbackApEnabled()
+        ? "{\"enabled\":true}" : "{\"enabled\":false}");
+    return true;
+  }
+  if (message == "WIFI AP ON" || message == "WIFI AP OFF") {
+    if (g_otaEngine.active()) {
+      sendSecureReply(source, session, "error ota_busy");
+    } else {
+      finishWifiManagement(source, session, WifiManagement::setFallbackAP(
+          s_wifiManagementBackend, message == "WIFI AP ON"));
+    }
     return true;
   }
   if (message == "WIFI LIST") {
@@ -962,6 +978,16 @@ void RadioManager::startSoftAp() {
     provisioningState_ = "failed";
     provisioningError_ = "network_unreachable";
   }
+  if (!WifiCredentials::fallbackApEnabled()) {
+    softAp_ = false;
+    fallbackWaiting_ = true;
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    snprintf(status_, sizeof(status_), "wifi:offline");
+    LOG_WIFI("fallback AP disabled; waiting to retry saved networks");
+    return;
+  }
+  fallbackWaiting_ = false;
   DeviceIdentity::begin();
   WiFi.mode(WIFI_AP);
   const char *apSsid = DeviceIdentity::softApSsid();
@@ -986,6 +1012,7 @@ void RadioManager::startSoftAp() {
 
 void RadioManager::startSta(const String &ssid, const String &pass,
                             size_t credentialIndex, bool preserveSoftAp) {
+  fallbackWaiting_ = false;
   staRetryPreservesSoftAp_ = preserveSoftAp && softAp_;
   if (!staRetryPreservesSoftAp_) softAp_ = false;
   staCredentialIndex_ = credentialIndex;
@@ -1044,11 +1071,11 @@ void RadioManager::finishStaConnection() {
 
 void RadioManager::serviceStaConnection() {
   if (!staConnecting_) {
-    if (softAp_) {
+    if (softAp_ || fallbackWaiting_) {
       const size_t count = WifiCredentials::count();
       const bool intervalElapsed =
           millis() - softApStartedMs_ >= WIFI_RETRY_INTERVAL_MS;
-      const size_t apClients = WiFi.softAPgetStationNum();
+      const size_t apClients = softAp_ ? WiFi.softAPgetStationNum() : 0;
       const WifiFallbackPolicy::RetryDecision decision =
           WifiFallbackPolicy::decide(count, intervalElapsed, apClients);
       if (decision == WifiFallbackPolicy::RetryDecision::Wait) return;
@@ -1064,7 +1091,7 @@ void RadioManager::serviceStaConnection() {
       // SoftAP is a fallback state, not a terminal state. Periodically run a
       // fresh asynchronous STA pass. Keep AP services alive throughout the
       // pass so discovery and authenticated TCP are not torn down.
-      LOG_WIFI("Soft-AP retry interval elapsed; retrying configured networks without stopping AP services");
+      LOG_WIFI("fallback retry interval elapsed; retrying configured networks (ap=%s)", softAp_ ? "on" : "off");
       staAttempts_ = 0;
       const WifiCreds candidate = WifiCredentials::get(0);
       startSta(candidate.ssid, candidate.pass, 0, true);
@@ -1161,6 +1188,7 @@ void RadioManager::stopWifi() {
   staConnecting_ = false;
   staRetryPreservesSoftAp_ = false;
   softAp_ = false;
+  fallbackWaiting_ = false;
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
@@ -1196,6 +1224,12 @@ void RadioManager::applyWifiCredentials(const String &provisionedSsid) {
   LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
 }
 
+void RadioManager::applyFallbackApPreference() {
+  if (!wifiEnabled() || (!softAp_ && !fallbackWaiting_)) return;
+  stopWifi();
+  startWifi();
+}
+
 std::string RadioManager::wifiStatusJson() const {
   const char *state = "disconnected";
   String ip;
@@ -1204,7 +1238,7 @@ std::string RadioManager::wifiStatusJson() const {
   } else if (WiFi.status() == WL_CONNECTED) {
     state = "connected";
     ip = WiFi.localIP().toString();
-  } else if (wifiEnabled()) {
+  } else if (wifiEnabled() && !fallbackWaiting_) {
     state = "connecting";
   }
   return "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
@@ -1522,7 +1556,8 @@ const char *RadioManager::statusStr() {
     else if (WiFi.status() == WL_CONNECTED)
       snprintf(status_, sizeof(status_), "wifi:%s+ble:%s", WiFi.localIP().toString().c_str(),
                bleState);
-    else snprintf(status_, sizeof(status_), "wifi:connecting+ble:%s", bleState);
+    else snprintf(status_, sizeof(status_), fallbackWaiting_
+                      ? "wifi:offline+ble:%s" : "wifi:connecting+ble:%s", bleState);
   } else if (mode_ == RadioMode::Ble) {
     snprintf(status_, sizeof(status_), "ble:%s", bleState);
   } else if (mode_ == RadioMode::Wifi) {

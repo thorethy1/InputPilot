@@ -26,12 +26,25 @@ enum ActionExecutionError: LocalizedError {
     }
 }
 
+enum MacroRecordingContext {
+    @TaskLocal static var suppressed = false
+}
+
 @MainActor final class ActionExecutor {
     func run(steps: [PresetScript.Step],
              layout: KeyboardLayout,
              typingDelayMs: Int,
              transport: HIDActionTransport,
              secretResolver: (String) async throws -> String) async -> Result<Void, ActionExecutionError> {
+        await MacroRecordingContext.$suppressed.withValue(true) {
+            await perform(steps: steps, layout: layout, typingDelayMs: typingDelayMs,
+                          transport: transport, secretResolver: secretResolver)
+        }
+    }
+
+    private func perform(steps: [PresetScript.Step], layout: KeyboardLayout,
+                         typingDelayMs: Int, transport: HIDActionTransport,
+                         secretResolver: (String) async throws -> String) async -> Result<Void, ActionExecutionError> {
         for step in steps {
             guard case let .text(text) = step else { continue }
             do {

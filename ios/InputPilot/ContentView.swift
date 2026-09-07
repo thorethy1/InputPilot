@@ -280,6 +280,7 @@ struct ActiveDevicePicker: View {
                 Text(device.displayName).tag(device.deviceId)
             }
         }
+        .livePickerAccent()
         .accessibilityHint("Changes the device used by Control, Firmware, and Settings.")
     }
 }
@@ -297,14 +298,10 @@ private struct ControlRootView: View {
     var body: some View {
         Group {
             if let selected {
-                List {
-                    Section("Active Device") { ActiveDevicePicker(devices: devices, selection: $selectedDeviceId) }
-                    Section("Connection") { DeviceConnectionBanner(device: selected) }
-                    Section { NavigationLink { HIDControlView(device: selected) } label: { Label("Open Trackpad, Keyboard, Presets & Macros", systemImage: "computermouse") } }
-                }
+                HIDControlView(device: selected, devices: devices)
+                    .id(selected.deviceId)
             } else { ContentUnavailableView("Select an InputPilot device", systemImage: "computermouse", description: Text("Add a device in the Devices tab first.")) }
         }
-        .navigationTitle("Control")
         .task(id: devices.map(\.deviceId)) { reconcileSelection() }
     }
 
@@ -551,10 +548,6 @@ private struct ConnectionSettingsView: View {
     @Query(sort: \StoredDevice.displayName) private var devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
-    @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
-    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
-    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
-    @AppStorage("appInterfaceStyle") private var interfaceStyleName = AppInterfaceStyle.standard.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
     private var selected: StoredDevice? {
         guard let selectedID = ActiveDeviceSelection.resolve(
@@ -574,7 +567,13 @@ private struct ConnectionSettingsView: View {
             }
             Section("Connection") {
                 Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }
+                    .livePickerAccent()
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Personalization") {
+                NavigationLink { AppearanceSettingsView() } label: {
+                    Label("Appearance", systemImage: "paintpalette")
+                }
             }
             Section("Updates") {
                 Picker("Channel", selection: $updateChannelName) {
@@ -617,18 +616,30 @@ private struct ConnectionSettingsView: View {
             Section("About") {
                 LabeledContent("App Version", value: appVersion.version)
                 LabeledContent("Build", value: appVersion.build)
-                LabeledContent("App Commit", value: appVersion.commit)
             }
+        }
+        .navigationTitle("Settings")
+        .task(id: devices.map(\.deviceId)) {
+            selectedDeviceId = ActiveDeviceSelection.reconciled(
+                savedID: selectedDeviceId,
+                availableIDs: devices.map(\.deviceId)
+            )
+        }
+    }
+    private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
+    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
+}
+
+private struct AppearanceSettingsView: View {
+    @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
+    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+    var body: some View {
+        Form {
             Section("Appearance") {
                 Picker("Interface", selection: $appearanceName) {
                     ForEach(AppAppearance.allCases) { appearance in
                         Text(appearance.rawValue).tag(appearance.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Picker("Style", selection: $interfaceStyleName) {
-                    ForEach(AppInterfaceStyle.allCases) { style in
-                        Text(style.rawValue).tag(style.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -648,15 +659,8 @@ private struct ConnectionSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Settings")
-        .task(id: devices.map(\.deviceId)) {
-            selectedDeviceId = ActiveDeviceSelection.reconciled(
-                savedID: selectedDeviceId,
-                availableIDs: devices.map(\.deviceId)
-            )
-        }
+        .navigationTitle("Appearance")
     }
-    private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
     private var selectedAccent: AppAccent { AppAccent.resolve(accentName) }
     private var customAccentBinding: Binding<Color> {
         Binding(
@@ -704,7 +708,6 @@ private struct ConnectionSettingsView: View {
         .accessibilityLabel(accent.rawValue)
         .accessibilityValue(selected ? "Selected" : "Not selected")
     }
-    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
 }
 
 private struct StatusLEDMatrixView: View {

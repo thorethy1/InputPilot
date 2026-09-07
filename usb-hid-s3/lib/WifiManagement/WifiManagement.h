@@ -9,6 +9,7 @@ enum class Operation {
   Set,
   Remove,
   Clear,
+  FallbackAP,
 };
 
 enum class Error {
@@ -33,6 +34,8 @@ class Backend {
   virtual bool save(const std::string &ssid, const std::string &password) = 0;
   virtual bool remove(const std::string &ssid) = 0;
   virtual bool clear() = 0;
+  virtual bool setFallbackAP(bool enabled) = 0;
+  virtual void applyFallbackAP() = 0;
   virtual void apply(const std::string &provisionedSsid) = 0;
 };
 
@@ -41,6 +44,7 @@ Result set(Backend &backend, const std::string &ssid,
            const std::string &password);
 Result remove(Backend &backend, const std::string &ssid);
 Result clear(Backend &backend);
+Result setFallbackAP(Backend &backend, bool enabled);
 
 // Apply is deliberately separate from persistence so the protocol layer can
 // acknowledge an accepted request before changing Wi-Fi radio state.

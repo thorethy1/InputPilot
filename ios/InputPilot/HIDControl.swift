@@ -2277,7 +2277,6 @@ enum InputPilotWiFiManager {
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport
     private var leasedTransport: HIDControlTransport?
     private var nextEventID: UInt64 = 0
-    private var lastReleaseAllAt = Date.distantPast
     init(device: StoredDevice) {
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
         let hosts = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).compactMap(\.host)
@@ -2331,14 +2330,14 @@ enum InputPilotWiFiManager {
                 await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport was lost; sequence stopped.")
                 return false
             }
-            do { try await AppLogContext.$eventID.withValue(eventID) { try await leasedTransport.send(event) }; activeTransport = leasedTransport.kind; lastError = nil; onEvent?(event); return true }
+            do { try await AppLogContext.$eventID.withValue(eventID) { try await leasedTransport.send(event) }; activeTransport = leasedTransport.kind; lastError = nil; if !MacroRecordingContext.suppressed { onEvent?(event) }; return true }
             catch { await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport failed; sequence stopped."); return false }
         }
         var failure: String?; let available = candidates(for: event).filter { $0.isAvailable && $0.state == .ready }
         appLog(.control, "id=\(eventID) candidates=\(available.map(\.kind.rawValue).joined(separator: ","))")
         for (index, transport) in available.enumerated() {
             appLog(.control, "id=\(eventID) selected=\(transport.kind.rawValue)")
-            do { try await AppLogContext.$eventID.withValue(eventID) { try await transport.send(event) }; activeTransport = transport.kind; lastError = nil; onEvent?(event); return true }
+            do { try await AppLogContext.$eventID.withValue(eventID) { try await transport.send(event) }; activeTransport = transport.kind; lastError = nil; if !MacroRecordingContext.suppressed { onEvent?(event) }; return true }
             catch {
                 failure = error.localizedDescription; appLog(.errors, "CONTROL id=\(eventID) transport=\(transport.kind.rawValue) error=\(error.localizedDescription)")
                 if !event.safeToRetryAfterUncertainDelivery {
@@ -2354,12 +2353,8 @@ enum InputPilotWiFiManager {
         return false
     }
     func releaseAll() async {
-        let now = Date()
-        guard now.timeIntervalSince(lastReleaseAllAt) >= 0.5 else {
-            appLog(.control, "release_all coalesced duplicate=yes")
-            return
-        }
-        lastReleaseAllAt = now
+        // A recent release does not prove no new input has been held since.
+        // In particular, short macro repeats must each release their own input.
         await send(.releaseAll)
     }
     func releaseAllPreservingError() async {
@@ -2596,54 +2591,19 @@ enum PresetScript {
     init(name: String, payload: String, shortcut: Bool = false, favorite: Bool = false, order: Int = 0, enterAfter: Bool = false, typingDelayMs: Int = 0, script: Bool = false, icon: String = "keyboard") { self.script = script; self.id = UUID(); self.icon = icon; self.name = name; self.payload = payload; self.shortcut = shortcut; self.favorite = favorite; self.order = order; self.enterAfter = enterAfter; self.typingDelayMs = typingDelayMs }
 }
 
-struct RecordedEvent: Codable { let offset: TimeInterval; let event: HIDEvent }
-@Model final class HIDMacro {
-    var name: String; var macroDescription: String = ""; var encodedEvents: Data; var createdAt: Date
-    init(name: String, description: String = "", events: [RecordedEvent]) { self.name = name; macroDescription = description; encodedEvents = (try? JSONEncoder().encode(events)) ?? Data(); createdAt = Date() }
-    var events: [RecordedEvent] { (try? JSONDecoder().decode([RecordedEvent].self, from: encodedEvents)) ?? [] }
-}
-
-@MainActor final class MacroController: ObservableObject {
-    @Published var isRecording = false; @Published var isPlaying = false; @Published var recorded: [RecordedEvent] = []
-    private var started = Date(); private var playback: Task<Void, Never>?
-    var recordingDuration: TimeInterval { isRecording ? Date().timeIntervalSince(started) : 0 }
-    func startRecording() { recorded = []; started = Date(); isRecording = true }
-    func capture(_ event: HIDEvent) {
-        guard isRecording else { return }
-        let now = Date().timeIntervalSince(started)
-        if case let .mouseMove(x, y) = event, let last = recorded.last,
-           now - last.offset <= 0.02, case let .mouseMove(lastX, lastY) = last.event {
-            recorded[recorded.count - 1] = RecordedEvent(offset: now, event: .mouseMove(Int16(clamping: Int(lastX) + Int(x)), Int16(clamping: Int(lastY) + Int(y))))
-        } else { recorded.append(RecordedEvent(offset: now, event: event)) }
-    }
-    func stopRecording() { isRecording = false }
-    func play(_ macro: HIDMacro, speed: Double, repeats: Int?, delay: Double, manager: HIDConnectionManager) {
-        stop(manager: manager); isPlaying = true
-        playback = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(delay)) } catch { self?.isPlaying = false; return }; var iteration = 0
-            guard manager.beginOrderedSession(lowLatency: macro.events.first?.event.prefersLowLatency ?? true) else { self?.isPlaying = false; return }
-            defer { manager.endOrderedSession() }
-            while !Task.isCancelled && (repeats == nil || iteration < repeats!) {
-                var previous = 0.0
-                for item in macro.events { if Task.isCancelled { break }; do { try await Task.sleep(for: .seconds(max(0, item.offset - previous) / speed)) } catch { break }; guard !Task.isCancelled else { break }; previous = item.offset; if !(await manager.send(item.event)) { self?.isPlaying = false; await manager.releaseAllPreservingError(); return } }
-                iteration += 1
-            }
-            await manager.releaseAll(); self?.isPlaying = false
-        }
-    }
-    func stop(manager: HIDConnectionManager) { playback?.cancel(); playback = nil; isPlaying = false; Task { await manager.releaseAll() } }
-}
-
 struct HIDControlView: View {
     @Bindable var device: StoredDevice
+    var devices: [StoredDevice]
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @StateObject private var manager: HIDConnectionManager
     @StateObject private var macros = MacroController()
     @State private var section: ControlSection = .trackpad
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     enum ControlSection: String, CaseIterable, Identifiable { case trackpad = "Trackpad", keyboard = "Keyboard", presets = "Presets", macros = "Macros"; var id: Self { self } }
-    init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
+    init(device: StoredDevice, devices: [StoredDevice] = []) { self.device = device; self.devices = devices; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            DeviceConnectionBanner(device: device, showsRecoveryActions: false)
+            DeviceConnectionBanner(device: device)
                 .padding(.horizontal)
                 .padding(.bottom, AppTheme.Spacing.compact)
             HStack {
@@ -2655,17 +2615,55 @@ struct HIDControlView: View {
                 Picker("Connection", selection: $manager.mode) {
                     ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) }
                 }
+                .livePickerAccent()
                 .labelsHidden()
+                .disabled(macros.isPlaying)
             }
             .padding(.horizontal)
-            Picker("Control", selection: $section) { ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
-            Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager); case .macros: MacrosView(manager: manager, controller: macros) } }
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    controlPicker.pickerStyle(.menu)
+                } else {
+                    controlPicker.pickerStyle(.segmented)
+                }
+            }
+            .padding(.horizontal)
+            if macros.isRecording {
+                Label("Recording · use Trackpad or Keyboard, then stop in Macros", systemImage: "record.circle")
+                    .font(.caption).foregroundStyle(AppColors.error).padding(.horizontal)
+            }
+            Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager).disabled(macros.isRecording); case .macros: MacrosView(manager: manager, controller: macros) } }
         }
         .navigationTitle(device.displayName).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if devices.count > 1 {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        ActiveDevicePicker(devices: devices, selection: $selectedDeviceId)
+                    } label: {
+                        Label("Switch Device", systemImage: "computermouse")
+                    }
+                    .disabled(macros.isPlaying || macros.isRecording || !macros.recorded.isEmpty)
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) { if !manager.unsupportedControlMessages.isEmpty { Text(manager.unsupportedControlMessages.joined(separator: " ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal).accessibilityIdentifier("capability-limitations") } }
         .task { manager.onEvent = { macros.capture($0) }; await manager.connect() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in macros.stop(manager: manager) }
-        .onDisappear { Task { macros.stop(manager: manager); await manager.disconnect() } }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            macros.stopRecording(); macros.cancel()
+            Task { await macros.waitForPlayback(); await manager.releaseAll() }
+        }
+        .onDisappear {
+            macros.stopRecording(); macros.cancel()
+            Task { await macros.waitForPlayback(); await manager.disconnect() }
+        }
+    }
+
+    private var controlPicker: some View {
+        Picker("Control", selection: $section) {
+            ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .disabled(macros.isPlaying)
     }
 }
 
@@ -2944,10 +2942,4 @@ struct TrackpadView: View {
             await manager.releaseAll()
         }
     }
-}
-
-struct MacrosView: View {
-    @ObservedObject var manager: HIDConnectionManager; @ObservedObject var controller: MacroController; @Environment(\.modelContext) private var context; @Query(sort: \HIDMacro.createdAt, order: .reverse) private var saved: [HIDMacro]; @State private var speed = 1.0; @State private var repeatCount = 1; @State private var delay = 0; @State private var showSave = false; @State private var macroName = ""; @State private var macroDescription = ""
-    var body: some View { VStack { if controller.isPlaying { Button("STOP", role: .destructive) { UINotificationFeedbackGenerator().notificationOccurred(.warning); controller.stop(manager: manager) }.buttonStyle(.borderedProminent).tint(AppColors.destructive).controlSize(.large) }; HStack { Button(controller.isRecording ? "Stop & Save" : "Record") { if controller.isRecording { controller.stopRecording(); macroName = "Macro \(saved.count + 1)"; showSave = true; UIImpactFeedbackGenerator(style: .medium).impactOccurred() } else { controller.startRecording(); UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }.buttonStyle(.borderedProminent); if controller.isRecording { Button("Cancel", role: .cancel) { controller.stopRecording(); controller.recorded = [] } }; TimelineView(.periodic(from: .now, by: 1)) { _ in Text(recordingStatus) } }; Form { Picker("Speed", selection: $speed) { ForEach([0.5, 1, 1.5, 2], id: \.self) { Text("\($0, specifier: "%g")×").tag($0) } }; Picker("Repeat", selection: $repeatCount) { ForEach([1, 2, 5, 10, 0], id: \.self) { Text($0 == 0 ? "Infinite" : "\($0)×").tag($0) } }; Picker("Start delay", selection: $delay) { ForEach([0, 3, 5, 10], id: \.self) { Text("\($0) s").tag($0) } }; Section("Saved") { ForEach(saved) { macro in HStack { VStack(alignment: .leading) { TextField("Name", text: Binding(get: { macro.name }, set: { macro.name = $0 })); Text("\(macro.events.count) events").font(.caption) }; Spacer(); Button("Play") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); controller.play(macro, speed: speed, repeats: repeatCount == 0 ? nil : repeatCount, delay: Double(delay), manager: manager) } }.swipeActions { Button(role: .destructive) { context.delete(macro) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDMacro(name: macro.name + " Copy", description: macro.macroDescription, events: macro.events)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } } } } } .alert("Save Macro", isPresented: $showSave) { TextField("Name", text: $macroName); TextField("Description (optional)", text: $macroDescription); Button("Save") { context.insert(HIDMacro(name: macroName.isEmpty ? "Macro" : macroName, description: macroDescription, events: controller.recorded)); controller.recorded = [] }; Button("Cancel", role: .cancel) { controller.recorded = [] } } }
-    private var recordingStatus: String { guard controller.isRecording else { return "\(controller.recorded.count) events" }; let seconds = Int(controller.recordingDuration); return String(format: "🔴 Recording · %02d:%02d · %d events", seconds / 60, seconds % 60, controller.recorded.count) }
 }

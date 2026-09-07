@@ -41,8 +41,15 @@ Result clear(Backend &backend) {
   return {Operation::Clear, Error::None, {}};
 }
 
+Result setFallbackAP(Backend &backend, bool enabled) {
+  return {Operation::FallbackAP,
+          backend.setFallbackAP(enabled) ? Error::None : Error::StorageFailed, {}};
+}
+
 void apply(Backend &backend, const Result &result) {
-  if (result.accepted()) backend.apply(result.provisionedSsid);
+  if (!result.accepted()) return;
+  if (result.operation == Operation::FallbackAP) backend.applyFallbackAP();
+  else backend.apply(result.provisionedSsid);
 }
 
 const char *acceptedReply(Operation operation) {
@@ -51,6 +58,8 @@ const char *acceptedReply(Operation operation) {
       return "{\"operation\":\"wifi_set\",\"status\":\"accepted\"}";
     case Operation::Remove:
       return "{\"operation\":\"wifi_remove\",\"status\":\"accepted\"}";
+    case Operation::FallbackAP:
+      return "ok";
     case Operation::Clear:
       return "{\"operation\":\"wifi_clear\",\"status\":\"accepted\"}";
   }

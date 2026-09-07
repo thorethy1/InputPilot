@@ -53,6 +53,7 @@ public:
   // Authenticated, transport-independent Wi-Fi status payload used by both
   // BLE and TCP Secure Protocol sessions.
   std::string wifiStatusJson() const;
+  void applyFallbackApPreference();
 
   // Invalidate authenticated sessions immediately after BOOT rotates pairing.
   void pairingCredentialRotated();
@@ -76,6 +77,7 @@ private:
 
   RadioMode mode_ = RadioMode::None;
   bool softAp_ = false;
+  bool fallbackWaiting_ = false;
   bool staConnecting_ = false;
   uint32_t staConnectStartedMs_ = 0;
   size_t staCredentialIndex_ = 0;

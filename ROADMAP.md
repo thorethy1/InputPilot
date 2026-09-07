@@ -1,5 +1,7 @@
 # InputPilot Roadmap
 
+Current implementation and open release blockers: [0.9 RC audit — 2026-09-07](docs/RC_0.9_AUDIT.md).
+
 ## 🎨 0.9.x — Native iOS Experience, Shortcuts & Automation
 
 ### Goal

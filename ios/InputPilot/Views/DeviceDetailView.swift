@@ -22,6 +22,9 @@ struct DeviceDetailView: View {
     @State private var keepAwakeMessage: String?
     @State private var managementBusy = false
     @State private var managementMessage: String?
+    @State private var fallbackApEnabled: Bool?
+    @State private var apBusy = false
+    @State private var apMessage: String?
     @State private var wifiNetworks: [String] = []
     @State private var newWifiSSID = ""
     @State private var newWifiPassword = ""
@@ -97,21 +100,48 @@ struct DeviceDetailView: View {
             Section("Device") {
                 TextField("Friendly Name", text: $displayName)
                     .onSubmit { saveDisplayName() }
-                LabeledContent("Device ID", value: device.deviceId)
-                LabeledContent("USB Serial Number", value: usbSerialNumber.isEmpty ? "Unavailable" : usbSerialNumber)
-                LabeledContent("Hostname", value: device.mdnsHost)
-                if let staIP = device.staIP,
-                   DeviceEndpointResolver.sanitizeHost(staIP)
-                    != DeviceEndpointResolver.sanitizeHost(device.mdnsHost) {
-                    LabeledContent("IP", value: staIP)
+                DisclosureGroup("Connection Details") {
+                    LabeledContent("Device ID", value: device.deviceId)
+                    LabeledContent("USB Serial Number", value: usbSerialNumber.isEmpty ? "Unavailable" : usbSerialNumber)
+                    LabeledContent("Hostname", value: device.mdnsHost)
+                    if let staIP = device.staIP,
+                       DeviceEndpointResolver.sanitizeHost(staIP)
+                        != DeviceEndpointResolver.sanitizeHost(device.mdnsHost) {
+                        LabeledContent("IP", value: staIP)
+                    }
                 }
             }
 
             Section("Software") {
                 LabeledContent("Firmware", value: device.firmwareVersion ?? "Unknown")
-                LabeledContent("Secure Protocol", value: "v\(device.protocolVersion)")
-                LabeledContent("OTA Schema", value: String(device.otaSchema))
-                LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
+                DisclosureGroup("Firmware Details") {
+                    LabeledContent("Secure Protocol", value: "v\(device.protocolVersion)")
+                    LabeledContent("OTA Schema", value: String(device.otaSchema))
+                    LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
+                }
+            }
+
+            Section {
+                Toggle("Disable AP", isOn: Binding(
+                    get: { fallbackApEnabled == false },
+                    set: { disabled in Task { await setFallbackAP(enabled: !disabled) } }
+                ))
+                .disabled(fallbackApEnabled == nil || apBusy)
+                if apBusy { ProgressView("Updating access point…") }
+                if let apMessage {
+                    Text(apMessage).font(.caption).foregroundStyle(.secondary)
+                }
+                if device.capabilities.contains("secure_wifi_setup") {
+                    Button("Refresh AP Status") { Task { await loadFallbackAP() } }
+                        .disabled(apBusy)
+                } else {
+                    Text("Update firmware to configure the fallback access point.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Wi-Fi Access Point")
+            } footer: {
+                Text("Disables the InputPilot fallback hotspot, including when no saved network is available. Saved Wi-Fi connections and Bluetooth remain available. The preference survives restarts.")
             }
 
             if device.capabilities.contains("secure_wifi_setup") {
@@ -245,6 +275,7 @@ struct DeviceDetailView: View {
             await loadDeviceMetadata()
             await loadUSBIdentity()
             await loadWiFiNetworks()
+            await loadFallbackAP()
         }
         .onAppear {
             displayName = device.displayName
@@ -384,6 +415,52 @@ struct DeviceDetailView: View {
         wifiNetworks = networks
         device.cacheWiFiNetworks(networks)
         try? modelContext.save()
+    }
+
+    @MainActor
+    private func apRequest(_ command: String) async throws -> String {
+        if bluetooth.state == .ready { return try await bluetooth.request(command) }
+        guard hasPairingKey, let host = wifiControlHost else { throw TransportError.unavailable }
+        return try await InputPilotWiFiManager.session(host: host, deviceId: device.deviceId).request(command)
+    }
+
+    @MainActor
+    private func loadFallbackAP() async {
+        guard device.capabilities.contains("secure_wifi_setup"), !apBusy else { return }
+        apBusy = true
+        defer { apBusy = false }
+        do {
+            let reply = try await apRequest("WIFI AP GET")
+            if reply.hasPrefix("error") {
+                fallbackApEnabled = nil
+                apMessage = "Update firmware to configure the fallback access point."
+                return
+            }
+            struct Status: Decodable { let enabled: Bool }
+            fallbackApEnabled = try JSONDecoder().decode(Status.self, from: Data(reply.utf8)).enabled
+            apMessage = nil
+        } catch {
+            fallbackApEnabled = nil
+            apMessage = "Could not read AP status. Reconnect and refresh."
+        }
+    }
+
+    @MainActor
+    private func setFallbackAP(enabled: Bool) async {
+        guard !apBusy else { return }
+        apBusy = true
+        defer { apBusy = false }
+        do {
+            let reply = try await apRequest(enabled ? "WIFI AP ON" : "WIFI AP OFF")
+            guard reply.trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
+                throw TransportError.failed("The device could not save the AP preference. Try again after any firmware update finishes.")
+            }
+            fallbackApEnabled = enabled
+            apMessage = enabled ? "Fallback hotspot enabled." : "Fallback hotspot disabled."
+        } catch {
+            fallbackApEnabled = nil
+            apMessage = "Could not confirm the AP change. Reconnect over Bluetooth or your saved Wi-Fi network and refresh AP status."
+        }
     }
 
     @MainActor

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Refresh native active-device and transport pickers immediately when the accent changes, including edits to a custom color, while preserving the selected device, transport and navigation.
+
+- Overhaul the macro library with search, editable names/descriptions, duplicate and confirmed delete, event editing/reordering, playback progress, repeat estimates and explicit completion/cancellation/failure states. Preserve legacy recordings, add Keychain Secret references and keep duplicate execution blocked until held-input cleanup finishes.
+- Open Control directly for the active device, add device switching in its toolbar, show recording status across control sections and use an accessible section menu at larger text sizes. Give Appearance its own Settings page, remove Standard/Rounded styling, and group device/firmware details into expandable sections.
+- Add Device Details → Disable AP with a firmware-persisted preference: suppress the fallback hotspot while retaining saved Wi-Fi station connections, retry behavior and Bluetooth. Feature detection works without enlarging BLE discovery metadata; older firmware prompts for an update.
+- Prevent preset Secrets from entering macro recordings, and ensure rapid release-all requests still release input held since the previous request.
+
 - Move BLE disconnect cleanup, HID release, logging and advertising recovery out of the NimBLE host callback into the firmware loop to reduce stack pressure when the phone disconnects. Clear the old secure session and OTA queues before processing reconnect traffic, and decode NimBLE HCI disconnect reasons in diagnostics.
 
 - Rework the Apple Shortcuts integration for real hardware use: App Intents share one long-lived connection per device and now run strictly one after another, so several Shortcuts fired in quick succession can no longer interleave typing sessions, connects or release-alls; a run keeps waiting while the device is still starting up (radio powering on, BLE scan, Wi-Fi handshake) instead of failing the moment every transport reports offline; the Bluetooth transport persists its CoreBluetooth peripheral identifier so Shortcuts reconnect from a cold app start without relying on background scanning; the app declares the bluetooth-central background mode so Shortcuts may use Bluetooth while InputPilot is backgrounded; and the shared store opens with an in-memory fallback instead of crashing when a background launch cannot open the database.

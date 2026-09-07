@@ -11,6 +11,9 @@ class FakeBackend final : public WifiManagement::Backend {
   bool saveResult = true;
   bool removeResult = true;
   bool clearResult = true;
+  bool apResult = true;
+  bool apEnabled = true;
+  unsigned apApplyCalls = 0;
   unsigned saveCalls = 0;
   unsigned removeCalls = 0;
   unsigned clearCalls = 0;
@@ -37,6 +40,14 @@ class FakeBackend final : public WifiManagement::Backend {
     ++clearCalls;
     return clearResult;
   }
+
+  bool setFallbackAP(bool enabled) override {
+    if (!apResult) return false;
+    apEnabled = enabled;
+    return true;
+  }
+
+  void applyFallbackAP() override { ++apApplyCalls; }
 
   void apply(const std::string &provisionedSsid) override {
     ++applyCalls;
@@ -131,8 +142,48 @@ void test_clear_reports_storage_failure_and_applies_only_on_success() {
   TEST_ASSERT_EQUAL_UINT(1, backend.applyCalls);
 }
 
+void test_ap_preference_is_persisted_before_radio_transition() {
+  FakeBackend backend;
+  const auto result = WifiManagement::setFallbackAP(backend, false);
+  TEST_ASSERT_TRUE(result.accepted());
+  TEST_ASSERT_FALSE(backend.apEnabled);
+  TEST_ASSERT_EQUAL_UINT(0, backend.apApplyCalls);
+  TEST_ASSERT_EQUAL_STRING("ok", WifiManagement::acceptedReply(result.operation));
+  WifiManagement::apply(backend, result);
+  TEST_ASSERT_EQUAL_UINT(1, backend.apApplyCalls);
+  TEST_ASSERT_EQUAL_UINT(0, backend.applyCalls);
+  const auto enabled = WifiManagement::setFallbackAP(backend, true);
+  TEST_ASSERT_TRUE(enabled.accepted());
+  TEST_ASSERT_TRUE(backend.apEnabled);
+}
+
+void test_failed_ap_preference_does_not_change_radio_state() {
+  FakeBackend backend;
+  backend.apResult = false;
+  const auto result = WifiManagement::setFallbackAP(backend, false);
+  TEST_ASSERT_FALSE(result.accepted());
+  TEST_ASSERT_TRUE(backend.apEnabled);
+  WifiManagement::apply(backend, result);
+  TEST_ASSERT_EQUAL_UINT(0, backend.apApplyCalls);
+  TEST_ASSERT_EQUAL_UINT(0, backend.applyCalls);
+}
+
+void test_clearing_networks_preserves_disabled_ap_preference() {
+  FakeBackend backend;
+  WifiManagement::setFallbackAP(backend, false);
+  const auto result = WifiManagement::clear(backend);
+  TEST_ASSERT_TRUE(result.accepted());
+  TEST_ASSERT_FALSE(backend.apEnabled);
+  WifiManagement::apply(backend, result);
+  TEST_ASSERT_EQUAL_UINT(1, backend.applyCalls);
+  TEST_ASSERT_EQUAL_UINT(0, backend.apApplyCalls);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_ap_preference_is_persisted_before_radio_transition);
+  RUN_TEST(test_failed_ap_preference_does_not_change_radio_state);
+  RUN_TEST(test_clearing_networks_preserves_disabled_ap_preference);
   RUN_TEST(test_set_persists_then_defers_radio_transition);
   RUN_TEST(test_set_rejects_invalid_credentials_before_storage);
   RUN_TEST(test_set_reports_storage_failure_without_transition);
