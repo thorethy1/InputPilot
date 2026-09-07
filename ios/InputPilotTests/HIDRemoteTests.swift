@@ -5,7 +5,7 @@ import XCTest
 final class HIDRemoteTests: XCTestCase {
     @MainActor func testRapidReleasesStillReleaseNewHeldInput() async {
         let ble = MockTransport(kind: .bluetooth, available: true)
-        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["release_all", "mouse_button_state"])
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "mouse_button_state"])
         await manager.releaseAll()
         _ = await manager.send(.mouseDown(.left))
         await manager.releaseAll()
@@ -14,7 +14,7 @@ final class HIDRemoteTests: XCTestCase {
 
     @MainActor func testPresetSecretInputIsExcludedFromMacroRecording() async {
         let ble = MockTransport(kind: .bluetooth, available: true)
-        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["release_all", "keyboard_layout", "keyboard_key"])
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "keyboard_layout", "keyboard_key"])
         var captured: [HIDEvent] = []
         manager.onEvent = { captured.append($0) }
         let result = await ActionExecutor().run(steps: [.secret("password")], layout: .us, typingDelayMs: 0, transport: manager, secretResolver: { _ in "private" })
