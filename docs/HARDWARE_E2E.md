@@ -102,3 +102,38 @@ replace this gate.
   disconnect occurs through at least five complete images.
 - Verify credentials, secure plaintext, session keys and typed content never
   appear in diagnostics exports or logs.
+
+
+## Apple Shortcuts cold-start regression matrix
+
+Use the updated iOS app and firmware. Complete USB pairing and grant Bluetooth
+and local-network permissions once. Record iOS/app/firmware versions, elapsed
+connection time, transport and the exact shortcut result for each run.
+
+- Run Connect Device → Send Text → Send Keyboard Shortcut and a multi-step
+  preset without opening InputPilot first. Repeat with the app suspended,
+  terminated, and after an iPhone reboot and first unlock. Check that text and
+  key combinations arrive exactly once and in order.
+- Repeat in BLE-only mode with Wi-Fi unavailable, Wi-Fi-only mode with Bluetooth
+  off, and Automatic with each radio unavailable in turn. A ready excluded
+  transport must not count as successful connection.
+- BLE: keep the saved device/trust but remove its
+  `inputpilot.blePeripheral.<deviceId>` preference in a development build to
+  force discovery. Start a shortcut in the background; verify a filtered scan
+  finds the compact identity and finishes authentication. Repeat after an
+  ESP32 restart and with a stale cached peripheral identifier.
+- BLE: start a foreground scan, background the app, then run a shortcut;
+  verify scanning switches to the service-filtered background path.
+- Wi-Fi: change the ESP32 DHCP address, retaining the old IP in the saved
+  device. With BLE off, verify the old socket attempt expires and the saved
+  mDNS hostname connects. Also test a direct IP/VPN endpoint without mDNS.
+- Make both transports unreachable: the shortcut must fail within its bounded
+  connection wait, and later shortcut actions must not run. Restore the device
+  and run again. Cancel during the connection wait and while runs are queued;
+  cancelled work must not type later.
+- Start several shortcuts rapidly: sequences must remain serialized. Drop the
+  active transport halfway through a preset; verify failure without replaying
+  the sequence on the other transport.
+- Upgrade order: updated app + old firmware must still discover in the
+  foreground and reconnect through a cached identifier; then update firmware
+  and verify background discovery without the cached identifier.

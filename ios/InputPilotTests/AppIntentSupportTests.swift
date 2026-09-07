@@ -139,6 +139,89 @@ private final class IntentMockTransport: HIDControlTransport {
         XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
     }
 
+    func testReadinessIgnoresReadyTransportExcludedByMode() async {
+        let previous = UserDefaults.standard.string(forKey: "connectionMode")
+        defer { UserDefaults.standard.set(previous, forKey: "connectionMode") }
+        for mode in [ConnectionMode.wifiOnly, .bluetoothOnly] {
+            let ble = IntentMockTransport(kind: .bluetooth, state: mode == .wifiOnly ? .ready : .connecting)
+            let tcp = IntentMockTransport(kind: .tcp, state: mode == .bluetoothOnly ? .ready : .connecting)
+            let manager = HIDConnectionManager(ble: ble, tcp: tcp)
+            manager.mode = mode
+            let ready = await manager.waitUntilReady(timeout: 0.2)
+            XCTAssertFalse(ready)
+        }
+    }
+
+    func testWiFiColdStartSucceedsWhenBluetoothUnavailable() async throws {
+        let ble = UnavailableHIDControlTransport(kind: .bluetooth)
+        let tcp = IntentMockTransport(kind: .tcp, state: .offline)
+        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["keyboard_layout", "release_all"])
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            tcp.state = .ready
+        }
+        let outcome = await AppIntentSupport.run(preset: HIDPreset(name: "Wi-Fi", payload: "hi"),
+                                                 manager: manager, context: try makeContext(), readinessTimeout: 2)
+        XCTAssertTrue(outcome.success, outcome.message)
+        XCTAssertFalse(tcp.events.isEmpty)
+        XCTAssertEqual(manager.activeTransport, .tcp)
+    }
+
+    func testConnectOutcomeReportsFailureWhenDeviceNeverConnects() async {
+        let outcome = await AppIntentSupport.connectOutcome(manager: makeManager(ready: false), timeout: 0.1)
+        XCTAssertFalse(outcome.success)
+        XCTAssertTrue(outcome.message.contains("did not finish connecting"))
+    }
+
+    func testCancelledReadinessWaitStopsPromptly() async {
+        let manager = makeManager(ready: false)
+        let task = Task { @MainActor in await manager.waitUntilReady(timeout: 25) }
+        task.cancel()
+        let start = Date()
+        let ready = await task.value
+        XCTAssertFalse(ready)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+    }
+
+    func testCancelledQueuedIntentDoesNotExecuteItsWork() async {
+        var didExecute = false
+        let task = Task { @MainActor in
+            await AppIntentSupport.serialized {
+                didExecute = true
+                return PresetRunOutcome(success: true, message: "Unexpected")
+            }
+        }
+        task.cancel()
+        let outcome = await task.value
+        XCTAssertFalse(outcome.success)
+        XCTAssertFalse(didExecute)
+    }
+
+    func testAddingWiFiFallbackPreservesTheSharedSession() async {
+        let deviceId = "intent-wifi-session"
+        let original = InputPilotWiFiManager.session(host: "192.0.2.10", deviceId: deviceId)
+        let withFallback = InputPilotWiFiManager.session(host: "192.0.2.10", deviceId: deviceId,
+                                                       fallbackHosts: ["inputpilot-test.local"])
+        XCTAssertTrue(original === withFallback)
+        await InputPilotWiFiManager.removeSessions(deviceId: deviceId)
+    }
+
+    func testChangingFallbackHostnameInvalidatesIntentManagerCache() {
+        let device = StoredDevice(deviceId: "cache-fallback", displayName: "Test", mdnsHost: "old.local")
+        device.staIP = "192.0.2.1"
+        let first = AppIntentSupport.manager(for: device)
+        device.mdnsHost = "new.local"
+        XCTAssertFalse(first === AppIntentSupport.manager(for: device))
+    }
+
+    func testCompactAndLegacyBluetoothIdentitiesMatchTheSameDevice() {
+        let compact = Data([0x49, 0x50, 0x00, 0x11, 0x22, 0xab, 0xcd, 0xff])
+        XCTAssertEqual(BLEDeviceDiscoveryManager.deviceId(from: compact), "001122abcdff")
+        XCTAssertEqual(BLEDeviceDiscoveryManager.deviceId(from: Data("IP001122ABCDFF".utf8)), "001122abcdff")
+        XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data(compact.dropLast())))
+        XCTAssertNil(BLEDeviceDiscoveryManager.deviceId(from: Data([0, 0]) + compact.dropFirst(2)))
+    }
+
     func testSerializedRunsExecuteOneAfterAnother() async {
         @MainActor final class RunLog {
             var entries: [String] = []

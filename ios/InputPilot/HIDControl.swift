@@ -151,7 +151,11 @@ struct USBIdentity: Codable, Equatable {
 
 final class TCPHIDControlTransport: HIDControlTransport {
     let kind = TransportKind.tcp
-    private let host: NWEndpoint.Host; private let deviceId: String; private var connection: NWConnection?
+    private var host: NWEndpoint.Host { NWEndpoint.Host(hosts[hostIndex]) }
+    private var hosts: [String]
+    private var hostIndex = 0
+    private var connectionTimeoutWork: DispatchWorkItem?
+    private let deviceId: String; private var connection: NWConnection?
     private var secureChannel: SecureChannel?
     private(set) var isAvailable = false
     private(set) var state: TransportConnectionState = .offline
@@ -172,7 +176,13 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var otaCancelled = false
     private var otaTransferActive = false
     private var otaUsesWindowedFlow = false
-    init(host: String, deviceId: String, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout }
+    init(host: String, deviceId: String, authTimeout: TimeInterval = 4, fallbackHosts: [String] = []) {
+        hosts = [host] + fallbackHosts.filter { $0 != host }
+        self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout
+    }
+    func addFallbackHosts(_ candidates: [String]) {
+        for candidate in candidates where !hosts.contains(candidate) { hosts.append(candidate) }
+    }
     func connect() async {
         shouldReconnect = true
         reconnectWork?.cancel(); reconnectWork = nil
@@ -183,6 +193,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
             guard let self, let conn, self.connection === conn else { return }
             switch state {
             case .ready:
+                self.connectionTimeoutWork?.cancel(); self.connectionTimeoutWork = nil
                 appLog(.tcp, "connected host=\(self.host) deviceId=\(self.deviceId); authenticating")
                 self.startReceiveLoop(on: conn)
                 if let secret = PairingKeyStore.load(deviceId: self.deviceId),
@@ -197,10 +208,12 @@ final class TCPHIDControlTransport: HIDControlTransport {
                 } else { self.failAuthentication(on: conn) }
             case .failed, .cancelled:
                 appLog(.tcp, "connection ended host=\(self.host) state=\(String(describing: state)) reconnect=\(self.shouldReconnect)")
+                self.connectionTimeoutWork?.cancel(); self.connectionTimeoutWork = nil
                 self.authTimeoutWork?.cancel(); self.authTimeoutWork = nil; self.receiving = false; self.receiveBuffer.removeAll(); self.secureChannel = nil; self.isAvailable = false; self.connection = nil; self.failPendingReplies(TransportError.unavailable)
                 let authFailed = self.state == .authenticationFailed
                 self.state = authFailed ? .authenticationFailed : (self.shouldReconnect ? .reconnecting : .offline)
                 if self.shouldReconnect && !authFailed {
+                    self.hostIndex = (self.hostIndex + 1) % self.hosts.count
                     self.reconnectWork?.cancel()
                     let work = DispatchWorkItem { [weak self] in
                         guard let self, self.shouldReconnect else { return }
@@ -213,6 +226,15 @@ final class TCPHIDControlTransport: HIDControlTransport {
             default: self.isAvailable = false
             }
         }
+        // Bound unreachable addresses and NWConnection.waiting (e.g. a stale
+        // DHCP lease) so the next saved endpoint gets a turn during an intent.
+        let timeout = DispatchWorkItem { [weak self, weak conn] in
+            guard let self, let conn, self.connection === conn,
+                  self.state != .ready, self.state != .authenticating else { return }
+            self.failConnection("Wi-Fi endpoint connection timed out.", on: conn)
+        }
+        connectionTimeoutWork = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timeout)
         conn.start(queue: .main)
     }
     private func startReceiveLoop(on conn: NWConnection) {
@@ -607,7 +629,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
             appLog(.tcp, "id=\(eid) delivered")
         } catch { appLog(.errors, "TCP id=\(eid) error=\(error.localizedDescription)"); isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
     }
-    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); reconnectWork = nil; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); failPendingReplies(TransportError.unavailable); isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; reconnectWork?.cancel(); reconnectWork = nil; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); failPendingReplies(TransportError.unavailable); isAvailable = false; state = .offline }
 }
 
 enum FirmwareUpdateState: Equatable {
@@ -807,6 +829,11 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
 
     override init() { super.init(); central = CBCentralManager(delegate: self, queue: .main) }
     static func deviceId(from manufacturerData: Data) -> String? {
+        // Compact identity fits alongside the 128-bit service UUID in the
+        // primary 31-byte advertisement. Keep decoding older firmware too.
+        if manufacturerData.count == 8, manufacturerData.prefix(2) == Data("IP".utf8) {
+            return manufacturerData.dropFirst(2).map { String(format: "%02x", $0) }.joined()
+        }
         guard let value = String(data: manufacturerData, encoding: .utf8), value.count == 14,
               value.hasPrefix("IP"), value.dropFirst(2).allSatisfy({ $0.isHexDigit }) else { return nil }
         return String(value.dropFirst(2)).lowercased()
@@ -1561,9 +1588,8 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     // A persisted CoreBluetooth identifier lets the transport reconnect to a
     // known peripheral without scanning. That is what makes App Intents from
     // Apple Shortcuts work on a cold start: background scanning is throttled
-    // and the advertisement carries the device identity in manufacturer data
-    // rather than a service UUID, so restore the identifier before the first
-    // scan attempt.
+    // so restore the identifier before the first scan attempt. Service-filtered
+    // discovery is the fallback when the identifier is missing or stale.
     private static func persistedIdentifierKey(deviceId: String) -> String { "inputpilot.blePeripheral.\(deviceId.lowercased())" }
     private func rememberPeripheralIdentifier(_ identifier: UUID) {
         peripheralIdentifier = identifier
@@ -1600,9 +1626,11 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             return
         }
         state = state == .reconnecting ? .reconnecting : .discovering
-        // Identity is advertised in manufacturer data because the compact BLE
-        // advertisement cannot also carry the 128-bit service UUID.
-        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        // iOS requires an explicit service filter for background discovery.
+        // Legacy firmware without advertised services remains discoverable in
+        // the foreground; cached peripheral reconnects work in either state.
+        let services: [CBUUID]? = UIApplication.shared.applicationState == .active ? nil : [service]
+        central.scanForPeripherals(withServices: services, options: nil)
         appLog(.bluetooth, "control scan started deviceId=\(deviceId)")
         scanTimeoutWork?.cancel()
         let timeout = DispatchWorkItem { [weak self] in guard let self, self.central.isScanning else { return }; self.central.stopScan(); self.state = .offline; appLog(.bluetooth, "control scan timed out deviceId=\(self.deviceId)"); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
@@ -1631,7 +1659,16 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         connectionTimeoutWork = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + connectionTimeout, execute: timeout)
     }
-    func connect() async { shouldReconnect = true; scan() }
+    func connect() async {
+        shouldReconnect = true
+        // A scan started by the UI may still be unfiltered when a Shortcut
+        // takes over after the app moves to the background.
+        if UIApplication.shared.applicationState != .active, central.isScanning {
+            central.stopScan()
+            scanTimeoutWork?.cancel()
+        }
+        scan()
+    }
     func waitUntilReady(timeout: TimeInterval = 10) async throws {
         await connect()
         let deadline = Date().addingTimeInterval(timeout)
@@ -1650,8 +1687,8 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         case .poweredOff: radioState = .poweredOff; resetForUnavailableRadio(); state = .unavailable
         case .unsupported: radioState = .unsupported; resetForUnavailableRadio(); state = .unavailable
         case .unauthorized: radioState = .unauthorized; resetForUnavailableRadio(); state = .unavailable
-        case .resetting: radioState = .resetting; resetForUnavailableRadio(); state = .unavailable
-        case .unknown: radioState = .unknown; resetForUnavailableRadio(); state = .unavailable
+        case .resetting: radioState = .resetting; resetForUnavailableRadio(); state = .offline
+        case .unknown: radioState = .unknown; resetForUnavailableRadio(); state = .offline
         @unknown default: radioState = .unknown; resetForUnavailableRadio(); state = .unavailable
         }
     }
@@ -2177,11 +2214,15 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
 
 enum InputPilotWiFiManager {
     private static var sessions: [String: TCPHIDControlTransport] = [:]
-    static func session(host: String, deviceId: String) -> TCPHIDControlTransport {
+    static func session(host: String, deviceId: String, fallbackHosts: [String] = []) -> TCPHIDControlTransport {
         let normalizedHost = DeviceEndpointResolver.sanitizeHost(host).lowercased()
+        let fallbacks = fallbackHosts.map { DeviceEndpointResolver.sanitizeHost($0).lowercased() }.filter { !$0.isEmpty && $0 != normalizedHost }
         let key = "\(deviceId.lowercased())|\(normalizedHost)"
-        if let existing = sessions[key] { return existing }
-        let session = TCPHIDControlTransport(host: normalizedHost, deviceId: deviceId)
+        if let existing = sessions[key] {
+            existing.addFallbackHosts(fallbacks)
+            return existing
+        }
+        let session = TCPHIDControlTransport(host: normalizedHost, deviceId: deviceId, fallbackHosts: fallbacks)
         sessions[key] = session
         return session
     }
@@ -2207,7 +2248,8 @@ enum InputPilotWiFiManager {
     private var lastReleaseAllAt = Date.distantPast
     init(device: StoredDevice) {
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
-        let host = device.staIP ?? device.mdnsHost
+        let hosts = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).compactMap(\.host)
+        let host = hosts.first ?? ""
         let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId)
         bluetooth.metadataHandler = { [weak device] metadata in
             guard let device, metadata.deviceId.lowercased() == device.deviceId.lowercased() else { return }
@@ -2215,7 +2257,7 @@ enum InputPilotWiFiManager {
         }
         ble = bluetooth
         tcp = host.isEmpty ? UnavailableHIDControlTransport(kind: .tcp) :
-            InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+            InputPilotWiFiManager.session(host: host, deviceId: device.deviceId, fallbackHosts: Array(hosts.dropFirst()))
         capabilities = Set(device.capabilities)
         protocolVersion = device.protocolVersion
     }
@@ -2234,8 +2276,10 @@ enum InputPilotWiFiManager {
     func waitUntilReady(timeout: TimeInterval = 10) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if allTransports.contains(where: { $0.isAvailable && $0.state == .ready }) { return true }
-            let participating = allTransports.filter { !($0 is UnavailableHIDControlTransport) && $0.state != .unavailable }
+            if Task.isCancelled { return false }
+            let permitted = candidateTransports(lowLatency: false)
+            if permitted.contains(where: { $0.isAvailable && $0.state == .ready }) { return true }
+            let participating = permitted.filter { !($0 is UnavailableHIDControlTransport) && $0.state != .unavailable }
             if participating.isEmpty || participating.allSatisfy({ $0.state == .authenticationFailed }) { return false }
             try? await Task.sleep(for: .milliseconds(100))
         }

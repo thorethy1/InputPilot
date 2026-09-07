@@ -10,6 +10,7 @@ struct PresetRunOutcome: Equatable, Sendable {
     static var container: ModelContainer { AppModelContainer.shared }
 
     private static var cachedManagers: [String: (manager: HIDConnectionManager, host: String)] = [:]
+    nonisolated static let readinessTimeout: TimeInterval = 25
     private static var executionTail: Task<PresetRunOutcome, Never>?
 
     static func activeDevice(context: ModelContext) -> StoredDevice? {
@@ -25,8 +26,11 @@ struct PresetRunOutcome: Equatable, Sendable {
     /// scratch. A changed Wi-Fi endpoint replaces the cached manager.
     static func manager(for device: StoredDevice) -> HIDConnectionManager {
         let key = device.deviceId.lowercased()
-        let host = device.staIP ?? device.mdnsHost
-        if let cached = cachedManagers[key], cached.host == host { return cached.manager }
+        let host = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).map(\.absoluteString).joined(separator: "|")
+        if let cached = cachedManagers[key], cached.host == host {
+            cached.manager.mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
+            return cached.manager
+        }
         let manager = HIDConnectionManager(device: device)
         cachedManagers[key] = (manager, host)
         return manager
@@ -39,6 +43,7 @@ struct PresetRunOutcome: Equatable, Sendable {
         let previous = executionTail
         let task = Task<PresetRunOutcome, Never> { @MainActor [previous] in
             _ = await previous?.value
+            guard !Task.isCancelled else { return PresetRunOutcome(success: false, message: "The action was cancelled.") }
             return await work()
         }
         executionTail = task
@@ -63,7 +68,7 @@ struct PresetRunOutcome: Equatable, Sendable {
         return [step]
     }
 
-    static func run(preset: HIDPreset, device: StoredDevice, context: ModelContext, readinessTimeout: TimeInterval = 15) async -> PresetRunOutcome {
+    static func run(preset: HIDPreset, device: StoredDevice, context: ModelContext, readinessTimeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
         let manager = manager(for: device)
         await manager.connect()
         let outcome = await run(preset: preset, manager: manager, context: context, readinessTimeout: readinessTimeout)
@@ -76,7 +81,7 @@ struct PresetRunOutcome: Equatable, Sendable {
                     typingDelayMs: Int,
                     device: StoredDevice,
                     context: ModelContext,
-                    readinessTimeout: TimeInterval = 15) async -> PresetRunOutcome {
+                    readinessTimeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
         let manager = manager(for: device)
         await manager.connect()
         guard await manager.waitUntilReady(timeout: readinessTimeout) else {
@@ -86,7 +91,7 @@ struct PresetRunOutcome: Equatable, Sendable {
         return outcome
     }
 
-    static func run(preset: HIDPreset, manager: HIDConnectionManager, context: ModelContext, readinessTimeout: TimeInterval = 15) async -> PresetRunOutcome {
+    static func run(preset: HIDPreset, manager: HIDConnectionManager, context: ModelContext, readinessTimeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
         guard await manager.waitUntilReady(timeout: readinessTimeout) else {
             return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
         }
@@ -114,14 +119,17 @@ struct PresetRunOutcome: Equatable, Sendable {
         return outcome(from: result)
     }
 
-    static func connectSummary(for device: StoredDevice) async -> String {
-        let manager = manager(for: device)
+    static func connectOutcome(for device: StoredDevice) async -> PresetRunOutcome {
+        await connectOutcome(manager: manager(for: device))
+    }
+
+    static func connectOutcome(manager: HIDConnectionManager,
+                               timeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
         await manager.connect()
-        // connect() only starts the transports; give the connection a bounded
-        // chance to finish before reporting a summary. The shared session stays
-        // connected so the next intent does not reconnect from scratch.
-        _ = await manager.waitUntilReady()
-        return manager.connectionSummary
+        guard await manager.waitUntilReady(timeout: timeout) else {
+            return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
+        }
+        return PresetRunOutcome(success: true, message: manager.connectionSummary)
     }
 
     static func outcome(from result: Result<Void, ActionExecutionError>) -> PresetRunOutcome {

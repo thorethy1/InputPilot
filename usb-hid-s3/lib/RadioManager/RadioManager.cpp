@@ -1300,11 +1300,18 @@ void RadioManager::startBle() {
       LOG_BLE("advertising object unavailable");
       return;
     }
-    const std::string identity = std::string("IP") + DeviceIdentity::deviceId();
+    // 3 flag bytes + 18 service bytes + 10 manufacturer bytes = 31.
+    // Put both identity and service in the primary advertisement so iOS can
+    // discover a saved device with a service filter while in the background.
+    std::string addressBytes;
+    const bool addressOk = decodeHex(DeviceIdentity::deviceId(), addressBytes) &&
+                           addressBytes.size() == 6;
+    const std::string identity = std::string("IP") + addressBytes;
     NimBLEAdvertisementData advData;
     NimBLEAdvertisementData scanData;
-    const bool identityOk = advData.setFlags(BLE_HS_ADV_F_DISC_GEN |
+    const bool identityOk = addressOk && advData.setFlags(BLE_HS_ADV_F_DISC_GEN |
                                               BLE_HS_ADV_F_BREDR_UNSUP) &&
+                            advData.addServiceUUID(BLE_HID_SERVICE_UUID) &&
                             advData.setManufacturerData(identity);
     const bool nameOk = scanData.setName(DeviceIdentity::deviceName());
     const bool payloadOk = identityOk && nameOk &&

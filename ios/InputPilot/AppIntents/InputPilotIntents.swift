@@ -2,6 +2,11 @@ import AppIntents
 import SwiftData
 import SwiftUI
 
+private struct InputPilotIntentError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 struct InputPilotPresetEntity: AppEntity {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = TypeDisplayRepresentation(name: "Preset")
     static let defaultQuery = PresetEntityQuery()
@@ -119,6 +124,7 @@ struct RunPresetIntent: AppIntent {
             }
             return await AppIntentSupport.run(preset: model, device: storedDevice, context: context)
         }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
@@ -141,8 +147,9 @@ struct ConnectDeviceIntent: AppIntent {
             guard let model = devices.first(where: { $0.deviceId == device.id }) else {
                 return PresetRunOutcome(success: false, message: "This device is no longer available.")
             }
-            return PresetRunOutcome(success: true, message: await AppIntentSupport.connectSummary(for: model))
+            return await AppIntentSupport.connectOutcome(for: model)
         }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
@@ -171,8 +178,9 @@ struct CheckDeviceStatusIntent: AppIntent {
             guard let storedDevice else {
                 return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
             }
-            return PresetRunOutcome(success: true, message: await AppIntentSupport.connectSummary(for: storedDevice))
+            return await AppIntentSupport.connectOutcome(for: storedDevice)
         }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
@@ -195,6 +203,7 @@ struct SendKeyboardShortcutIntent: AppIntent {
             }
             return await AppIntentSupport.run(steps: steps, typingDelayMs: 0, device: device, context: context)
         }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
@@ -222,6 +231,7 @@ struct SendTextIntent: AppIntent {
                 context: context
             )
         }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
