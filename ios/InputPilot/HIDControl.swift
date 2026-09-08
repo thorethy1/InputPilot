@@ -396,10 +396,12 @@ final class TCPHIDControlTransport: HIDControlTransport {
         }
     }
     func installFirmware(_ firmware: Data, version: String, sha256: String,
+                         allowDowngrade: Bool = false,
                          progress: @escaping (Int) -> Void) async throws {
         var reply: String
         do {
-            reply = try await request("START protocol=2 version=\(version) size=\(firmware.count) sha256=\(sha256) flow=windowed binary=1", allowDuringOTA: true)
+            let downgradeFlag = allowDowngrade ? " allow_downgrade=1" : ""
+            reply = try await request("START protocol=2 version=\(version) size=\(firmware.count) sha256=\(sha256) flow=windowed binary=1\(downgradeFlag)", allowDuringOTA: true)
         } catch {
             // START delivery is ambiguous when its reply is lost. A best-effort
             // abort releases a receiver that may already own the OTA engine.
@@ -688,9 +690,27 @@ enum FirmwareReleaseStatus: Equatable {
         }
     }
 
-    var canDownload: Bool {
-        if case .updateAvailable = self { return true }
-        return false
+    func canDownload(allowDowngrade: Bool = false) -> Bool {
+        switch self {
+        case .updateAvailable: true
+        case .installedNewer: allowDowngrade
+        default: false
+        }
+    }
+}
+
+struct FirmwareInstallOptions: Equatable {
+    var allowDowngrade = false
+    var ignorePublishedChecksum = false
+}
+
+enum FirmwareInstallPolicy {
+    static func downgradeBlocked(installed: String?, target: String,
+                                 allowDowngrade: Bool) -> Bool {
+        guard !allowDowngrade,
+              let installed, let current = SemanticVersion(installed),
+              let candidate = SemanticVersion(target) else { return false }
+        return candidate < current
     }
 }
 
@@ -732,16 +752,20 @@ enum FirmwareReleaseEvaluator {
 }
 
 enum FirmwareValidationError: LocalizedError, Equatable {
-    case notESP32Image, notApplicationImage, tooSmall, tooLarge, missingMetadata, wrongProduct, wrongBoard, unsupportedProtocol, unsupportedSchema
+    case notESP32Image, notApplicationImage, tooSmall, tooLarge, sizeMismatch
+    case missingMetadata, wrongProduct, wrongBoard, unsupportedProtocol, unsupportedSchema
+    case checksumMismatch
     var errorDescription: String? {
         switch self {
         case .notESP32Image: "The selected file is not an ESP32 application image."
         case .notApplicationImage: "Select firmware.bin only. Full-flash, bootloader, and partition images cannot be installed through OTA."
         case .tooSmall: "The selected firmware file is too small."
         case .tooLarge: "This firmware file is too large for the InputPilot OTA slot."
+        case .sizeMismatch: "The firmware size does not match the published manifest."
         case .missingMetadata, .wrongProduct, .wrongBoard: "This firmware is not compatible with InputPilot."
         case .unsupportedProtocol: "This firmware uses an unsupported OTA protocol."
         case .unsupportedSchema: "This firmware requires a newer OTA schema."
+        case .checksumMismatch: "The firmware SHA-256 does not match the published manifest."
         }
     }
 }
@@ -1149,16 +1173,19 @@ private struct FirmwareLogsResponse: Decodable {
 }
 
 enum FirmwareManifestValidator {
-    static func validate(_ manifest: FirmwareManifest, firmware: Data? = nil) throws {
+    static func validate(_ manifest: FirmwareManifest, firmware: Data? = nil,
+                         ignorePublishedChecksum: Bool = false) throws {
         guard manifest.product == "InputPilot" else { throw FirmwareValidationError.wrongProduct }
         guard manifest.board == "esp32-s3-zero-4mb" else { throw FirmwareValidationError.wrongBoard }
         guard manifest.protocolVersion == 2 else { throw FirmwareValidationError.unsupportedProtocol }
         guard manifest.otaSchema == 1 else { throw FirmwareValidationError.unsupportedSchema }
         guard manifest.sha256.count == 64, manifest.sha256.allSatisfy({ $0.isHexDigit }) else { throw FirmwareValidationError.missingMetadata }
         if let firmware {
-            guard firmware.count == manifest.size else { throw FirmwareValidationError.tooLarge }
+            guard firmware.count == manifest.size else { throw FirmwareValidationError.sizeMismatch }
             let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
-            guard digest == manifest.sha256.lowercased() else { throw FirmwareValidationError.missingMetadata }
+            guard ignorePublishedChecksum || digest == manifest.sha256.lowercased() else {
+                throw FirmwareValidationError.checksumMismatch
+            }
             let metadata = try FirmwareImageMetadata.parseAndValidate(firmware)
             guard metadata.version == manifest.version else { throw FirmwareValidationError.missingMetadata }
         }
@@ -1251,6 +1278,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
     private var connectionMode: ConnectionMode = .automatic
     private var capabilities: Set<String> = []
     private var hasSecurePairing = false
+    private var installedBeforeUpdate: String?
     var metadataHandler: ((BLEDeviceMetadata) -> Void)?
 
     static func transportOrder(mode: ConnectionMode, wifiAvailable: Bool, bluetoothAvailable: Bool) -> [FirmwareUpdateTransportKind] {
@@ -1283,6 +1311,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         connectionMode = mode; capabilities = Set(device.capabilities)
         hasSecurePairing = PairingKeyStore.load(deviceId: device.deviceId) != nil
         preUpdateDeviceId = device.deviceId
+        installedBeforeUpdate = device.firmwareVersion
         let host = device.staIP ?? device.mdnsHost
         wifiTransport = host.isEmpty ? nil : InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
     }
@@ -1332,7 +1361,16 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         if case .completed = state { rebootTimeoutWork?.cancel(); rebootTimeoutWork = nil }
     }
 
-    func install(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+    func install(_ firmware: Data, version: String, expectedSHA256: String? = nil,
+                 options: FirmwareInstallOptions = .init()) async {
+        guard !FirmwareInstallPolicy.downgradeBlocked(
+            installed: installedBeforeUpdate,
+            target: version,
+            allowDowngrade: options.allowDowngrade
+        ) else {
+            state = .failed("Firmware downgrade blocked. Enable the developer downgrade override to continue.")
+            return
+        }
         let wifiCapable = Self.wifiOTAAvailable(
             hasSecurePairing: hasSecurePairing,
             capabilities: capabilities,
@@ -1343,15 +1381,16 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         let order = Self.transportOrder(mode: connectionMode, wifiAvailable: wifiCapable, bluetoothAvailable: bleCapable)
         guard let selected = order.first else { state = .failed("No permitted firmware update transport is available."); return }
         if selected == .wifi {
-            do { try await installWiFi(firmware, version: version, expectedSHA256: expectedSHA256); return }
-            catch where order.contains(.bluetooth) && state == .preparing && !cancelled { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256); return }
+            do { try await installWiFi(firmware, version: version, expectedSHA256: expectedSHA256, options: options); return }
+            catch where order.contains(.bluetooth) && state == .preparing && !cancelled { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256, options: options); return }
             catch is CancellationError { if cancelled { state = .cancelled }; return }
             catch { state = .failed(error.localizedDescription); return }
         }
-        await installBLE(firmware, version: version, expectedSHA256: expectedSHA256)
+        await installBLE(firmware, version: version, expectedSHA256: expectedSHA256, options: options)
     }
 
-    private func installBLE(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+    private func installBLE(_ firmware: Data, version: String, expectedSHA256: String? = nil,
+                            options: FirmwareInstallOptions) async {
         activeTransport = .bluetooth
         guard let peripheral, let control, let data else { state = .failed("Connect to this InputPilot over Bluetooth first."); return }
         let metadata: FirmwareImageMetadata
@@ -1359,7 +1398,11 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         catch { state = .failed(error.localizedDescription); return }
         guard version == metadata.version else { state = .failed("The target version does not match the firmware image metadata."); return }
         let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
-        if let expectedSHA256, expectedSHA256.lowercased() != digest { state = .failed("Firmware verification failed. The selected file was not transferred."); return }
+        if let expectedSHA256, !options.ignorePublishedChecksum,
+           expectedSHA256.lowercased() != digest {
+            state = .failed("Firmware verification failed. The selected file was not transferred.")
+            return
+        }
         cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema; totalBytes = firmware.count; bytesSent = 0; acknowledged = 0; state = .preparing; lastProgress = Date()
         statusEvent = ""
         if let status, !status.isNotifying {
@@ -1370,7 +1413,8 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
             }
             guard status.isNotifying else { state = .failed("InputPilot firmware update status is not ready."); return }
         }
-        let command = "START protocol=2 version=\(version) size=\(firmware.count) sha256=\(digest)"
+        let downgradeFlag = options.allowDowngrade ? " allow_downgrade=1" : ""
+        let command = "START protocol=2 version=\(version) size=\(firmware.count) sha256=\(digest)\(downgradeFlag)"
         guard let seal else { state = .failed("The authenticated session was lost."); return }
         do { peripheral.writeValue(try seal(Data(command.utf8)), for: control, type: .withResponse) }
         catch { state = .failed("Could not encrypt the firmware update command."); return }
@@ -1430,11 +1474,15 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         state = .cancelled
     }
 
-    private func installWiFi(_ firmware: Data, version: String, expectedSHA256: String?) async throws {
+    private func installWiFi(_ firmware: Data, version: String, expectedSHA256: String?,
+                             options: FirmwareInstallOptions) async throws {
         let metadata = try FirmwareImageMetadata.parseAndValidate(firmware)
         guard metadata.version == version else { throw TransportError.failed("The target version does not match the firmware image metadata.") }
         let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
-        if let expectedSHA256, expectedSHA256.lowercased() != digest { throw TransportError.failed("Firmware verification failed before transfer.") }
+        if let expectedSHA256, !options.ignorePublishedChecksum,
+           expectedSHA256.lowercased() != digest {
+            throw TransportError.failed("Firmware verification failed before transfer.")
+        }
         activeTransport = .wifi; cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema
         totalBytes = firmware.count; bytesSent = 0; state = .preparing
         let base = try await reachableWiFiEndpoint(); activeWiFiEndpoint = base
@@ -1443,7 +1491,10 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         try await wifiTransport.waitUntilReady()
         state = .transferring
         let started = Date()
-        try await wifiTransport.installFirmware(firmware, version: version, sha256: digest) { [weak self] sent in
+        try await wifiTransport.installFirmware(
+            firmware, version: version, sha256: digest,
+            allowDowngrade: options.allowDowngrade
+        ) { [weak self] sent in
             DispatchQueue.main.async {
                 self?.bytesSent = sent
                 self?.bytesPerSecond = Double(sent) / max(0.1, Date().timeIntervalSince(started))
@@ -1513,6 +1564,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         case "checksum_mismatch", "image_invalid": "Firmware verification failed. The update was not installed."
         case "invalid_metadata", "incompatible_product", "incompatible_board": "This firmware is not compatible with InputPilot."
         case "version_mismatch": "The firmware version does not match the selected target version."
+        case "downgrade_rejected": "This firmware is older than the installed version. Enable the developer downgrade override to continue."
         case "firmware_too_large": "This firmware file is too large for this InputPilot device."
         case "reflash_required": "This device must be reflashed over USB before Bluetooth updates are available."
         case "unauthorized": "Authentication is required before updating firmware."
@@ -2599,7 +2651,11 @@ struct HIDControlView: View {
     @StateObject private var macros = MacroController()
     @State private var section: ControlSection = .trackpad
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    enum ControlSection: String, CaseIterable, Identifiable { case trackpad = "Trackpad", keyboard = "Keyboard", presets = "Presets", macros = "Macros"; var id: Self { self } }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    enum ControlSection: String, CaseIterable, Identifiable {
+        case trackpad = "Trackpad", keyboard = "Keyboard", presets = "Presets", macros = "Macros"
+        var id: Self { self }
+    }
     init(device: StoredDevice, devices: [StoredDevice] = []) { self.device = device; self.devices = devices; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
@@ -2632,7 +2688,17 @@ struct HIDControlView: View {
                 Label("Recording · use Trackpad or Keyboard, then stop in Macros", systemImage: "record.circle")
                     .font(.caption).foregroundStyle(AppColors.error).padding(.horizontal)
             }
-            Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager).disabled(macros.isRecording); case .macros: MacrosView(manager: manager, controller: macros) } }
+            Group {
+                switch section {
+                case .trackpad: TrackpadView(manager: manager)
+                case .keyboard: LiveKeyboardView(manager: manager)
+                case .presets: PresetsView(manager: manager).disabled(macros.isRecording)
+                case .macros: MacrosView(manager: manager, controller: macros)
+                }
+            }
+            .id(section)
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
+            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: section)
         }
         .navigationTitle(device.displayName).navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -2660,10 +2726,39 @@ struct HIDControlView: View {
     }
 
     private var controlPicker: some View {
-        Picker("Control", selection: $section) {
-            ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) }
+        Picker("Control", selection: Binding(
+            get: { section },
+            set: { switchSection(to: $0) }
+        )) {
+            ForEach(ControlSection.allCases) { item in
+                Text(item.rawValue).tag(item)
+            }
         }
         .disabled(macros.isPlaying)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height),
+                          abs(value.translation.width) > 36 else { return }
+                    moveSection(by: value.translation.width < 0 ? 1 : -1)
+                }
+        )
+        .accessibilityHint("Tap a section or swipe left and right to switch.")
+    }
+
+    private func moveSection(by offset: Int) {
+        let sections = ControlSection.allCases
+        guard let current = sections.firstIndex(of: section) else { return }
+        let target = min(max(current + offset, sections.startIndex), sections.index(before: sections.endIndex))
+        guard target != current else { return }
+        switchSection(to: sections[target])
+    }
+
+    private func switchSection(to target: ControlSection) {
+        guard target != section, !macros.isPlaying else { return }
+        if reduceMotion { section = target }
+        else { withAnimation(.snappy(duration: 0.22)) { section = target } }
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 }
 
@@ -2672,6 +2767,7 @@ struct TrackpadView: View {
     @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
     @AppStorage("trackpadHintsSeen") private var hintsSeen = false
     @State private var gestureState: TrackpadGestureState = .idle
+    @State private var pointerFilter = PointerMotionFilter()
     @State private var pointerAccumulator = PointerAccumulator()
     @State private var scrollAccumulator = FractionalAccumulator()
     @State private var zoomAccumulator = FractionalAccumulator()
@@ -2703,7 +2799,10 @@ struct TrackpadView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .onDisappear { stopMomentum() }
+        .onDisappear {
+            stopMomentum()
+            recoverFromError()
+        }
         .onChange(of: manager.lastError) { _, error in if error != nil { recoverFromError() } }
     }
 
@@ -2713,11 +2812,17 @@ struct TrackpadView: View {
                 guard manager.supports("mouse_move") else { return }
                 stopMomentum()
                 if gestureState != .moving && gestureState != .dragging { gestureState = .moving }
-                let scaled = pointerAccumulator.add(dx: Double(x) * sensitivity, dy: Double(y) * sensitivity)
+                let filtered = pointerFilter.update(
+                    dx: Double(x), dy: Double(y), sensitivity: sensitivity
+                )
+                let scaled = pointerAccumulator.add(dx: filtered.x, dy: filtered.y)
                 guard scaled.x != 0 || scaled.y != 0 else { return }
                 Task { await coalescer.add(x: scaled.x, y: scaled.y) }
             },
-            moveEnded: { if gestureState == .moving { gestureState = .idle } },
+            moveEnded: {
+                pointerFilter.reset()
+                if gestureState == .moving { gestureState = .idle }
+            },
             scroll: { value in
                 guard manager.supports("mouse_scroll") else { return }
                 stopMomentum()
@@ -2843,6 +2948,7 @@ struct TrackpadView: View {
                 zoomActive = false
                 zoomControlTask = nil
                 gestureState = .idle
+                pointerFilter.reset()
                 pointerAccumulator.reset()
                 scrollAccumulator.reset()
                 zoomAccumulator.reset()
@@ -2931,6 +3037,7 @@ struct TrackpadView: View {
         zoomActive = false
         zoomControlTask = nil
         gestureState = .idle
+        pointerFilter.reset()
         pointerAccumulator.reset()
         scrollAccumulator.reset()
         zoomAccumulator.reset()

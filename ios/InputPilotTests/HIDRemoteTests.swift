@@ -230,6 +230,39 @@ final class HIDRemoteTests: XCTestCase {
         )
     }
 
+    func testInstalledNewerFirmwareOnlyDownloadsWithDowngradeOverride() {
+        let status = FirmwareReleaseStatus.installedNewer(latest: "0.8.20")
+        XCTAssertFalse(status.canDownload())
+        XCTAssertTrue(status.canDownload(allowDowngrade: true))
+    }
+
+    func testFirmwareInstallPolicyBlocksSemanticDowngradeByDefault() {
+        XCTAssertTrue(FirmwareInstallPolicy.downgradeBlocked(
+            installed: "0.9.0", target: "0.9.0-beta.23", allowDowngrade: false
+        ))
+        XCTAssertFalse(FirmwareInstallPolicy.downgradeBlocked(
+            installed: "0.9.0", target: "0.9.0-beta.23", allowDowngrade: true
+        ))
+        XCTAssertFalse(FirmwareInstallPolicy.downgradeBlocked(
+            installed: "0.9.0-beta.23", target: "0.9.0", allowDowngrade: false
+        ))
+    }
+
+    func testPublishedChecksumRequiresExplicitOverride() throws {
+        let image = firmwareImage()
+        let manifest = FirmwareManifest(
+            product: "InputPilot", version: "0.8.11", board: "esp32-s3-zero-4mb",
+            protocolVersion: 2, otaSchema: 1, size: image.count,
+            sha256: String(repeating: "a", count: 64)
+        )
+        XCTAssertThrowsError(try FirmwareManifestValidator.validate(manifest, firmware: image)) { error in
+            XCTAssertEqual(error as? FirmwareValidationError, .checksumMismatch)
+        }
+        XCTAssertNoThrow(try FirmwareManifestValidator.validate(
+            manifest, firmware: image, ignorePublishedChecksum: true
+        ))
+    }
+
     @MainActor func testBetaReleaseSelectionSkipsRollingFeedAndStableReleases() throws {
         let data = Data(#"""
         [

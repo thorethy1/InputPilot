@@ -452,6 +452,8 @@ struct LiveKeyboardView: View {
             visualTask?.cancel()
             visualTask = nil
             isTransmitting = false
+            latches.clear()
+            Task { await manager.releaseAllPreservingError() }
         }
     }
 

@@ -73,6 +73,13 @@ Firmware bytes therefore never pass through an HTTP upload endpoint. BLE uses
 the same OTA engine, metadata validation, SHA-256 verification and exclusive
 transport ownership.
 
+`START` rejects a semantic version lower than the running firmware by default.
+An authenticated developer client may append `allow_downgrade=1`; normal app
+flows never send it. The image's embedded product, board, protocol, OTA schema
+and version metadata remain mandatory. The receiving device always hashes the
+complete transferred image before changing the boot partition, including when
+the app's developer option ignores a mismatch with a published manifest hash.
+
 Starting with 0.8.13, `START ... flow=windowed` negotiates cumulative ACK flow
 control. A supporting device replies `ota ready 0 window=4096 chunk=128`; the
 sender may then keep at most `window` unacknowledged bytes in flight. The

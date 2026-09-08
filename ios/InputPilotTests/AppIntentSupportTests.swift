@@ -74,6 +74,28 @@ private final class IntentMockTransport: HIDControlTransport {
         XCTAssertNil(AppIntentSupport.keyComboSteps(""))
     }
 
+    func testSwitchDevicePersistsTheSelectedIdentity() throws {
+        let previous = UserDefaults.standard.string(forKey: "selectedDeviceId")
+        defer { UserDefaults.standard.set(previous, forKey: "selectedDeviceId") }
+        let context = try makeContext()
+        let first = StoredDevice(deviceId: "001122334455", displayName: "Desk", mdnsHost: "")
+        let second = StoredDevice(deviceId: "aabbccddeeff", displayName: "Travel", mdnsHost: "")
+        context.insert(first)
+        context.insert(second)
+
+        let outcome = AppIntentSupport.select(second)
+
+        XCTAssertTrue(outcome.success)
+        XCTAssertEqual(AppIntentSupport.activeDevice(context: context)?.deviceId, second.deviceId)
+        XCTAssertEqual(
+            AppIntentSupport.device(
+                matching: InputPilotDeviceEntity(id: first.deviceId, name: first.displayName),
+                context: context
+            )?.deviceId,
+            first.deviceId
+        )
+    }
+
     func testPresetParseFailureReturnsFailureWithoutSending() async throws {
         let context = try makeContext()
         let manager = makeManager(ready: true)

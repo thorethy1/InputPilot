@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reject firmware downgrades in both the iOS preflight and the authenticated firmware OTA receiver. Developer Mode exposes confirmed downgrade and published SHA-256 overrides while the device continues to verify the complete transfer hash and embedded image compatibility metadata.
+- Polish Firmware with an installed-to-available version summary, release notes, clearer download/validation state and actionable checksum errors. Add animated, haptic Control section changes with a swipe gesture on the native picker, guaranteed input release when leaving Trackpad or Keyboard, and a smoothed speed-sensitive pointer acceleration curve.
+- Add Apple Shortcuts actions to switch the active device and start or stop the firmware-persisted periodic mouse movement schedule through the shared authenticated device services.
+
 - Refresh native active-device and transport pickers immediately when the accent changes, including edits to a custom color, while preserving the selected device, transport and navigation.
 
 - Overhaul the macro library with search, editable names/descriptions, duplicate and confirmed delete, event editing/reordering, playback progress, repeat estimates and explicit completion/cancellation/failure states. Preserve legacy recordings, add Keychain Secret references and keep duplicate execution blocked until held-input cleanup finishes.

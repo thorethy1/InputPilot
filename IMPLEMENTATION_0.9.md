@@ -145,7 +145,7 @@ The current code already contains useful trackpad behavior including movement, s
 
 - [x] Define/refine explicit mutually exclusive gesture states where useful: `idle → moving → scrolling → clicking → dragging → zooming`.
 - [x] Improve low-speed pointer precision.
-- [ ] Improve pointer smoothing and acceleration curve.
+- [x] Improve pointer smoothing and acceleration curve.
 - [x] Improve two-finger scrolling.
 - [x] Natural scrolling as the fixed default (option removed for a gesture-first trackpad).
 - [x] Add/tune momentum or inertial scrolling where it improves the experience (always on, toggle removed).
@@ -177,7 +177,7 @@ The current implementation already includes keyboard layouts, one-shot modifiers
 - [x] Redesign keyboard shortcut controls into compact native layouts rather than stretched full-width buttons.
 - [x] Improve modifier presentation and sticky/latched behavior where useful.
 - [x] Keep an explicit `Release All Keys` safety action.
-- [ ] Ensure modifiers and held keys are released after all relevant error/disconnect paths.
+- [x] Ensure modifiers and held keys are released after all relevant error/disconnect paths.
 - [x] Improve key/send visual feedback.
 - [x] Improve keyboard dismissal and text-composer behavior.
 - [x] Add explicit `Paste Clipboard` action that reads the clipboard only after user interaction.
@@ -317,9 +317,9 @@ Prioritize:
 - [x] Send Keyboard Shortcut.
 - [x] Send Text.
 - [x] Connect Device.
-- [ ] Switch Device.
-- [ ] Start Mouse Move.
-- [ ] Stop Mouse Move.
+- [x] Switch Device.
+- [x] Start Mouse Move.
+- [x] Stop Mouse Move.
 - [x] Check Device Status using high-level product state.
 
 Expose device/action parameters only where useful and avoid leaking protocol internals.
@@ -358,16 +358,16 @@ The repository already contains firmware compatibility validation, detailed upda
 
 ## Remaining work
 
-- [ ] Audit compatibility metadata/capabilities such as firmware version, protocol version, OTA schema, minimum app/firmware requirements and supported features.
-- [ ] Never require `App Version == Firmware Version`.
-- [ ] Prevent unsupported firmware downgrade by default.
-- [ ] Ensure firmware-side downgrade rejection exists where required; the app alone must not be the security boundary.
-- [ ] Do not assume newer firmware is automatically incompatible; use explicit protocol/capability checks.
-- [ ] Present a clear newer-firmware/requires-newer-app message when applicable.
-- [ ] Clearly show installed → available firmware version and release notes where available.
-- [ ] Preserve understandable Downloading/Validating/Transferring/Installing/Rebooting/Reconnecting/Completed progress.
-- [ ] Provide dedicated success/failure results and actionable compatibility errors.
-- [ ] Keep an explicit developer-only downgrade override only if it remains useful.
+- [x] Audit compatibility metadata/capabilities such as firmware version, protocol version, OTA schema, minimum app/firmware requirements and supported features.
+- [x] Never require `App Version == Firmware Version`.
+- [x] Prevent unsupported firmware downgrade by default.
+- [x] Ensure firmware-side downgrade rejection exists where required; the app alone must not be the security boundary.
+- [x] Do not assume newer firmware is automatically incompatible; use explicit protocol/capability checks.
+- [x] Present a clear newer-firmware/requires-newer-app message when applicable.
+- [x] Clearly show installed → available firmware version and release notes where available.
+- [x] Preserve understandable Downloading/Validating/Transferring/Installing/Rebooting/Reconnecting/Completed progress.
+- [x] Provide dedicated success/failure results and actionable compatibility errors.
+- [x] Keep an explicit developer-only downgrade override only if it remains useful.
 
 ## Firmware size
 
@@ -407,8 +407,8 @@ Once the UI is stable:
 - [ ] Add/update current InputPilot logo.
 - [ ] Replace outdated screenshots with real current iOS screenshots.
 - [ ] Add relevant Android screenshots only where appropriate/current.
-- [ ] Update README feature overview.
-- [ ] Add/update architecture diagram: `iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer`.
+- [x] Update README feature overview.
+- [x] Add/update architecture diagram: `iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer`.
 
 Recommended screenshots include Devices, Device Details, Trackpad, Keyboard, Shortcuts, Presets, Secrets, Firmware and Settings.
 

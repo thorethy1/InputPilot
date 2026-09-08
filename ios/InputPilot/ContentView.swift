@@ -353,9 +353,13 @@ private struct FirmwareDeviceView: View {
     @State private var targetVersion = ""
     @State private var selectedExpectedSHA256: String?
     @State private var manualValidationError: String?
+    @State private var showOverrideConfirmation = false
     private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
+    @AppStorage("developerMode") private var developerMode = false
+    @AppStorage("firmwareAllowDowngrade") private var allowDowngrade = false
+    @AppStorage("firmwareIgnorePublishedChecksum") private var ignorePublishedChecksum = false
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
         let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId)
@@ -371,8 +375,15 @@ private struct FirmwareDeviceView: View {
                 ActiveDevicePicker(devices: devices, selection: $selection)
                 LabeledContent("Update channel", value: updateChannel.rawValue)
                 DeviceConnectionBanner(device: device)
-                LabeledContent("Installed firmware", value: device.firmwareVersion ?? "Unknown")
-                LabeledContent("Latest firmware", value: releaseSource.manifest?.version ?? "Not checked")
+                HStack(spacing: AppTheme.Spacing.compact) {
+                    firmwareVersionBadge(device.firmwareVersion ?? "Unknown", label: "Installed")
+                    Image(systemName: "arrow.right")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    firmwareVersionBadge(releaseSource.manifest?.version ?? "Not checked", label: "Available")
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .combine)
                 LabeledContent("Update status", value: releaseSource.status.title)
                 if let detail = releaseSource.status.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
             }
@@ -384,14 +395,86 @@ private struct FirmwareDeviceView: View {
                 } else if !device.capabilities.contains("secure_ota") {
                     Label("The installed firmware does not provide a supported update transport.", systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning)
                 } else {
-                    Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion, channel: updateChannel) } }
-                    if releaseSource.status.canDownload { Button("Download Firmware \(releaseSource.manifest?.version ?? "")") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; selectedExpectedSHA256 = releaseSource.manifest?.sha256; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
+                    Button {
+                        Task {
+                            await releaseSource.check(
+                                installed: device.firmwareVersion,
+                                deviceOTASchema: device.otaSchema,
+                                appVersion: appVersion,
+                                channel: updateChannel
+                            )
+                        }
+                    } label: {
+                        Label(
+                            releaseSource.status == .checking ? "Checking…" : "Check for Updates",
+                            systemImage: releaseSource.status == .checking ? "arrow.triangle.2.circlepath" : "arrow.clockwise"
+                        )
+                    }
+                    .disabled(releaseSource.status == .checking)
+                    if releaseSource.status.canDownload(allowDowngrade: activeOptions.allowDowngrade) {
+                        Button {
+                            Task {
+                                if let result = await releaseSource.downloadFirmware(
+                                    allowDowngrade: activeOptions.allowDowngrade,
+                                    ignorePublishedChecksum: activeOptions.ignorePublishedChecksum
+                                ) {
+                                    selectedData = result
+                                    selectedName = "firmware.bin"
+                                    targetVersion = releaseSource.manifest?.version ?? ""
+                                    selectedExpectedSHA256 = releaseSource.manifest?.sha256
+                                    manualValidationError = nil
+                                }
+                            }
+                        } label: {
+                            Label(
+                                releaseSource.isDownloading ? "Downloading & Validating…" : "Download Firmware \(releaseSource.manifest?.version ?? "")",
+                                systemImage: releaseSource.isDownloading ? "hourglass" : "arrow.down.circle"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(releaseSource.isDownloading)
+                    }
                     if let error = releaseSource.errorMessage { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
-                    if let selectedData { LabeledContent("File", value: selectedName); LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file)) }
+                    if let selectedData {
+                        LabeledContent("File", value: selectedName)
+                        LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file))
+                        if selectedExpectedSHA256 != nil {
+                            Label(
+                                activeOptions.ignorePublishedChecksum ? "Published SHA-256 check overridden" : "Published SHA-256 verified",
+                                systemImage: activeOptions.ignorePublishedChecksum ? "exclamationmark.shield" : "checkmark.shield"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(activeOptions.ignorePublishedChecksum ? AppColors.warning : AppColors.success)
+                        }
+                    }
                     if let manualValidationError { Label(manualValidationError, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
-                    Button("Choose Firmware File") { importing = true }
+                    Button { importing = true } label: { Label("Choose Firmware File", systemImage: "doc.badge.plus") }
                     if selectedData != nil { TextField("Firmware version", text: $targetVersion).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                    if let selectedData { Button("Update Firmware") { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: selectedExpectedSHA256) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
+                    if let selectedData {
+                        Button {
+                            if activeOptions == .init() { install(selectedData) }
+                            else { showOverrideConfirmation = true }
+                        } label: {
+                            Label(activeOptions.allowDowngrade ? "Install Older Firmware" : "Update Firmware", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(targetVersion.isEmpty || updater.blocksControl)
+                    }
+                }
+            }
+            if developerMode {
+                Section("Developer Overrides") {
+                    Toggle("Allow firmware downgrade", isOn: $allowDowngrade)
+                    Toggle("Ignore published SHA-256", isOn: $ignorePublishedChecksum)
+                        .disabled(selectedExpectedSHA256 == nil && selectedData != nil)
+                    Label("Overrides require confirmation. Firmware image compatibility and transfer integrity are still checked on the device.", systemImage: "wrench.and.screwdriver")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.warning)
+                }
+            }
+            if let notes = releaseSource.releaseNotes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Section("Release Notes") {
+                    Text(.init(notes)).font(.callout).textSelection(.enabled)
                 }
             }
             if updater.state != .idle {
@@ -411,6 +494,19 @@ private struct FirmwareDeviceView: View {
             releaseSource.reconcile(installed: installed, deviceOTASchema: device.otaSchema, appVersion: appVersion)
         }
         .onChange(of: updateChannelName) { _, _ in releaseSource.reset() }
+        .onChange(of: developerMode) { _, enabled in
+            if !enabled { allowDowngrade = false; ignorePublishedChecksum = false }
+        }
+        .confirmationDialog("Install with Developer Overrides?", isPresented: $showOverrideConfirmation, titleVisibility: .visible) {
+            if let selectedData {
+                Button("Install Firmware", role: .destructive) { install(selectedData) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(overrideConfirmationMessage)
+        }
+        .sensoryFeedback(.success, trigger: updater.state == .completed)
+        .sensoryFeedback(.error, trigger: updateFailed)
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data]) { result in
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
@@ -421,6 +517,45 @@ private struct FirmwareDeviceView: View {
         }
     }
     private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
+    private var updateFailed: Bool {
+        if case .failed = updater.state { return true }
+        return false
+    }
+    private var activeOptions: FirmwareInstallOptions {
+        guard developerMode else { return .init() }
+        return FirmwareInstallOptions(
+            allowDowngrade: allowDowngrade,
+            ignorePublishedChecksum: ignorePublishedChecksum
+        )
+    }
+    private var overrideConfirmationMessage: String {
+        var enabled: [String] = []
+        if activeOptions.allowDowngrade { enabled.append("downgrade protection") }
+        if activeOptions.ignorePublishedChecksum { enabled.append("the published SHA-256 check") }
+        return "This installation overrides \(enabled.joined(separator: " and ")). Continue only with firmware you trust."
+    }
+    private func install(_ data: Data) {
+        let options = activeOptions
+        let version = targetVersion
+        let expectedSHA256 = selectedExpectedSHA256
+        updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic)
+        Task {
+            await updater.install(
+                data,
+                version: version,
+                expectedSHA256: expectedSHA256,
+                options: options
+            )
+        }
+    }
+    private func firmwareVersionBadge(_ value: String, label: String) -> some View {
+        VStack(spacing: 3) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.subheadline.monospaced().weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
+    }
     private var statusText: String { switch updater.state { case .idle: "Ready"; case .checking: "Checking…"; case .connecting: "Connecting…"; case .authenticating: "Authenticating…"; case .preparing: "Preparing…"; case .transferring: "Updating firmware…"; case .waitingForFinalAck: "Waiting for final acknowledgement…"; case .verifying: "Verifying firmware…"; case .installing: "Installing firmware…"; case .rebooting: "Restarting InputPilot…"; case .reconnecting: "Reconnecting…"; case .verifyingInstalledVersion: "Verifying installed firmware…"; case .completed: "Firmware updated successfully"; case .cancelled: "Update cancelled. Existing firmware remains installed."; case let .failed(message): message } }
 }
 
@@ -430,16 +565,19 @@ private struct FirmwareDeviceView: View {
     @Published var manifest: FirmwareManifest?
     @Published var status = FirmwareReleaseStatus.notChecked
     @Published var errorMessage: String?
+    @Published var releaseNotes: String?
+    @Published var isDownloading = false
     private var firmwareURL: URL?
     func reconcile(installed: String?, deviceOTASchema: Int, appVersion: String) {
         guard let manifest else { return }
         status = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: manifest, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
     }
     func reset() {
-        manifest = nil; status = .notChecked; errorMessage = nil; firmwareURL = nil
+        manifest = nil; status = .notChecked; errorMessage = nil; releaseNotes = nil; firmwareURL = nil
     }
-    func check(installed: String?, deviceOTASchema: Int, appVersion: String, channel: UpdateChannel = .stable) async {
-        errorMessage = nil; manifest = nil; firmwareURL = nil; status = .checking
+    func check(installed: String?, deviceOTASchema: Int, appVersion: String,
+               channel: UpdateChannel = .stable) async {
+        errorMessage = nil; manifest = nil; releaseNotes = nil; firmwareURL = nil; status = .checking
         do {
             let request = Self.releaseRequest(for: channel)
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -451,8 +589,8 @@ private struct FirmwareDeviceView: View {
             guard (manifestResponse as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
             let decoded = try JSONDecoder().decode(FirmwareManifest.self, from: manifestData)
             let evaluated = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: decoded, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
-            manifest = decoded; status = evaluated
-            if evaluated.canDownload {
+            manifest = decoded; releaseNotes = release.body; status = evaluated
+            if evaluated.canDownload(allowDowngrade: true) {
                 try FirmwareManifestValidator.validate(decoded)
                 firmwareURL = imageURL
             }
@@ -461,14 +599,23 @@ private struct FirmwareDeviceView: View {
             errorMessage = message; status = .unavailable(message)
         }
     }
-    func downloadFirmware() async -> Data? {
-        guard status.canDownload, let firmwareURL, let manifest else { return nil }
+    func downloadFirmware(allowDowngrade: Bool = false,
+                          ignorePublishedChecksum: Bool = false) async -> Data? {
+        guard status.canDownload(allowDowngrade: allowDowngrade),
+              let firmwareURL, let manifest else { return nil }
+        isDownloading = true
+        errorMessage = nil
+        defer { isDownloading = false }
         do {
             let (data, response) = try await URLSession.shared.data(from: firmwareURL)
             guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
-            try FirmwareManifestValidator.validate(manifest, firmware: data)
+            try FirmwareManifestValidator.validate(
+                manifest,
+                firmware: data,
+                ignorePublishedChecksum: ignorePublishedChecksum
+            )
             return data
-        } catch { errorMessage = "Could not download the firmware image."; return nil }
+        } catch { errorMessage = error.localizedDescription; return nil }
     }
 }
 
@@ -486,11 +633,12 @@ struct GitHubReleaseDescriptor: Codable, Equatable, Sendable {
     let tagName: String
     let draft: Bool
     let prerelease: Bool
+    let body: String?
     let assets: [Asset]
 
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
-        case draft, prerelease, assets
+        case draft, prerelease, body, assets
     }
 
     func assetURL(named name: String) -> URL? {
@@ -794,6 +942,9 @@ private struct DiagnosticsSettingsView: View {
     let devices: [StoredDevice]
     @Binding var selection: String
     @AppStorage("connectionMode") private var connectionMode = ConnectionMode.automatic.rawValue
+    @AppStorage("developerMode") private var developerMode = false
+    @AppStorage("firmwareAllowDowngrade") private var allowDowngrade = false
+    @AppStorage("firmwareIgnorePublishedChecksum") private var ignorePublishedChecksum = false
     private let appVersion = AppVersionInfo.read()
 
     private var selected: StoredDevice? {
@@ -850,6 +1001,13 @@ private struct DiagnosticsSettingsView: View {
                 NavigationLink("App Logs") { AppLogsView() }
             }
 
+            Section("Developer Mode") {
+                Toggle("Enable Developer Mode", isOn: $developerMode)
+                Text("Shows explicit firmware downgrade and published checksum overrides in the Firmware tab.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("App Build") {
                 LabeledContent("Version", value: appVersion.version)
                 LabeledContent("Build", value: appVersion.build)
@@ -858,6 +1016,12 @@ private struct DiagnosticsSettingsView: View {
         }
         .navigationTitle("Diagnostics")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: developerMode) { _, enabled in
+            if !enabled {
+                allowDowngrade = false
+                ignorePublishedChecksum = false
+            }
+        }
     }
 }
 

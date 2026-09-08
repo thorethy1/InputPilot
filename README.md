@@ -62,6 +62,16 @@ After flashing, sideload the InputPilot iOS companion app and securely pair it w
 
 - **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; secure setup, trackpad, keyboard, presets, macros, diagnostics and OTA. Secure Protocol v2 firmware is required.
 
+```mermaid
+flowchart LR
+    iPhone["iPhone · InputPilot SwiftUI app"]
+    device["ESP32-S3 · authenticated firmware"]
+    computer["Computer · USB HID"]
+    iPhone -->|"Secure BLE"| device
+    iPhone -->|"Secure Wi-Fi / TCP"| device
+    device -->|"Mouse + keyboard reports"| computer
+```
+
 <p align="center">
   <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two ready devices" width="240">
   &nbsp;
@@ -142,7 +152,7 @@ Authenticated Wi-Fi or BLE OTA
 
 Firmware v0.8.7 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
-The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
+The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Firmware downgrades are rejected in both the app and current firmware. Developer Mode exposes confirmed downgrade and published-checksum overrides; even then, the device verifies the complete transfer hash and all embedded compatibility metadata. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
 Devices flashed with an earlier partition table cannot update through the app. Perform the full USB reflash described above. It replaces the partition table, so Wi-Fi must be configured again.
 

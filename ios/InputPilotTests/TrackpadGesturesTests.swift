@@ -34,6 +34,26 @@ final class TrackpadGesturesTests: XCTestCase {
         XCTAssertEqual(second.y, -1)
     }
 
+    func testPointerMotionFilterKeepsSlowMovementPreciseAndAcceleratesSwipes() {
+        var slow = PointerMotionFilter()
+        let precise = slow.update(dx: 1, dy: 0, sensitivity: 1)
+        XCTAssertEqual(precise.x, 0.72, accuracy: 0.001)
+
+        var fast = PointerMotionFilter()
+        let swipe = fast.update(dx: 20, dy: 0, sensitivity: 1)
+        XCTAssertGreaterThan(swipe.x, 20)
+    }
+
+    func testPointerMotionFilterSmoothsDirectionChangesAndResets() {
+        var filter = PointerMotionFilter()
+        _ = filter.update(dx: 8, dy: 0, sensitivity: 1)
+        let reversed = filter.update(dx: -8, dy: 0, sensitivity: 1)
+        XCTAssertGreaterThan(reversed.x, -9.6)
+        filter.reset()
+        let reset = filter.update(dx: -8, dy: 0, sensitivity: 1)
+        XCTAssertEqual(reset.x, -9.88, accuracy: 0.001)
+    }
+
     func testScrollContributionNaturalInvertsPanDirection() {
         XCTAssertEqual(TrackpadGestures.scrollContribution(panDeltaY: 10, natural: true), -2, accuracy: 0.0001)
         XCTAssertEqual(TrackpadGestures.scrollContribution(panDeltaY: 10, natural: false), 2, accuracy: 0.0001)

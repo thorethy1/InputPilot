@@ -21,6 +21,24 @@ struct InputPilotAppShortcuts: AppShortcutsProvider {
             shortTitle: "Send Shortcut",
             systemImageName: "keyboard"
         )
+        AppShortcut(
+            intent: SwitchDeviceIntent(),
+            phrases: ["Switch \(.applicationName) device"],
+            shortTitle: "Switch Device",
+            systemImageName: "arrow.left.arrow.right"
+        )
+        AppShortcut(
+            intent: StartMouseMoveIntent(),
+            phrases: ["Start mouse movement with \(.applicationName)"],
+            shortTitle: "Start Mouse Move",
+            systemImageName: "cursorarrow"
+        )
+        AppShortcut(
+            intent: StopMouseMoveIntent(),
+            phrases: ["Stop mouse movement with \(.applicationName)"],
+            shortTitle: "Stop Mouse Move",
+            systemImageName: "stop.circle"
+        )
     }
 
     static var shortcutTileColor: ShortcutTileColor { .red }

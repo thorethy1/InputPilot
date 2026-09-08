@@ -58,11 +58,11 @@ No app/firmware version equality requirement was introduced.
 | Area | Evidence and remaining work |
 | --- | --- |
 | Quick Shortcuts | `KeyboardView.swift` still uses `QuickShortcut.defaults`. Create/edit/rename/duplicate/delete/reorder/favorite management and reusable Secret-backed shortcut actions remain open. Presets already cover several reusable-action needs, but do not complete this separate roadmap item. |
-| App Intents | Present: Run Preset, Connect Device, Check Device Status, Send Keyboard Shortcut, Send Text. Missing: Run InputPilot Shortcut, Run Macro, Switch Device, Start Mouse Move, Stop Mouse Move. Macro playback now exposes completion but is not wired into an AppEntity/intent. |
-| Downgrade protection | The release evaluator avoids suggesting an older published release. Firmware OTA start/image validation does not compare the incoming version against the installed version. Firmware enforcement and the manual-file app path still need work. |
-| OTA presentation | Progress/integrity/compatibility handling exists. Release notes before installation and the complete compatibility/manual-update UX audit remain open. |
-| UI polish | The changed Control, Macro, Appearance and Device Details screens need real rendered review. An app-wide pass over empty/loading/error states, Dynamic Type, VoiceOver, contrast, Reduce Motion and safe areas remains open. |
-| Trackpad and disconnects | Gesture implementations exist; physical pointer/scroll/drag/pinch tuning and proof of held-input cleanup across BLE/Wi-Fi disconnects remain open. |
+| App Intents | Present: Run Preset, Connect Device, Check Device Status, Send Keyboard Shortcut, Send Text, Switch Device, Start Mouse Move and Stop Mouse Move. Missing: Run InputPilot Shortcut and Run Macro. Macro playback exposes completion but is not yet wired into an AppEntity/intent. |
+| Downgrade protection | App preflight and current firmware reject semantic downgrades. An authenticated, confirmed Developer Mode override covers release and manual images; unit tests cover stable/beta ordering and both policy branches. |
+| OTA presentation | Installed → available versions, release notes, download/validation feedback, checksum errors and confirmed developer overrides are present. The complete physical compatibility/manual-update UX audit remains open. |
+| UI polish | Control sections now switch with a picker swipe, haptics and Reduce Motion-aware animation; Firmware uses native status presentation. The changed screens still need real rendered review, plus an app-wide pass over empty/loading/error states, Dynamic Type, VoiceOver, contrast and safe areas. |
+| Trackpad and disconnects | Pointer deltas now use a tested smoothing/acceleration curve, and leaving Trackpad or Keyboard requests release-all. Physical pointer/scroll/drag/pinch tuning and proof across BLE/Wi-Fi disconnects remain open. |
 | Repository presentation | The repository already has a logo and older device screenshots. New screenshots of the current UI, the README feature refresh and current architecture illustration remain open. |
 | Data and lifecycle | Physical Keychain CRUD, existing-install migration/restore, app-switcher exposure, background/suspended/terminated App Intent behavior and Siri remain unverified. The existing in-memory fallback on store-open failure is not evidence of successful migration. |
 
@@ -70,8 +70,8 @@ No app/firmware version equality requirement was introduced.
 
 | Check | Result |
 | --- | --- |
-| `pio test -d usb-hid-s3 -e native` | PASS: 109 tests, including AP persistence/apply ordering and storage-failure handling. |
-| `pio run -d usb-hid-s3 -e esp32s3` | PASS: firmware and initial-flash image generated; application image 1,556,656 / 1,966,080 bytes, 409,424 bytes free in OTA slot. |
+| `pio test -d usb-hid-s3 -e native` | PASS: 112 tests, including semantic downgrade rejection/override, AP persistence/apply ordering and storage-failure handling. |
+| `pio run -d usb-hid-s3 -e esp32s3` | PASS: firmware and initial-flash image generated; application image 1,561,072 / 1,966,080 bytes, 405,008 bytes free in OTA slot. |
 | Xcode project references | Parsed and new source/test files registered in their targets. |
 | Swift syntax review | New Macro controller/view/tests parsed without syntax errors. Existing parser limitations in unrelated Swift expressions are unchanged. This does not type-check SwiftUI or SwiftData. |
 | iOS build / XCTest | NOT RUN: this workspace is Linux and has no Xcode/iOS SDK. New tests cover legacy event/store compatibility, repeats, invalid timing, missing Secrets, offline/send failure, cancellation, duplicate execution, release-all and exclusion of preset Secrets from capture. Run the existing macOS CI before release. |

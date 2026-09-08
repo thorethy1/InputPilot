@@ -21,6 +21,36 @@ struct PresetRunOutcome: Equatable, Sendable {
         return devices.first { $0.deviceId == resolved }
     }
 
+    static func device(matching entity: InputPilotDeviceEntity?, context: ModelContext) -> StoredDevice? {
+        guard let entity else { return activeDevice(context: context) }
+        let devices = (try? context.fetch(FetchDescriptor<StoredDevice>())) ?? []
+        return devices.first { $0.deviceId == entity.id }
+    }
+
+    static func select(_ device: StoredDevice) -> PresetRunOutcome {
+        UserDefaults.standard.set(device.deviceId, forKey: "selectedDeviceId")
+        return PresetRunOutcome(success: true, message: "\(device.displayName) is now the active InputPilot device.")
+    }
+
+    static func setMouseMove(_ enabled: Bool, for device: StoredDevice,
+                             context: ModelContext,
+                             timeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
+        let manager = manager(for: device)
+        await manager.connect()
+        guard await manager.waitUntilReady(timeout: timeout) else {
+            return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
+        }
+        do {
+            try await DeviceRepository(context: context).setJiggle(device, enabled: enabled)
+            return PresetRunOutcome(
+                success: true,
+                message: enabled ? "Periodic mouse movement started on \(device.displayName)." : "Periodic mouse movement stopped on \(device.displayName)."
+            )
+        } catch {
+            return PresetRunOutcome(success: false, message: "Mouse movement could not be updated. Reconnect the device and try again.")
+        }
+    }
+
     /// Returns one long-lived connection manager per device so back-to-back
     /// Shortcuts reuse an established session instead of reconnecting from
     /// scratch. A changed Wi-Fi endpoint replaces the cached manager.

@@ -70,6 +70,43 @@ struct PointerAccumulator: Equatable, Sendable {
     }
 }
 
+/// Smooths noisy touch deltas while adding speed-based acceleration. Slow
+/// movement stays precise; quick swipes cover more screen without increasing
+/// the user's chosen base sensitivity.
+struct PointerMotionFilter: Equatable, Sendable {
+    private var previousX = 0.0
+    private var previousY = 0.0
+    private var hasPrevious = false
+
+    mutating func update(dx: Double, dy: Double, sensitivity: Double) -> (x: Double, y: Double) {
+        let speed = hypot(dx, dy)
+        let gain: Double
+        switch speed {
+        case ..<1.5: gain = 0.72
+        case 1.5..<7: gain = 0.72 + (speed - 1.5) / 5.5 * 0.48
+        default: gain = min(1.85, 1.2 + (speed - 7) * 0.035)
+        }
+        let acceleratedX = dx * gain * sensitivity
+        let acceleratedY = dy * gain * sensitivity
+        guard hasPrevious else {
+            previousX = acceleratedX
+            previousY = acceleratedY
+            hasPrevious = true
+            return (acceleratedX, acceleratedY)
+        }
+        let response = min(0.82, 0.52 + speed * 0.025)
+        previousX += (acceleratedX - previousX) * response
+        previousY += (acceleratedY - previousY) * response
+        return (previousX, previousY)
+    }
+
+    mutating func reset() {
+        previousX = 0
+        previousY = 0
+        hasPrevious = false
+    }
+}
+
 /// Pure mapping helpers between trackpad gestures and HID reports.
 enum TrackpadGestures {
     /// HID scroll lines contributed by a two-finger pan delta in points.

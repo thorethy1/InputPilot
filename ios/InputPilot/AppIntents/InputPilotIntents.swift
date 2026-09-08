@@ -235,3 +235,75 @@ struct SendTextIntent: AppIntent {
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
     }
 }
+
+struct SwitchDeviceIntent: AppIntent {
+    static let title: LocalizedStringResource = "Switch Device"
+    static let description = IntentDescription("Changes the active InputPilot device used by controls and automations.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Switch InputPilot to \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [device] in
+            let context = AppIntentSupport.container.mainContext
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "This device is no longer available.")
+            }
+            return AppIntentSupport.select(storedDevice)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}
+
+struct StartMouseMoveIntent: AppIntent {
+    static let title: LocalizedStringResource = "Start Mouse Move"
+    static let description = IntentDescription("Starts InputPilot's periodic mouse movement on a device.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Start mouse movement on \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [device] in
+            let context = AppIntentSupport.container.mainContext
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.setMouseMove(true, for: storedDevice, context: context)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}
+
+struct StopMouseMoveIntent: AppIntent {
+    static let title: LocalizedStringResource = "Stop Mouse Move"
+    static let description = IntentDescription("Stops InputPilot's periodic mouse movement on a device.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Stop mouse movement on \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [device] in
+            let context = AppIntentSupport.container.mainContext
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.setMouseMove(false, for: storedDevice, context: context)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}

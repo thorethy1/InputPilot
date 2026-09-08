@@ -35,7 +35,9 @@ bool OTAEngine::start(const OTAStartRequest &request, OTATransportOwner owner) {
   partition_ = esp_ota_get_next_update_partition(nullptr);
   if (!partition_) return fail("reflash_required");
   std::string validationError;
-  if (!OTAEngineValidation::start(false, request, partition_->size, validationError)) return fail(validationError.c_str());
+  if (!OTAEngineValidation::start(false, request, partition_->size, FW_VERSION,
+                                  validationError))
+    return fail(validationError.c_str());
 
   request_ = request; received_ = 0; error_.clear(); owner_ = owner;
   state_ = OTAState::Preparing;
