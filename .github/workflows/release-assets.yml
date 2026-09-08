@@ -286,7 +286,6 @@ jobs:
           else
             feed="app-repo.json"
           fi
-
           current_sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$feed?ref=main" --jq '.sha' 2>/dev/null || true)"
           if [[ -n "$current_sha" ]]; then
             gh api "repos/$GITHUB_REPOSITORY/contents/$feed?ref=main" --jq '.content' \

@@ -1,0 +1,61 @@
+{
+  "name": "InputPilot Beta",
+  "subtitle": "InputPilot beta releases for early testing.",
+  "description": "Install and update InputPilot beta builds.",
+  "website": "https://github.com/thorethy1/InputPilot",
+  "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "tintColor": "#007AFF",
+  "apps": [
+    {
+      "name": "InputPilot",
+      "bundleIdentifier": "com.thorethy.inputpilot",
+      "developerName": "thorethy",
+      "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
+      "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
+      "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "tintColor": "#007AFF",
+      "category": "utilities",
+      "screenshots": [
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/docs/images/ios-device-list.jpg",
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/docs/images/ios-device-detail.jpg"
+      ],
+      "versions": [
+        {
+          "version": "0.9.0",
+          "buildVersion": "123",
+          "marketingVersion": "0.9.0-beta.30",
+          "date": "2026-09-08",
+          "localizedDescription": "InputPilot 0.9.0-beta.30 beta release.",
+          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.9.0-beta.30/InputPilot-v0.9.0-beta.30-ios-unsigned.ipa",
+          "size": 3106167,
+          "sha256": "336445f20d9ee433491e95a1d7e9d7134c1cdf34d5991a1882e61691fe75468b",
+          "minOSVersion": "17.0"
+        },
+        {
+          "version": "0.9.0-beta.5",
+          "buildVersion": "62",
+          "date": "2026-09-02",
+          "localizedDescription": "InputPilot 0.9.0-beta.5 release.",
+          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.9.0-beta.5/InputPilot-v0.9.0-beta.5-ios-unsigned.ipa",
+          "size": 2451814,
+          "sha256": "fb32f24b9ad906949d0e64025b87e0a7cf575b1c0c6d58c5039a6a77dea9531f",
+          "minOSVersion": "17.0"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": [
+          {
+            "name": "BluetoothAlways",
+            "usageDescription": "Connect InputPilot to your authorized ESP32-S3 device."
+          },
+          {
+            "name": "LocalNetwork",
+            "usageDescription": "InputPilot discovers and controls ESP32 devices on your local network."
+          }
+        ]
+      }
+    }
+  ],
+  "news": []
+}
