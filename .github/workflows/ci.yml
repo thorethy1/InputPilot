@@ -4,6 +4,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      release_only:
+        description: Build versioned release artifacts without rerunning unit tests
+        required: false
+        default: false
+        type: boolean
   pull_request:
     branches: [main, beta]
   push:
@@ -52,12 +58,14 @@ jobs:
           pip install "click>=8.1.7,<8.2"
 
       - name: Native unit tests (no hardware)
+        if: ${{ !inputs.release_only }}
         run: pio test -e native -v
 
       - name: Build esp32s3 firmware
         run: pio run -e esp32s3
 
       - name: Test release packaging
+        if: ${{ !inputs.release_only }}
         working-directory: ${{ github.workspace }}
         run: |
           python .github/scripts/test_package_release_assets.py
@@ -89,6 +97,7 @@ jobs:
 
   ios:
     name: iOS unit tests
+    if: ${{ !inputs.release_only }}
     runs-on: macos-26
     timeout-minutes: 30
 

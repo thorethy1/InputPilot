@@ -50,7 +50,7 @@ Common non-sensitive diagnostics include expired profile, missing certificate id
 
 ## Release assets (public)
 
-The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the stable release entry point. Choose `none` when promoting an already-versioned beta, or a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. The stable workflow creates a version commit when needed and validates that exact commit in CI. For beta releases, set and commit the next prerelease identity before pushing. [`create-beta-release.yml`](/.github/workflows/create-beta-release.yml) then requires the latest push CI on the exact `beta` head to be green with both retained artifacts and publishes it without creating a commit or starting another CI run. Both workflows dispatch [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
+The [`create-release.yml`](/.github/workflows/create-release.yml) workflow is the stable release entry point. Choose `none` when promoting an already-versioned beta, or a semantic `patch`, `minor`, or `major` bump in **Actions → Create release**. The stable workflow creates a version commit when needed and validates that exact commit in CI. For beta releases, [`create-beta-release.yml`](/.github/workflows/create-beta-release.yml) first requires the latest push CI on the exact `beta` head to be green, then commits the version entered in the workflow. It runs only the version-dependent firmware and unsigned IPA builds for that commit; native and iOS unit tests are not repeated. Both workflows dispatch [`release-assets.yml`](/.github/workflows/release-assets.yml), which:
 
 - validates the release tag against `Version.xcconfig`;
 - waits for a successful CI run on the exact tag commit;

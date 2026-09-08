@@ -71,19 +71,17 @@ class VersioningTests(unittest.TestCase):
 
 
 class BetaReleaseWorkflowTests(unittest.TestCase):
-    def test_beta_release_reuses_push_ci_without_mutating_the_branch(self):
+    def test_beta_release_uses_a_release_only_build_after_green_push_ci(self):
         workflow = (ROOT / ".github/workflows/create-beta-release.yml").read_text(
             encoding="utf-8"
         )
+        ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
         self.assertIn('--commit "$head_sha" --event push', workflow)
-        self.assertIn('InputPilot-Firmware-$head_sha', workflow)
-        self.assertIn('InputPilot-unsigned-$head_sha', workflow)
-        self.assertNotIn("gh workflow run ci.yml", workflow)
-        self.assertNotIn(
-            'python3 versioning.py set-release "$version" >/dev/null', workflow
-        )
-        self.assertNotIn('git push origin "HEAD:refs/heads/beta"', workflow)
+        self.assertIn('python3 versioning.py set-release "$version"', workflow)
+        self.assertIn("-f release_only=true", workflow)
+        self.assertIn("release_only:", ci_workflow)
+        self.assertGreaterEqual(ci_workflow.count("if: ${{ !inputs.release_only }}"), 3)
 
 
 if __name__ == "__main__":

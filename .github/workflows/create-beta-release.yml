@@ -33,7 +33,7 @@ jobs:
           fetch-depth: 0
 
       - name: Require green CI on beta head
-        id: ci
+        id: push_ci
         shell: bash
         run: |
           set -euo pipefail
@@ -72,7 +72,7 @@ jobs:
           echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "Latest push CI run on beta head $head_sha is green and has both release artifacts: $url"
 
-      - name: Validate beta version
+      - name: Set beta version
         id: version
         shell: bash
         env:
@@ -84,25 +84,93 @@ jobs:
             echo "::error::Beta version must match MAJOR.MINOR.PATCH-beta.NUMBER; got '$version'."
             exit 1
           fi
-          configured="$(python3 versioning.py show-release)"
-          if [[ "$configured" != "$version" ]]; then
-            echo "::error::Beta head declares '$configured', but the requested release is '$version'."
-            echo "Run 'python3 versioning.py set-release $version', commit and push it, wait for green CI, then retry."
-            exit 1
-          fi
+          previous="$(python3 versioning.py show-release)"
           tag="v$version"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "::error::Tag $tag already exists. Increase the beta number."
             exit 1
           fi
-          sha="$(git rev-parse HEAD)"
-          if [[ "$sha" != '${{ steps.ci.outputs.sha }}' ]]; then
-            echo "::error::The validated CI commit changed unexpectedly."
+          original_sha="$(git rev-parse HEAD)"
+          if [[ "$original_sha" != '${{ steps.push_ci.outputs.sha }}' ]]; then
+            echo "::error::The validated push CI commit changed unexpectedly."
             exit 1
           fi
+          python3 versioning.py set-release "$version" >/dev/null
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Version.xcconfig
+          if ! git diff --cached --quiet; then
+            git commit -m "Release InputPilot $version"
+          fi
+          sha="$(git rev-parse HEAD)"
+          if [[ "$sha" != "$original_sha" ]]; then
+            git push origin "HEAD:refs/heads/beta"
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" \
+              --ref beta -f release_only=true
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Require versioned release artifacts
+        id: ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha='${{ steps.version.outputs.sha }}'
+
+          has_required_artifacts() {
+            local candidate="$1"
+            local artifacts
+            artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100")"
+            jq -e \
+              --arg firmware "InputPilot-Firmware-$sha" \
+              --arg ios "InputPilot-unsigned-$sha" '
+                [.artifacts[] | select(.expired == false) | .name] as $names |
+                ($names | index($firmware)) != null and
+                ($names | index($ios)) != null
+              ' <<<"$artifacts" >/dev/null
+          }
+
+          if [[ '${{ steps.version.outputs.needs_build }}' == 'false' ]]; then
+            run_id='${{ steps.push_ci.outputs.run_id }}'
+            has_required_artifacts "$run_id"
+          else
+            run_id=""
+            for attempt in $(seq 1 120); do
+              runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+                --commit "$sha" --event workflow_dispatch --limit 10 \
+                --json databaseId,status,conclusion,url)"
+              candidate="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
+              if [[ -n "$candidate" ]]; then
+                status="$(jq -r '.[0].status' <<<"$runs")"
+                conclusion="$(jq -r '.[0].conclusion // "none"' <<<"$runs")"
+                if [[ "$status" == 'completed' ]]; then
+                  if [[ "$conclusion" != 'success' ]] || ! has_required_artifacts "$candidate"; then
+                    echo "::error::Release-only build $candidate failed or did not produce both artifacts."
+                    exit 1
+                  fi
+                  run_id="$candidate"
+                  break
+                fi
+                echo "Waiting for release-only build $candidate ($status, attempt $attempt/120)..."
+              else
+                echo "Waiting for release-only build to appear (attempt $attempt/120)..."
+              fi
+              sleep 5
+            done
+            if [[ -z "$run_id" ]]; then
+              echo "::error::Release-only build did not complete for $sha."
+              exit 1
+            fi
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Using versioned firmware and IPA from run $run_id."
 
       - name: Tag and publish prerelease
         shell: bash
@@ -115,8 +183,6 @@ jobs:
             echo "::error::beta advanced from validated commit $sha to $beta_head; rerun after its push CI is green."
             exit 1
           fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git tag -a "$tag" "$sha" -m "InputPilot ${{ steps.version.outputs.version }}"
           git push origin "$tag"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
@@ -153,7 +219,8 @@ jobs:
           {
             echo "## InputPilot ${{ steps.version.outputs.version }}"
             echo
-            echo "Reused green push CI run: ${{ steps.ci.outputs.run_id }}"
+            echo "Green push CI run: ${{ steps.push_ci.outputs.run_id }}"
+            echo "Release artifact build: ${{ steps.ci.outputs.run_id }}"
             echo "Release asset run: $run_id"
             echo "The versioned prerelease, OTA assets and rolling AltStore beta feed are complete."
           } >> "$GITHUB_STEP_SUMMARY"

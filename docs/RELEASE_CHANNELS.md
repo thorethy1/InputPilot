@@ -51,17 +51,14 @@ that branch. This bootstrap changes release infrastructure only; 0.9 product
 development remains on `beta`.
 
 1. Develop and review 0.9 changes on `beta`.
-2. Set the next immutable version before the release push, for example
-   `python3 versioning.py set-release 0.9.0-beta.2`, and commit it with the
-   changes being released.
-3. Push `beta` and wait for CI.
-4. Run **Actions → Create beta release** from the `beta` branch and enter the
-   same version.
-5. The workflow verifies that the latest push CI is green, that its exact
-   commit declares the requested version, and that both release artifacts are
-   retained. It then tags and publishes that commit without creating another
-   commit or CI run, attaches the iOS/firmware assets, and refreshes the rolling
-   AltStore beta feed.
+2. Push `beta` and wait for CI.
+3. Run **Actions → Create beta release** from the `beta` branch and enter the
+   next immutable version, such as `0.9.0-beta.2`.
+4. The workflow verifies that the latest push CI is green, commits the requested
+   version, and runs a short release-only build for the versioned firmware and
+   unsigned IPA. Unit tests, including the long iOS test job, are not repeated.
+5. The workflow tags and publishes the version commit, attaches the artifacts,
+   and refreshes the rolling AltStore beta feed.
 
 Never reuse a beta number or move a versioned beta tag.
 
@@ -72,8 +69,8 @@ Never reuse a beta number or move a versioned beta tag.
 3. Run **Actions → Create release** on `main` with bump `none`. This changes
    `INPUTPILOT_RELEASE` from the beta identity to stable `0.9.0`, runs CI,
    publishes `v0.9.0`, and attaches stable OTA and AltStore assets.
-4. Keep `beta` for the next development cycle and commit its next prerelease
-   identity before the next beta release push.
+4. Keep `beta` for the next development cycle; **Create beta release** sets its
+   next prerelease identity.
 
 Use a normal patch/minor/major bump in **Create release** only when `main` still
 needs its numeric version advanced.
