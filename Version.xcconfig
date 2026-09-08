@@ -4,8 +4,8 @@
 INPUTPILOT_VERSION = 0.9.0
 // Firmware/release identity. Beta builds use e.g. 0.9.0-beta.1 while the iOS
 // marketing version remains the Apple-compatible numeric core above.
-INPUTPILOT_RELEASE = 0.9.0
-INPUTPILOT_CHANNEL = stable
+INPUTPILOT_RELEASE = 0.9.0-beta.30
+INPUTPILOT_CHANNEL = beta
 INPUTPILOT_BUILD = 3
 
 MARKETING_VERSION = $(INPUTPILOT_VERSION)
