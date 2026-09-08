@@ -7,6 +7,8 @@ private final class ScriptedTransport: HIDControlTransport {
     var state: TransportConnectionState
     var isAvailable: Bool { state == .ready }
     var events: [HIDEvent] = []
+    private var presetToken: UInt64 = 0
+    private var presetSize = 0
 
     init(kind: TransportKind, state: TransportConnectionState) {
         self.kind = kind
@@ -15,6 +17,27 @@ private final class ScriptedTransport: HIDControlTransport {
 
     func connect() async {}
     func send(_ event: HIDEvent) async throws { events.append(event) }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        let fields = command.split(separator: " ")
+        if command.hasPrefix("PRESET BEGIN "), fields.count == 5 {
+            presetToken = UInt64(fields[2], radix: 16) ?? 0
+            presetSize = Int(fields[3]) ?? 0
+            return "preset ready \(String(format: "%016llx", presetToken)) 0"
+        }
+        if command.hasPrefix("PRESET RUN ") {
+            return "preset running \(String(format: "%016llx", presetToken)) 0 \(presetSize)"
+        }
+        if command == "PRESET STATUS" {
+            return "preset completed \(String(format: "%016llx", presetToken)) \(presetSize) \(presetSize)"
+        }
+        if command.hasPrefix("PRESET ABORT") {
+            return "preset cancelled \(String(format: "%016llx", presetToken)) 0 \(presetSize)"
+        }
+        throw TransportError.failed("unexpected command")
+    }
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        "preset ack \(String(format: "%016llx", token)) \(Int(offset) + data.count)"
+    }
     func disconnect() async { state = .offline }
 }
 
@@ -24,7 +47,7 @@ private final class ScriptedTransport: HIDControlTransport {
         return HIDConnectionManager(
             ble: ScriptedTransport(kind: .bluetooth, state: state),
             tcp: ScriptedTransport(kind: .tcp, state: state),
-            capabilities: ["ble_transport", "wifi_transport", "keyboard_key", "keyboard_type", "keyboard_layout", "release_all"],
+            capabilities: ["ble_transport", "wifi_transport", "keyboard_key", "keyboard_type", "keyboard_layout", "release_all", "device_presets", "preset_abort"],
             protocolVersion: 2
         )
     }

@@ -234,6 +234,17 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
   const OTATransportOwner owner = strcmp(source, "ble") == 0
                                       ? OTATransportOwner::BLE
                                       : OTATransportOwner::WiFi;
+  if (message.rfind("PRESET ", 0) == 0) {
+    std::string reply;
+    if (g_otaEngine.active() && message != "PRESET STATUS" &&
+        message.rfind("PRESET ABORT", 0) != 0) {
+      reply = "error ota_busy";
+    } else if (!devicePresetCommand(message, reply)) {
+      reply = "error preset_invalid";
+    }
+    sendSecureReply(source, session, reply);
+    return true;
+  }
   if (message == "DIAGNOSTICS INFO") {
     sendSecureReply(source, session, strcmp(source, "ble") == 0
                                          ? g_bleDiagnostics.compactInfoJson()
@@ -416,6 +427,10 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     return true;
   }
   if (message.rfind("START ", 0) == 0) {
+    if (devicePresetActive()) {
+      sendSecureReply(source, session, "error preset_in_progress");
+      return true;
+    }
     if (g_otaEngine.active()) {
       sendSecureReply(source, session, "error update_in_progress");
       return true;
@@ -699,6 +714,22 @@ void processBLEControlFrames(size_t budget = 8) {
     if (frame.length > 1 && frame.bytes[0] == 0xFE)
       frame.bytes[0] = 0xFD;
     if (frame.length > 1 && frame.bytes[0] == 0xFD) {
+      // Binary preset data: marker, operation, 64-bit token, 32-bit offset,
+      // then raw bytecode. Every BLE chunk receives an encrypted app-level ACK.
+      if (frame.bytes[1] == 6 && frame.length > 14) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t offset = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                static_cast<uint32_t>(frame.bytes[13]);
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else devicePresetWrite(token, offset, frame.bytes + 14,
+                               frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
       if (frame.bytes[1] == 2 && frame.length == 2) {
         if (!USBIdentityConfig::reset()) {
           LOG_WARN("secure BLE USB identity reset failed");

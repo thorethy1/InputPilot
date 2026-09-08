@@ -33,6 +33,8 @@ access there. After that, Shortcuts can connect without opening the app UI.
 They wait up to 25 seconds for an authenticated transport permitted by the
 connection-mode setting. Automatic/preferred modes can use either BLE or Wi-Fi;
 Bluetooth-only and Wi-Fi-only modes require that specific transport.
+Run Preset returns after the complete program is acknowledged and verified;
+delays and key reports then continue autonomously on the ESP32.
 
 BLE first retrieves the saved CoreBluetooth peripheral identifier. Background
 scan fallback uses the control service UUID. This requires the updated firmware

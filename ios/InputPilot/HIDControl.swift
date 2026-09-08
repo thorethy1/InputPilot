@@ -189,11 +189,48 @@ protocol HIDControlTransport: AnyObject {
     var state: TransportConnectionState { get }
     func connect() async
     func send(_ event: HIDEvent) async throws
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String
     func disconnect() async
+}
+
+extension HIDControlTransport {
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        throw TransportError.failed("This transport does not support device-side presets.")
+    }
+
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        try await managementRequest(
+            "PRESET DATA \(String(format: "%016llx", token)) \(offset) \(data.hex)",
+            timeout: 8
+        )
+    }
 }
 
 enum TransportError: LocalizedError { case unavailable, encoding, failed(String)
     var errorDescription: String? { switch self { case .unavailable: "Transport unavailable"; case .encoding: "Could not encode event"; case let .failed(s): s } }
+}
+
+struct DevicePresetStatus: Equatable, Sendable {
+    enum Phase: String, Sendable { case idle, uploading, running, completed, cancelled, failed }
+    let phase: Phase
+    let token: UInt64
+    let position: Int
+    let size: Int
+
+    var isActive: Bool { phase == .uploading || phase == .running }
+
+    init?(reply: String) {
+        let fields = reply.split(separator: " ")
+        guard fields.count == 5, fields[0] == "preset",
+              let phase = Phase(rawValue: String(fields[1])),
+              let token = UInt64(fields[2], radix: 16),
+              let position = Int(fields[3]), let size = Int(fields[4]) else { return nil }
+        self.phase = phase
+        self.token = token
+        self.position = position
+        self.size = size
+    }
 }
 
 struct USBIdentity: Codable, Equatable {
@@ -473,6 +510,9 @@ final class TCPHIDControlTransport: HIDControlTransport {
                 pending.continuation.resume(throwing: error)
             })
         }
+    }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        try await request(command, timeout: timeout)
     }
     func installFirmware(_ firmware: Data, version: String, sha256: String,
                          allowDowngrade: Bool = false,
@@ -2020,6 +2060,28 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             Data(try secureChannel.sealText(command).utf8)
         }
     }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        try await request(command, timeout: timeout)
+    }
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        guard data.count <= 180 else {
+            throw TransportError.failed("Bluetooth preset chunk is too large.")
+        }
+        var plaintext = Data([0xFE, 0x06])
+        var bigToken = token.bigEndian
+        var bigOffset = offset.bigEndian
+        withUnsafeBytes(of: &bigToken) { plaintext.append(contentsOf: $0) }
+        withUnsafeBytes(of: &bigOffset) { plaintext.append(contentsOf: $0) }
+        plaintext.append(data)
+        return try await requestPayload(timeout: 8) {
+            guard let secureChannel, let peripheral else { throw TransportError.unavailable }
+            let payload = try secureChannel.sealBinary(plaintext)
+            guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+                throw TransportError.failed("The negotiated Bluetooth packet size is too small for preset upload.")
+            }
+            return payload
+        }
+    }
     private func requestPayload(
         timeout: TimeInterval = 10,
         makePayload: () throws -> Data
@@ -2545,6 +2607,141 @@ enum InputPilotWiFiManager {
             try? await transport.send(.releaseAll)
         }
         lastError = reason + " Release-all was attempted."
+    }
+
+    @discardableResult func startPreset(program: Data, token: UInt64) async -> Bool {
+        guard supports("device_presets") else {
+            lastError = "Device-side presets require a firmware update."
+            return false
+        }
+        guard !program.isEmpty, program.count <= 64 * 1024 else {
+            lastError = "The compiled preset is too large for the device."
+            return false
+        }
+        let tokenText = String(format: "%016llx", token)
+        var hash: UInt32 = 2_166_136_261
+        for byte in program { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        guard let beginReply = await presetRequest({ transport in
+            try await transport.managementRequest(
+                "PRESET BEGIN \(tokenText) \(program.count) \(String(format: "%08x", hash))",
+                timeout: 8
+            )
+        }) else { return false }
+        let beginFields = beginReply.split(separator: " ")
+        guard beginFields.count == 4, beginFields[0] == "preset", beginFields[1] == "ready",
+              UInt64(beginFields[2], radix: 16) == token,
+              let acknowledged = Int(beginFields[3]), (0 ... program.count).contains(acknowledged) else {
+            lastError = presetProtocolError(beginReply)
+            await discardFailedPreset(token: token)
+            return false
+        }
+        var offset = acknowledged
+        while offset < program.count {
+            if Task.isCancelled {
+                await discardFailedPreset(token: token)
+                return false
+            }
+            // 120 bytes keeps the encrypted BLE record below iOS' common
+            // negotiated ATT payload while remaining well below the TCP line cap.
+            let end = min(offset + 120, program.count)
+            let chunk = Data(program[offset ..< end])
+            guard let reply = await presetRequest({ transport in
+                try await transport.uploadPresetChunk(token: token, offset: UInt32(offset), data: chunk)
+            }) else {
+                await discardFailedPreset(token: token)
+                return false
+            }
+            let fields = reply.split(separator: " ")
+            guard fields.count == 4, fields[0] == "preset", fields[1] == "ack",
+                  UInt64(fields[2], radix: 16) == token, Int(fields[3]) == end else {
+                lastError = presetProtocolError(reply)
+                await discardFailedPreset(token: token)
+                return false
+            }
+            offset = end
+        }
+        guard let runReply = await presetRequest({ transport in
+            try await transport.managementRequest("PRESET RUN \(tokenText)", timeout: 8)
+        }), let status = DevicePresetStatus(reply: runReply), status.token == token,
+              status.phase == .running else {
+            if lastError == nil { lastError = "The device did not start the preset." }
+            await discardFailedPreset(token: token)
+            return false
+        }
+        lastError = nil
+        return true
+    }
+
+    private func discardFailedPreset(token: UInt64) async {
+        let preservedError = lastError
+        let tokenText = String(format: "%016llx", token)
+        _ = await presetRequest { transport in
+            try await transport.managementRequest("PRESET ABORT \(tokenText)", timeout: 3)
+        }
+        lastError = preservedError
+    }
+
+    func presetStatus() async -> DevicePresetStatus? {
+        guard supports("device_presets"),
+              let reply = await presetRequest({ transport in
+                  try await transport.managementRequest("PRESET STATUS", timeout: 5)
+              }), let status = DevicePresetStatus(reply: reply) else { return nil }
+        lastError = nil
+        return status
+    }
+
+    @discardableResult func abortPreset(token: UInt64 = 0) async -> Bool {
+        guard supports("device_presets") else {
+            lastError = "Stopping presets requires a firmware update."
+            return false
+        }
+        let command = token == 0 ? "PRESET ABORT" :
+            "PRESET ABORT \(String(format: "%016llx", token))"
+        guard let reply = await presetRequest({ transport in
+            try await transport.managementRequest(command, timeout: 5)
+        }), let status = DevicePresetStatus(reply: reply),
+              status.phase == .cancelled || status.phase == .idle || status.phase == .completed else {
+            if lastError == nil { lastError = "The device did not confirm that the preset stopped." }
+            return false
+        }
+        lastError = nil
+        return true
+    }
+
+    private func presetRequest(
+        _ operation: (HIDControlTransport) async throws -> String
+    ) async -> String? {
+        var failure = "No permitted control transport is ready."
+        for attempt in 0 ..< 3 {
+            let ready = candidateTransports(lowLatency: false).filter { $0.isAvailable && $0.state == .ready }
+            for transport in ready {
+                do {
+                    let reply = try await operation(transport)
+                    activeTransport = transport.kind
+                    if reply.hasPrefix("error ") {
+                        lastError = presetProtocolError(reply)
+                        return nil
+                    }
+                    return reply
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
+            if attempt < 2 { try? await Task.sleep(for: .milliseconds(150)) }
+        }
+        lastError = failure
+        return nil
+    }
+
+    private func presetProtocolError(_ reply: String) -> String {
+        let code = reply.hasPrefix("error ") ? String(reply.dropFirst(6)) : reply
+        switch code {
+        case "preset_busy": "Another preset is already running on the device."
+        case "preset_too_large": "The compiled preset is too large for the device."
+        case "preset_checksum_mismatch": "Preset upload verification failed. Nothing was executed."
+        case "ota_busy": "A firmware update is currently using the device."
+        default: "The device rejected the preset (\(code.replacingOccurrences(of: "_", with: " ")))."
+        }
     }
     func supports(_ capability: String) -> Bool { capabilities.contains(capability) }
     func supports(_ event: HIDEvent) -> Bool { requiredCapability(for: event).map { supports($0) } ?? true }

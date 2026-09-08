@@ -109,6 +109,29 @@ the app decrypts before matching the response to the pending request. `USB GET2`
 always uses this compact form over BLE and returns the full manufacturer-aware
 identity; `USB GET` retains the legacy response for older apps.
 
+## Device-side presets
+
+Firmware advertising `device_presets` accepts a transactional, authenticated
+preset upload. The bytecode contains only layout-resolved keyboard reports and
+non-blocking delays (maximum 60000 ms per delay; delays may be chained):
+
+- `PRESET BEGIN <token-hex> <size> <fnv1a32-hex>` allocates a program and
+  returns `preset ready <token> <received>`.
+- `PRESET DATA <token> <offset> <hex>` writes a Wi-Fi chunk and returns the
+  cumulative `preset ack <token> <received>`.
+- BLE binary management operation `0x06` carries an eight-byte big-endian
+  token, four-byte big-endian offset and raw program bytes after the existing
+  encrypted `0xFE` management marker.
+- `PRESET RUN <token>` starts only after exact size, bytecode and checksum
+  validation. Repeating BEGIN, DATA or RUN after a lost reply is idempotent.
+- `PRESET STATUS` reports `preset <state> <token> <position> <size>`.
+- `PRESET ABORT [token]` stops upload/playback immediately and queues a
+  release-all report.
+
+Only one preset may upload or run at once. Execution is owned by the ESP32 and
+does not depend on either transport remaining connected. OTA start is rejected
+while a preset is active, and preset start/upload is rejected during OTA.
+
 ## Session ownership and recovery
 
 - One BLE manager owns the CoreBluetooth connection per device ID.

@@ -14,12 +14,12 @@ final class HIDRemoteTests: XCTestCase {
 
     @MainActor func testPresetSecretInputIsExcludedFromMacroRecording() async {
         let ble = MockTransport(kind: .bluetooth, available: true)
-        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "keyboard_layout", "keyboard_key"])
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "keyboard_layout", "keyboard_key", "device_presets", "preset_abort"])
         var captured: [HIDEvent] = []
         manager.onEvent = { captured.append($0) }
         let result = await ActionExecutor().run(steps: [.secret("password")], layout: .us, typingDelayMs: 0, transport: manager, secretResolver: { _ in "private" })
         guard case .success = result else { return XCTFail("Secret action failed") }
-        XCTAssertFalse(ble.events.isEmpty)
+        XCTAssertTrue(ble.events.isEmpty)
         XCTAssertTrue(captured.isEmpty)
         _ = await manager.send(.keyCombo("ctrl+a"))
         XCTAssertEqual(captured, [.keyCombo("ctrl+a")])
@@ -332,6 +332,9 @@ private final class MockTransport: HIDControlTransport {
     var state: TransportConnectionState
     var isAvailable: Bool { state == .ready }
     var events: [HIDEvent] = []
+    private var presetToken: UInt64 = 0
+    private var presetSize = 0
+    private var presetReceived = 0
     init(kind: TransportKind, available: Bool) {
         self.kind = kind; state = available ? .ready : .offline
     }
@@ -340,6 +343,29 @@ private final class MockTransport: HIDControlTransport {
     }
     func connect() async {}
     func send(_ event: HIDEvent) async throws { events.append(event) }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        let fields = command.split(separator: " ")
+        if command.hasPrefix("PRESET BEGIN "), fields.count == 5 {
+            presetToken = UInt64(fields[2], radix: 16) ?? 0
+            presetSize = Int(fields[3]) ?? 0
+            presetReceived = 0
+            return "preset ready \(String(format: "%016llx", presetToken)) 0"
+        }
+        if command.hasPrefix("PRESET RUN ") {
+            return "preset running \(String(format: "%016llx", presetToken)) 0 \(presetSize)"
+        }
+        if command == "PRESET STATUS" {
+            return "preset completed \(String(format: "%016llx", presetToken)) \(presetSize) \(presetSize)"
+        }
+        if command.hasPrefix("PRESET ABORT") {
+            return "preset cancelled \(String(format: "%016llx", presetToken)) \(presetReceived) \(presetSize)"
+        }
+        throw TransportError.failed("unexpected command")
+    }
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        presetReceived = Int(offset) + data.count
+        return "preset ack \(String(format: "%016llx", token)) \(presetReceived)"
+    }
     func disconnect() async { state = .offline }
 }
 

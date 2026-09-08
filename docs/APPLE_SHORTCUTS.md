@@ -10,7 +10,7 @@ scheme.
 
 | Intent | Parameter | Behaviour |
 | --- | --- | --- |
-| Run Preset | Preset (required), Device (optional, defaults to the active device) | Parses the preset, connects and executes it through the shared `ActionExecutor`. Reports Done or a failure reason. |
+| Run Preset | Preset (required), Device (optional, defaults to the active device) | Parses and resolves the preset, uploads it with acknowledgements and returns as soon as checksum-verified execution starts on the ESP32. Long delays continue beyond Shortcuts' runtime. |
 | Run Macro | Macro, Device (optional), Speed, Repeats, Start Delay | Plays a saved macro through the shared connection manager and waits for held-input cleanup before reporting completion. |
 | Connect Device | Device | Connects BLE/Wi-Fi and reports the high-level connection summary ("Active Wi-Fi", "Ready Bluetooth", "Offline", …). |
 | Check Device Status | Device (optional, defaults to active) | Same summary without changing preset state. |

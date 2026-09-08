@@ -26,4 +26,12 @@ void recordHIDInput(const char *source, uint8_t type, size_t length);
 void recordHIDBleFrame(uint8_t type, size_t length);
 const char *deviceResetReason();
 
+// Authenticated, transactional preset protocol. Text commands are used for
+// control and Wi-Fi chunks; BLE can call devicePresetWrite() with a larger
+// encrypted binary chunk.
+bool devicePresetCommand(const std::string &command, std::string &reply);
+bool devicePresetWrite(uint64_t token, uint32_t offset, const uint8_t *data,
+                       size_t length, std::string &reply);
+bool devicePresetActive();
+
 #endif // COMMAND_SINK_H

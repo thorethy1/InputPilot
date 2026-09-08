@@ -2,221 +2,113 @@ import XCTest
 @testable import InputPilot
 
 @MainActor private final class MockActionTransport: HIDActionTransport {
-    enum RecordedCall: Equatable {
-        case beginOrderedSession(lowLatency: Bool)
-        case endOrderedSession
-        case keyCombo(String)
-        case sendText(String, delayMilliseconds: Int)
-        case releaseAllPreservingError
-    }
+    var acceptsPreset = true
+    private(set) var programs: [Data] = []
+    private(set) var abortedTokens: [UInt64] = []
 
-    var beginResult = true
-    var sendResults: [Bool] = []
-    private(set) var calls: [RecordedCall] = []
-    private var sendIndex = 0
-
-    private func nextResult() -> Bool {
-        defer { sendIndex += 1 }
-        return sendIndex < sendResults.count ? sendResults[sendIndex] : true
-    }
-
-    func send(_ event: HIDEvent) async -> Bool {
-        if case let .keyCombo(key) = event { calls.append(.keyCombo(key)) }
-        return nextResult()
-    }
-
-    func sendText(_ text: String, layout: KeyboardLayout, delayMilliseconds: Int) async -> Bool {
-        calls.append(.sendText(text, delayMilliseconds: delayMilliseconds))
-        return nextResult()
-    }
-
-    func beginOrderedSession(lowLatency: Bool) -> Bool {
-        calls.append(.beginOrderedSession(lowLatency: lowLatency))
-        return beginResult
-    }
-
-    func endOrderedSession() {
-        calls.append(.endOrderedSession)
-    }
-
-    func releaseAllPreservingError() async {
-        calls.append(.releaseAllPreservingError)
-    }
+    func send(_ event: HIDEvent) async -> Bool { true }
+    func sendText(_ text: String, layout: KeyboardLayout, delayMilliseconds: Int) async -> Bool { true }
+    func beginOrderedSession(lowLatency: Bool) -> Bool { true }
+    func endOrderedSession() {}
+    func releaseAllPreservingError() async {}
+    func startPreset(program: Data, token: UInt64) async -> Bool { programs.append(program); return acceptsPreset }
+    func abortPreset(token: UInt64) async -> Bool { abortedTokens.append(token); return true }
 }
 
 final class ActionExecutorTests: XCTestCase {
-    @MainActor func testHappyPathSendsTextKeyAndDelayInOrder() async {
+    @MainActor func testHappyPathUploadsOneCompleteProgram() async {
         let transport = MockActionTransport()
         let result = await ActionExecutor().run(
-            steps: [.text("hello"), .delay(1), .key("enter")],
-            layout: .us,
-            typingDelayMs: 0,
-            transport: transport,
-            secretResolver: { _ in "" }
+            steps: [.text("hello"), .delay(1), .key("enter")], layout: .us,
+            typingDelayMs: 0, token: 7, transport: transport, secretResolver: { _ in "" }
         )
         guard case .success = result else { return XCTFail("Expected success, got \(result)") }
-        XCTAssertEqual(transport.calls, [
-            .beginOrderedSession(lowLatency: false),
-            .sendText("hello", delayMilliseconds: 0),
-            .keyCombo("enter"),
-            .releaseAllPreservingError,
-            .endOrderedSession
-        ])
+        XCTAssertEqual(transport.programs.count, 1)
+        let bytes = Array(try! XCTUnwrap(transport.programs.first))
+        XCTAssertEqual(Array(bytes.prefix(3)), [0x01, 0, 0x0b])
+        XCTAssertTrue(bytes.contains(0x28))
+        XCTAssertEqual(transport.abortedTokens, [])
     }
 
-    @MainActor func testTypingDelayIsForwardedToSendText() async {
+    @MainActor func testTypingAndLongDelaysAreCompiledIntoDeviceProgram() async {
         let transport = MockActionTransport()
         _ = await ActionExecutor().run(
-            steps: [.text("hi")],
-            layout: .us,
-            typingDelayMs: 25,
-            transport: transport,
-            secretResolver: { _ in "" }
+            steps: [.text("hi"), .delay(60_000), .delay(60_000)], layout: .us,
+            typingDelayMs: 25, token: 8, transport: transport, secretResolver: { _ in "" }
         )
-        let sendCalls = transport.calls.filter { if case .sendText = $0 { return true } else { return false } }
-        XCTAssertEqual(sendCalls, [.sendText("hi", delayMilliseconds: 25)])
+        let bytes = Array(try! XCTUnwrap(transport.programs.first))
+        XCTAssertGreaterThanOrEqual(bytes.filter { $0 == 0x02 }.count, 5)
     }
 
-    @MainActor func testLayoutValidationFailureSendsNothing() async {
+    @MainActor func testLayoutValidationFailureUploadsNothing() async {
         let transport = MockActionTransport()
         let result = await ActionExecutor().run(
-            steps: [.text("ok"), .text("ä")],
-            layout: .us,
-            typingDelayMs: 0,
-            transport: transport,
-            secretResolver: { _ in "" }
+            steps: [.text("ok"), .text("ä")], layout: .us, typingDelayMs: 0,
+            transport: transport, secretResolver: { _ in "" }
         )
         guard case .failure(.unsupportedCharacter(let character)) = result else {
             return XCTFail("Expected unsupportedCharacter, got \(result)")
         }
         XCTAssertEqual(character, "ä")
-        XCTAssertTrue(transport.calls.isEmpty)
+        XCTAssertTrue(transport.programs.isEmpty)
     }
 
-    @MainActor func testTransportFailureMidRunReleasesKeysAndFails() async {
-        let transport = MockActionTransport()
-        transport.sendResults = [true, false]
+    @MainActor func testRejectedUploadFails() async {
+        let transport = MockActionTransport(); transport.acceptsPreset = false
         let result = await ActionExecutor().run(
-            steps: [.text("ok"), .key("enter")],
-            layout: .us,
-            typingDelayMs: 0,
-            transport: transport,
-            secretResolver: { _ in "" }
+            steps: [.text("ok")], layout: .us, typingDelayMs: 0,
+            transport: transport, secretResolver: { _ in "" }
         )
-        guard case .failure(.transportFailure) = result else {
-            return XCTFail("Expected transportFailure, got \(result)")
-        }
-        XCTAssertEqual(transport.calls, [
-            .beginOrderedSession(lowLatency: false),
-            .sendText("ok", delayMilliseconds: 0),
-            .keyCombo("enter"),
-            .releaseAllPreservingError,
-            .endOrderedSession
-        ])
+        guard case .failure(.transportFailure) = result else { return XCTFail("Expected transportFailure, got \(result)") }
+        XCTAssertEqual(transport.programs.count, 1)
     }
 
-    @MainActor func testCancellationReleasesKeys() async {
-        let transport = MockActionTransport()
-        let executor = ActionExecutor()
+    @MainActor func testCancellationAbortsDeviceToken() async {
+        let transport = MockActionTransport(); let token: UInt64 = 99
         let task = Task {
-            await executor.run(
-                steps: [.key("enter"), .delay(5000)],
-                layout: .us,
-                typingDelayMs: 0,
-                transport: transport,
-                secretResolver: { _ in "" }
+            await ActionExecutor().run(
+                steps: [.key("enter"), .delay(5000)], layout: .us,
+                typingDelayMs: 0, token: token, transport: transport, secretResolver: { _ in "" }
             )
         }
         task.cancel()
         let result = await task.value
-        guard case .failure(.cancelled) = result else {
-            return XCTFail("Expected cancellation, got \(result)")
-        }
-        XCTAssertEqual(transport.calls, [
-            .beginOrderedSession(lowLatency: false),
-            .releaseAllPreservingError,
-            .endOrderedSession
-        ])
+        guard case .failure(.cancelled) = result else { return XCTFail("Expected cancellation, got \(result)") }
+        XCTAssertEqual(transport.abortedTokens, [token])
     }
 
-    @MainActor func testFailedSessionStartSendsNothing() async {
+    @MainActor func testSecretIsResolvedToHIDReportsAndNeverStoredAsPlaintext() async {
         let transport = MockActionTransport()
-        transport.beginResult = false
         let result = await ActionExecutor().run(
-            steps: [.text("ok")],
-            layout: .us,
-            typingDelayMs: 0,
-            transport: transport,
-            secretResolver: { _ in "" }
+            steps: [.secret("work-password")], layout: .us, typingDelayMs: 10,
+            transport: transport, secretResolver: { _ in "hunter2" }
         )
-        guard case .failure(.transportFailure) = result else {
-            return XCTFail("Expected transportFailure, got \(result)")
-        }
-        XCTAssertEqual(transport.calls, [.beginOrderedSession(lowLatency: false)])
+        guard case .success = result else { return XCTFail("Expected success, got \(result)") }
+        let program = try! XCTUnwrap(transport.programs.first)
+        XCTAssertNil(String(data: program, encoding: .utf8)?.range(of: "hunter2"))
     }
 
-    @MainActor func testSecretStepResolvesThroughResolverAndSendsViaSendText() async {
+    @MainActor func testMissingSecretFailsWithoutLeakingResolverError() async {
         let transport = MockActionTransport()
+        struct LeakyError: LocalizedError { var errorDescription: String? { "hunter2 leaked" } }
         let result = await ActionExecutor().run(
-            steps: [.secret("work-password")],
-            layout: .us,
-            typingDelayMs: 10,
-            transport: transport,
-            secretResolver: { $0 == "work-password" ? "hunter2" : "" }
+            steps: [.secret("work-password")], layout: .us, typingDelayMs: 0,
+            transport: transport, secretResolver: { _ in throw LeakyError() }
         )
-        guard case .success = result else {
-            return XCTFail("Expected success, got \(result)")
-        }
-        XCTAssertEqual(transport.calls, [
-            .beginOrderedSession(lowLatency: false),
-            .sendText("hunter2", delayMilliseconds: 10),
-            .releaseAllPreservingError,
-            .endOrderedSession
-        ])
-    }
-
-    @MainActor func testMissingSecretFailsReleasesKeysAndNeverLeaksResolverError() async {
-        let transport = MockActionTransport()
-        struct LeakyError: LocalizedError {
-            var errorDescription: String? { "hunter2 leaked" }
-        }
-        let result = await ActionExecutor().run(
-            steps: [.secret("work-password")],
-            layout: .us,
-            typingDelayMs: 0,
-            transport: transport,
-            secretResolver: { _ in throw LeakyError() }
-        )
-        guard case .failure(let error) = result else {
-            return XCTFail("Expected failure, got \(result)")
-        }
+        guard case .failure(let error) = result else { return XCTFail("Expected failure, got \(result)") }
         XCTAssertEqual(error.localizedDescription, "Secret ‘work-password’ is missing.")
         XCTAssertFalse(error.localizedDescription.contains("hunter2"))
-        XCTAssertEqual(transport.calls, [
-            .beginOrderedSession(lowLatency: false),
-            .releaseAllPreservingError,
-            .endOrderedSession
-        ])
+        XCTAssertTrue(transport.programs.isEmpty)
     }
 
     @MainActor func testUnsupportedSecretCharacterFailsWithoutLeakingValue() async {
         let transport = MockActionTransport()
         let result = await ActionExecutor().run(
-            steps: [.secret("work-password")],
-            layout: .us,
-            typingDelayMs: 0,
-            transport: transport,
-            secretResolver: { _ in "pässwort" }
+            steps: [.secret("work-password")], layout: .us, typingDelayMs: 0,
+            transport: transport, secretResolver: { _ in "pässwort" }
         )
-        guard case .failure(.transportFailure(let reason)) = result else {
-            return XCTFail("Expected transportFailure, got \(result)")
-        }
-        XCTAssertTrue(reason.contains("work-password"))
-        XCTAssertFalse(reason.contains("ä"))
-        XCTAssertEqual(transport.calls, [
-            .beginOrderedSession(lowLatency: false),
-            .releaseAllPreservingError,
-            .endOrderedSession
-        ])
+        guard case .failure(.transportFailure(let reason)) = result else { return XCTFail("Expected failure, got \(result)") }
+        XCTAssertTrue(reason.contains("work-password")); XCTAssertFalse(reason.contains("ä"))
+        XCTAssertTrue(transport.programs.isEmpty)
     }
 }

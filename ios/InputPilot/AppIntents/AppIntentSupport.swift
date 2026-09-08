@@ -79,9 +79,9 @@ struct PresetRunOutcome: Equatable, Sendable {
         return manager
     }
 
-    /// Runs intent work strictly one after another: when a user fires several
-    /// App Intents in quick succession, each one waits for the previous
-    /// sequence (typing included) to finish before connecting or sending.
+    /// Serializes connection and upload handoff work. Preset execution itself
+    /// continues on the ESP32 after this queue advances; the device rejects a
+    /// second preset while the first is still running.
     static func serialized(_ work: @MainActor @escaping () async -> PresetRunOutcome) async -> PresetRunOutcome {
         let previous = executionTail
         let task = Task<PresetRunOutcome, Never> { @MainActor [previous] in
@@ -235,7 +235,7 @@ struct PresetRunOutcome: Equatable, Sendable {
     static func outcome(from result: Result<Void, ActionExecutionError>) -> PresetRunOutcome {
         switch result {
         case .success:
-            PresetRunOutcome(success: true, message: "Done.")
+            PresetRunOutcome(success: true, message: "Preset started on InputPilot.")
         case .failure(let error):
             PresetRunOutcome(success: false, message: error.errorDescription ?? "The action could not run.")
         }

@@ -66,12 +66,18 @@ extension PresetScript.Step {
     @ObservationIgnored private var manager: HIDConnectionManager?
     @ObservationIgnored private var modelContext: ModelContext?
     @ObservationIgnored private var execution: Task<Void, Never>?
+    private var activeToken: UInt64?
+    private(set) var remoteActive = false
     private(set) var runningPresetID: UUID?
     private(set) var completedPresetID: UUID?
     private(set) var failedPresetID: UUID?
     private(set) var lastError: String?
 
-    var isBusy: Bool { runningPresetID != nil }
+    var isBusy: Bool { runningPresetID != nil || remoteActive }
+
+    static func token(for id: UUID) -> UInt64 {
+        UInt64(id.uuidString.replacingOccurrences(of: "-", with: "").prefix(16), radix: 16) ?? 1
+    }
 
     static func parseIssue(for script: String) -> (line: Int, reason: String)? {
         do {
@@ -97,8 +103,11 @@ extension PresetScript.Step {
     }
 
     func run(_ preset: HIDPreset, layoutName: String) {
-        guard execution == nil, let manager else { return }
+        guard execution == nil, !isBusy, let manager else { return }
         runningPresetID = preset.id
+        remoteActive = true
+        let token = Self.token(for: preset.id)
+        activeToken = token
         failedPresetID = nil
         lastError = nil
         completedPresetID = nil
@@ -115,6 +124,8 @@ extension PresetScript.Step {
             manager.lastError = error.localizedDescription
             execution = nil
             runningPresetID = nil
+            remoteActive = false
+            activeToken = nil
             failedPresetID = preset.id
             lastError = error.localizedDescription
             return
@@ -123,22 +134,18 @@ extension PresetScript.Step {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         execution = Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = await ActionExecutor().run(steps: steps, layout: layout, typingDelayMs: delay, transport: manager, secretResolver: { name in
+            let result = await ActionExecutor().run(steps: steps, layout: layout, typingDelayMs: delay, token: token, transport: manager, secretResolver: { name in
                 guard let modelContext else { throw SecretStoreError.notFound(name) }
                 return try SecretStore(context: modelContext).value(forName: name)
             })
-            self.execution = nil
+            guard !Task.isCancelled else { return }
             switch result {
             case .success:
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                self.completedPresetID = preset.id
-                self.runningPresetID = nil
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(800))
-                    guard let self, self.completedPresetID == preset.id else { return }
-                    self.completedPresetID = nil
-                }
+                await self.monitor(presetID: preset.id, token: token, manager: manager)
             case .failure(let error):
+                self.execution = nil
+                self.remoteActive = false
+                self.activeToken = nil
                 switch error {
                 case .cancelled:
                     self.runningPresetID = nil
@@ -148,10 +155,10 @@ extension PresetScript.Step {
                     self.lastError = error.errorDescription
                     self.runningPresetID = nil
                 case .transportFailure(let reason):
-                    manager.lastError = reason
+                    let detail = manager.lastError ?? reason
                     UINotificationFeedbackGenerator().notificationOccurred(.error)
                     self.failedPresetID = preset.id
-                    self.lastError = reason
+                    self.lastError = detail
                     self.runningPresetID = nil
                 }
             }
@@ -161,7 +168,101 @@ extension PresetScript.Step {
     func stop() {
         execution?.cancel()
         execution = nil
-        runningPresetID = nil
+        let token = activeToken ?? 0
+        guard let manager else {
+            runningPresetID = nil
+            remoteActive = false
+            activeToken = nil
+            return
+        }
+        Task { @MainActor [weak self] in
+            let stopped = await manager.abortPreset(token: token)
+            guard let self else { return }
+            if !stopped { self.lastError = manager.lastError ?? "The device did not stop the preset." }
+            self.runningPresetID = nil
+            self.remoteActive = false
+            self.activeToken = nil
+        }
+    }
+
+    func refreshRemoteState(presets: [HIDPreset]) async {
+        guard execution == nil, let manager, manager.supports("device_presets") else { return }
+        var status: DevicePresetStatus?
+        for _ in 0 ..< 20 where execution == nil {
+            status = await manager.presetStatus()
+            if status != nil { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard execution == nil, let status else { return }
+        remoteActive = status.isActive
+        activeToken = status.isActive ? status.token : nil
+        let matchedID = status.isActive
+            ? presets.first(where: { Self.token(for: $0.id) == status.token })?.id
+            : nil
+        runningPresetID = matchedID
+        if let matchedID, status.isActive {
+            execution = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.monitor(presetID: matchedID, token: status.token, manager: manager)
+            }
+        } else if status.isActive {
+            execution = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.monitorUnknown(token: status.token, manager: manager)
+            }
+        }
+    }
+
+    private func monitorUnknown(token: UInt64, manager: HIDConnectionManager) async {
+        while !Task.isCancelled {
+            if let status = await manager.presetStatus(), status.token == token, !status.isActive {
+                remoteActive = false
+                activeToken = nil
+                execution = nil
+                return
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
+    }
+
+    private func monitor(presetID: UUID, token: UInt64, manager: HIDConnectionManager) async {
+        while !Task.isCancelled {
+            if let status = await manager.presetStatus(), status.token == token {
+                switch status.phase {
+                case .uploading, .running:
+                    try? await Task.sleep(for: .milliseconds(500))
+                    continue
+                case .completed:
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    completedPresetID = presetID
+                    runningPresetID = nil
+                    remoteActive = false
+                    activeToken = nil
+                    execution = nil
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .milliseconds(800))
+                        guard let self, self.completedPresetID == presetID else { return }
+                        self.completedPresetID = nil
+                    }
+                    return
+                case .cancelled, .idle:
+                    runningPresetID = nil
+                    remoteActive = false
+                    activeToken = nil
+                    execution = nil
+                    return
+                case .failed:
+                    lastError = "The preset failed while running on the device."
+                    failedPresetID = presetID
+                    runningPresetID = nil
+                    remoteActive = false
+                    activeToken = nil
+                    execution = nil
+                    return
+                }
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
     }
 
     func dismissError() {
@@ -246,6 +347,15 @@ struct PresetsView: View {
             }
         }
         .toolbar {
+            if model.isBusy {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) { model.stop() } label: {
+                        Label("Stop Preset", systemImage: "stop.circle.fill")
+                    }
+                    .tint(AppColors.error)
+                    .accessibilityHint("Stops the preset currently running on the InputPilot device")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     editorMode = .create
@@ -292,9 +402,7 @@ struct PresetsView: View {
         }
         .onAppear {
             model.bind(manager: manager, context: context)
-        }
-        .onDisappear {
-            model.stop()
+            Task { await model.refreshRemoteState(presets: presets) }
         }
     }
 
