@@ -59,6 +59,16 @@ After flashing, sideload the InputPilot iOS companion app and securely pair it w
 
 - **[InputPilot for iOS](ios/)** — SwiftUI/SwiftData; secure setup, trackpad, keyboard, presets, macros, diagnostics and OTA. Secure Protocol v2 firmware is required.
 
+```mermaid
+flowchart LR
+    iPhone["iPhone · InputPilot SwiftUI app"]
+    device["ESP32-S3 · authenticated firmware"]
+    computer["Computer · USB HID"]
+    iPhone -->|"Secure BLE"| device
+    iPhone -->|"Secure Wi-Fi / TCP"| device
+    device -->|"Mouse + keyboard reports"| computer
+```
+
 <p align="center">
   <img src="docs/images/ios-device-list.jpg" alt="InputPilot device list showing two ready devices" width="240">
   &nbsp;
@@ -104,8 +114,8 @@ Add the desired URL as a source in AltStore Classic or another compatible sidelo
 
 ## CI
 
-Badges above track the latest `main` workflow run
-(`.github/workflows/ci.yml` on every PR and push to `main`):
+Badges above track the latest `main` workflow run. `.github/workflows/ci.yml`
+runs on every PR and push to `main` or `beta`:
 
 - PlatformIO **native unit tests**
 - **esp32s3 firmware compile**
@@ -120,9 +130,9 @@ secure TCP session before saving it. There is no manual address or unencrypted
 setup path. Bluetooth and Wi-Fi then provide the same controls;
 the selected connection mode only changes transport preference.
 
-- **Trackpad:** coalesced relative one-finger movement, two-finger scrolling, tap/double-tap click, long-press drag, mouse buttons, sensitivity and safety release.
+- **Trackpad:** gesture-first surface with coalesced relative one-finger movement, two-finger scrolling with momentum, pinch-to-zoom with scroll/zoom arbitration, tap/double-tap click, hold-to-drag, two-finger tap right-click, three-finger tap middle-click, sensitivity and safety release.
 - **Keyboard:** native event input (including Backspace, Enter, Tab and paste), navigation/editing keys, one-shot modifiers, shortcuts, and actual German QWERTZ or US QWERTY USB-HID mapping.
-- **Presets:** local SwiftData text/shortcut items with favorite, duplicate, delete, reorder, optional Enter, and typing-delay metadata.
+- **Presets:** local SwiftData text/shortcut items with favorite, duplicate, delete, reorder, optional Enter, and typing-delay metadata; complete presets execute autonomously on the ESP32 after an acknowledged, checksummed upload and can be stopped from the app.
 - **Macros:** records only actions produced inside this app, including timing. Playback supports 0.5×–2×, finite/infinite repeat and start delay. The visible STOP control cancels the queue and sends release-all.
 
 Automatic transport selection uses BLE for small low-latency events, persistent TCP for longer text and event streams, and REST for management/fallback. Device settings also offer Prefer Bluetooth, Prefer Wi-Fi, Bluetooth Only, and Wi-Fi Only. The active transport is shown above the control tabs.
@@ -161,7 +171,7 @@ Authenticated Wi-Fi or BLE OTA
 
 Firmware v0.8.7 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
-The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
+The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Firmware downgrades are rejected in both the app and current firmware. Developer Mode exposes confirmed downgrade and published-checksum overrides; even then, the device verifies the complete transfer hash and all embedded compatibility metadata. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
 Devices flashed with an earlier partition table cannot update through the app. Perform the full USB reflash described above. It replaces the partition table, so Wi-Fi must be configured again.
 
@@ -169,7 +179,7 @@ Contributors should use `AppColors` and the `AccentColor` asset for the red bran
 
 ## iOS builds on GitHub
 
-No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes ESP32-S3 firmware and an unsigned iOS device IPA on each `main` build. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
+No local Mac is required for development handoff or signed builds. Regular GitHub Actions CI publishes ESP32-S3 firmware and an unsigned iOS device IPA on each `main` and `beta` build. The unsigned IPA uses `com.thorethy.inputpilot` and contains no provisioning profile, registered-device UDIDs, Apple Team ID, or code signature. It must be signed with the installer's own Apple credentials before iOS will run it; self-signing tools may replace the bundle ID with an ID available to that Apple team.
 
 Configure `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `KEYCHAIN_PASSWORD` as repository Actions secrets. `APPLE_TEAM_ID` and `IOS_BUNDLE_ID` are optional overrides and must match the supplied profile. Then use **Actions → iOS Signed Build → Run workflow**. The workflow replaces `InputPilot.ipa` in the unpublished **Private Signed InputPilot IPA** draft release and writes its direct download link to the run summary. Only authorized repository collaborators can access that draft; the signed IPA is never added to a public release.
 
@@ -177,12 +187,13 @@ Signing inputs are never committed or uploaded as artifacts and are reconstructe
 
 ## Versioned release assets
 
-Use **Actions → Create release → Run workflow** and choose `patch`, `minor`, or
-`major`. The worker updates the single version in `Version.xcconfig`, runs CI
+Use **Actions → Create release → Run workflow** and choose `none`, `patch`, `minor`, or
+`major`. The worker updates the release values in `Version.xcconfig`, runs CI
 with an automatically increasing iOS build number, creates the matching tag and
 GitHub Release, and starts the verified asset workflow. App and firmware builds
-both read this shared version; their project files do not contain release-number
-copies.
+read this shared configuration; beta firmware additionally uses a prerelease
+identity such as `0.9.0-beta.1` while the iOS marketing version remains numeric
+for Apple compatibility.
 
 | Asset | Content |
 |-------|---------|
@@ -196,6 +207,13 @@ The individual bootloader, partition, OTA bootstrap, checksum, and initial-flash
 
 The repository-hosted AltStore-compatible feeds are documented in the [AltStore](#altstore) section above and are updated automatically when stable or beta releases are published.
 
+0.9 development and prereleases use the `beta` branch. Select **Beta** under
+Settings → Updates for beta firmware OTA checks and add
+`https://github.com/thorethy1/InputPilot/releases/download/beta/altstore-source.json`
+to AltStore for beta app updates. Stable releases and `releases/latest` remain
+isolated from prereleases. The complete publish and promotion procedure is in
+[Stable and Beta Release Channels](docs/RELEASE_CHANNELS.md).
+
 CI artifacts (retained for 14 days) and release assets are independent — a release asset survives indefinitely. If the CI run for a tag commit is still in progress, the workflow waits for it (up to 15 minutes) and fails safely if no successful run was produced for that exact commit.
 
 To repair a release whose assets were not attached (or to retry after a CI fix), run the workflow manually from **Actions → Attach release assets → Run workflow** with the published tag name. A manually created release remains supported when its tag matches `Version.xcconfig`.
@@ -208,7 +226,7 @@ pio test -e native
 pio run -e esp32s3
 ```
 
-iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. Firmware and iOS jobs run on pull requests and pushes to `main`.
+iOS build/tests run with `xcodebuild test` in CI on `macos-26`; both workflows explicitly reject Xcode older than 26. Building against the iOS 26 SDK enables the system's native Liquid Glass appearance for the app's standard navigation, tab, toolbar, sheet, form, and button components; InputPilot does not simulate it on older SDKs. Firmware and iOS jobs run on pull requests and pushes to `main` and `beta`.
 
 The manual hardware and Liquid Glass release-candidate checklist is in [the hardware E2E test plan](docs/HARDWARE_E2E.md).
 

@@ -1,6 +1,7 @@
 #include "RadioManager.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <vector>
 #include <WiFi.h>
@@ -18,10 +19,13 @@
 #include "Logging.h"
 #include "HIDProtocol.h"
 #include "WifiCredentials.h"
+#include "WifiFallbackPolicy.h"
 #include "WifiConfigServer.h"
 #include "BLEOTA.h"
 #include "BLEDiagnostics.h"
+#include "BLEAdvertisingRecovery.h"
 #include "BLESessionOwnership.h"
+#include "BLEHandshakeDelivery.h"
 #include "OTAEngine.h"
 #include "KeyMap.h"
 #include "PairingSecretStore.h"
@@ -40,10 +44,14 @@ namespace {
 
 NimBLEServer *s_bleServer = nullptr;
 NimBLECharacteristic *s_bleTx = nullptr;
-// Set while stopBle() is releasing the stack so the disconnect callback does
-// NOT restart advertising mid-teardown (which crashes deinit(true)).
+// Prevent advertising recovery while stopBle() is quiescing the transport.
 volatile bool s_bleTearingDown = false;
 bool s_bleReady = false;
+// A disconnect callback must not take the HID mutex, write USB logs or restart
+// advertising on NimBLE's 4 KiB host stack. Coalesce owner disconnects until
+// the firmware loop can perform cleanup, keeping the most recent reason.
+constexpr int BLE_NO_DISCONNECT = -1;
+std::atomic<int> s_bleDisconnectReason{BLE_NO_DISCONNECT};
 
 BLESessionOwnership s_bleOwner(BLE_SECURE_AUTH_TIMEOUT_MS);
 bool s_wifiOtaWindowed = false;
@@ -66,6 +74,7 @@ constexpr size_t BLE_CONTROL_QUEUE_DEPTH = 16;
 constexpr size_t BLE_CONTROL_FRAME_MAX = 242;
 volatile uint32_t s_bleConnectionGeneration = 0;
 uint32_t s_bleProcessedGeneration = 0;
+BLEHandshakeDelivery s_bleHandshakeDelivery;
 volatile bool s_bleControlQueueOverflow = false;
 constexpr size_t TCP_CONTROL_TEXT_MAX = 768;
 constexpr size_t TCP_OTA_BINARY_PLAINTEXT_MAX =
@@ -79,6 +88,7 @@ bool bleSessionEstablished() {
   // A new connection generation must never inherit the prior connection's
   // established flag during that handoff window.
   return s_bleOwner.connected() &&
+         s_bleDisconnectReason.load() == BLE_NO_DISCONNECT &&
          s_bleProcessedGeneration == s_bleConnectionGeneration &&
          s_bleSecureSession.established();
 }
@@ -98,7 +108,15 @@ bool sendBleNotification(const uint8_t *value, size_t length) {
 void sendControlReply(const char *source, const char *reply) {
   if (!reply) return;
   if (strcmp(source, "ble") == 0 && s_bleTx && s_bleOwner.connected()) {
-    sendBleNotification(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
+    const std::string text(reply);
+    if (text.rfind("secure challenge ", 0) == 0 ||
+        text.rfind("secure ready ", 0) == 0 || text == "secure failed") {
+      // A reconnect can still have ATT's default MTU of 23. Never discard
+      // its challenge/proof: deliver ordered fragments, retrying backpressure.
+      s_bleHandshakeDelivery.queue(text, s_bleConnectionGeneration, millis());
+    } else {
+      sendBleNotification(reinterpret_cast<const uint8_t *>(reply), strlen(reply));
+    }
   } else if (strcmp(source, "wifi") == 0 && s_tcpClient && s_tcpClient.connected()) {
     s_tcpClient.print(reply);
     s_tcpClient.print("\n");
@@ -186,6 +204,8 @@ class FirmwareWifiManagementBackend final : public WifiManagement::Backend {
   }
 
   bool clear() override { return WifiCredentials::clear(); }
+  bool setFallbackAP(bool enabled) override { return WifiCredentials::setFallbackApEnabled(enabled); }
+  void applyFallbackAP() override { g_radio.applyFallbackApPreference(); }
 
   void apply(const std::string &provisionedSsid) override {
     g_radio.applyWifiCredentials(String(provisionedSsid.c_str()));
@@ -214,6 +234,17 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
   const OTATransportOwner owner = strcmp(source, "ble") == 0
                                       ? OTATransportOwner::BLE
                                       : OTATransportOwner::WiFi;
+  if (message.rfind("PRESET ", 0) == 0) {
+    std::string reply;
+    if (g_otaEngine.active() && message != "PRESET STATUS" &&
+        message.rfind("PRESET ABORT", 0) != 0) {
+      reply = "error ota_busy";
+    } else if (!devicePresetCommand(message, reply)) {
+      reply = "error preset_invalid";
+    }
+    sendSecureReply(source, session, reply);
+    return true;
+  }
   if (message == "DIAGNOSTICS INFO") {
     sendSecureReply(source, session, strcmp(source, "ble") == 0
                                          ? g_bleDiagnostics.compactInfoJson()
@@ -222,6 +253,20 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
   }
   if (message == "WIFI STATUS") {
     sendSecureReply(source, session, g_radio.wifiStatusJson());
+    return true;
+  }
+  if (message == "WIFI AP GET") {
+    sendSecureReply(source, session, WifiCredentials::fallbackApEnabled()
+        ? "{\"enabled\":true}" : "{\"enabled\":false}");
+    return true;
+  }
+  if (message == "WIFI AP ON" || message == "WIFI AP OFF") {
+    if (g_otaEngine.active()) {
+      sendSecureReply(source, session, "error ota_busy");
+    } else {
+      finishWifiManagement(source, session, WifiManagement::setFallbackAP(
+          s_wifiManagementBackend, message == "WIFI AP ON"));
+    }
     return true;
   }
   if (message == "WIFI LIST") {
@@ -382,6 +427,10 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     return true;
   }
   if (message.rfind("START ", 0) == 0) {
+    if (devicePresetActive()) {
+      sendSecureReply(source, session, "error preset_in_progress");
+      return true;
+    }
     if (g_otaEngine.active()) {
       sendSecureReply(source, session, "error update_in_progress");
       return true;
@@ -627,7 +676,9 @@ void processBLEControlFrames(size_t budget = 8) {
   }
   BLEControlFrame frame;
   for (size_t processed = 0;
-       processed < budget && xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
+       processed < budget &&
+       s_bleDisconnectReason.load() == BLE_NO_DISCONNECT &&
+       xQueueReceive(s_bleControlQueue, &frame, 0) == pdTRUE;
        ++processed) {
     if (frame.generation != s_bleConnectionGeneration ||
         !s_bleOwner.owns(frame.connectionHandle)) {
@@ -663,6 +714,22 @@ void processBLEControlFrames(size_t budget = 8) {
     if (frame.length > 1 && frame.bytes[0] == 0xFE)
       frame.bytes[0] = 0xFD;
     if (frame.length > 1 && frame.bytes[0] == 0xFD) {
+      // Binary preset data: marker, operation, 64-bit token, 32-bit offset,
+      // then raw bytecode. Every BLE chunk receives an encrypted app-level ACK.
+      if (frame.bytes[1] == 6 && frame.length > 14) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t offset = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                static_cast<uint32_t>(frame.bytes[13]);
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else devicePresetWrite(token, offset, frame.bytes + 14,
+                               frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
       if (frame.bytes[1] == 2 && frame.length == 2) {
         if (!USBIdentityConfig::reset()) {
           LOG_WARN("secure BLE USB identity reset failed");
@@ -844,37 +911,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
     const uint16_t handle = info.getConnHandle();
-    if (!s_bleOwner.release(handle)) {
-      LOG_BLE("non-owner central disconnected handle=%u reason=%d owner=%u",
-              handle, reason, s_bleOwner.owner());
-      return;
-    }
-    g_bleOta.disconnected();
-    requestReleaseAll("ble-disconnect");
-    if (s_bleTearingDown) {
-      LOG_BLE("central disconnected reason=%d during teardown", reason);
-      return;
-    }
-    const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
-    const char *reasonName = "UNKNOWN";
-    switch (reason) {
-      case 0x08: reasonName = "CONNECTION_TIMEOUT"; break;
-      case 0x13: reasonName = "REMOTE_USER_TERMINATED"; break;
-      case 0x16: reasonName = "LOCAL_HOST_TERMINATED"; break;
-      case 0x3e: reasonName = "CONNECTION_ESTABLISHMENT_FAILED"; break;
-    }
-    LOG_BLE("central disconnected reason=%d reasonName=%s uptime=%lu heap=%u lastBleRxType=%u lastBleRxLength=%lu lastHidSequence=%lu lastQueuedEvent=%s lastExecutedEvent=%s; re-advertising",
-            reason, reasonName, static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
-            hid.lastBleRxType, static_cast<unsigned long>(hid.lastBleRxLength),
-            static_cast<unsigned long>(hid.lastSequence), hid.lastQueuedEvent, hid.lastExecutedEvent);
-    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-    if (!s_bleReady || !adv || !adv->start() || !adv->isAdvertising()) {
-      g_radio.setBleAdvertisingStatus(false);
-      LOG_BLE("advertising restart failed");
-      return;
-    }
-    g_radio.setBleAdvertisingStatus(true);
-    LOG_BLE("advertising restarted");
+    // Revoke access immediately, including when stopBle() is waiting for it.
+    // A rejected secondary central must never clear the owner's HID/session.
+    if (!s_bleOwner.release(handle)) return;
+    s_bleDisconnectReason.store(reason);
   }
 };
 
@@ -890,6 +930,18 @@ bool deviceBleAuthenticated() {
 bool deviceBleTransportEnabled() { return g_radio.bleEnabled(); }
 
 bool deviceWifiTransportEnabled() { return g_radio.wifiEnabled(); }
+
+bool deviceBleConnected() { return g_radio.isBleConnected(); }
+
+bool deviceBleAdvertising() { return g_radio.isBleAdvertising(); }
+
+uint32_t deviceBleAdvertisingRecoveryCount() {
+  return g_radio.bleAdvertisingRecoveryCount();
+}
+
+uint32_t deviceBleAdvertisingRecoveryFailureCount() {
+  return g_radio.bleAdvertisingRecoveryFailureCount();
+}
 
 bool deviceBleConnectionOwnsSession(uint16_t connectionHandle) {
   return s_bleOwner.owns(connectionHandle);
@@ -950,12 +1002,23 @@ bool RadioManager::setMode(RadioMode m) {
 // ---------------------------------------------------------------------------
 void RadioManager::startSoftAp() {
   staConnecting_ = false;
+  staRetryPreservesSoftAp_ = false;
   softAp_ = true;
   softApStartedMs_ = millis();
   if (provisioningState_ == "connecting") {
     provisioningState_ = "failed";
     provisioningError_ = "network_unreachable";
   }
+  if (!WifiCredentials::fallbackApEnabled()) {
+    softAp_ = false;
+    fallbackWaiting_ = true;
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    snprintf(status_, sizeof(status_), "wifi:offline");
+    LOG_WIFI("fallback AP disabled; waiting to retry saved networks");
+    return;
+  }
+  fallbackWaiting_ = false;
   DeviceIdentity::begin();
   WiFi.mode(WIFI_AP);
   const char *apSsid = DeviceIdentity::softApSsid();
@@ -964,6 +1027,9 @@ void RadioManager::startSoftAp() {
                 ? WiFi.softAP(apSsid, nullptr, WIFI_AP_CHANNEL)
                 : WiFi.softAP(apSsid, WIFI_AP_PASS, WIFI_AP_CHANNEL);
   if (!ok) {
+    softAp_ = false;
+    fallbackWaiting_ = false;
+    staDisconnectedSinceMs_ = millis();
     snprintf(status_, sizeof(status_), "wifi:ap-fail");
     LOG_WIFI("Soft-AP start failed");
     return;
@@ -971,6 +1037,8 @@ void RadioManager::startSoftAp() {
   delay(100);
   IPAddress ip = WiFi.softAPIP();
   snprintf(status_, sizeof(status_), "wifi:ap");
+  staDisconnectedSinceMs_ = 0;
+  lastSoftApHealthCheckMs_ = millis();
   LOG_WIFI("soft-ap ssid=\"%s\" ip=%s discovery=:%d secure=:%d",
            apSsid, ip.toString().c_str(), WIFI_HTTP_PORT, WIFI_CONTROL_PORT);
   g_wifiConfig.begin();
@@ -978,22 +1046,36 @@ void RadioManager::startSoftAp() {
   s_tcpServer.setNoDelay(true);
 }
 
+bool RadioManager::softApInterfaceReady() const {
+  const wifi_mode_t wifiMode = WiFi.getMode();
+  if (wifiMode != WIFI_AP && wifiMode != WIFI_AP_STA) return false;
+  const IPAddress ip = WiFi.softAPIP();
+  return ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0;
+}
+
 void RadioManager::startSta(const String &ssid, const String &pass,
-                            size_t credentialIndex) {
-  softAp_ = false;
+                            size_t credentialIndex, bool preserveSoftAp) {
+  fallbackWaiting_ = false;
+  staRetryPreservesSoftAp_ = preserveSoftAp && softAp_;
+  if (!staRetryPreservesSoftAp_) softAp_ = false;
   staCredentialIndex_ = credentialIndex;
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(staRetryPreservesSoftAp_ ? WIFI_AP_STA : WIFI_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
-  LOG_WIFI("connecting to %s (candidate %u/%u) ...", ssid.c_str(),
+  LOG_WIFI("connecting to %s (candidate %u/%u ap_preserved=%s) ...", ssid.c_str(),
            static_cast<unsigned>(credentialIndex + 1),
-           static_cast<unsigned>(WifiCredentials::count()));
+           static_cast<unsigned>(WifiCredentials::count()),
+           staRetryPreservesSoftAp_ ? "yes" : "no");
   staConnecting_ = true;
   staConnectStartedMs_ = millis();
-  snprintf(status_, sizeof(status_), "wifi:connecting");
+  snprintf(status_, sizeof(status_), staRetryPreservesSoftAp_
+                                        ? "wifi:ap+connecting"
+                                        : "wifi:connecting");
 }
 
 void RadioManager::finishStaConnection() {
+  const bool hadPreservedSoftAp = staRetryPreservesSoftAp_;
   staConnecting_ = false;
+  staRetryPreservesSoftAp_ = false;
   staAttempts_ = 0;
   staDisconnectedSinceMs_ = 0;
   if (provisioningSsid_.length() > 0 && WiFi.SSID() == provisioningSsid_) {
@@ -1001,6 +1083,15 @@ void RadioManager::finishStaConnection() {
     provisioningError_ = "";
   }
   DeviceIdentity::begin();
+  if (hadPreservedSoftAp) {
+    // The infrastructure network is available again, so the fallback AP has
+    // fulfilled its purpose. TCP/HTTP servers stay alive and continue serving
+    // on the station interface; only the AP interface is removed.
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    softAp_ = false;
+    LOG_WIFI("station recovered; fallback Soft-AP stopped");
+  }
   s_tcpServer.begin();
   s_tcpServer.setNoDelay(true);
   g_wifiConfig.begin();  // read-only discovery on :80
@@ -1022,19 +1113,44 @@ void RadioManager::finishStaConnection() {
 }
 
 void RadioManager::serviceStaConnection() {
-  if (!staConnecting_) {
-    if (softAp_) {
-      const size_t count = WifiCredentials::count();
-      if (count == 0 || millis() - softApStartedMs_ < WIFI_RETRY_INTERVAL_MS)
+  if (softAp_ && millis() - lastSoftApHealthCheckMs_ >= 1000) {
+    lastSoftApHealthCheckMs_ = millis();
+    if (!softApInterfaceReady()) {
+      softAp_ = false;
+      if (staConnecting_) {
+        LOG_WIFI("Soft-AP state lost during station retry; fallback will be restarted after the retry");
+      } else {
+        LOG_WIFI("Soft-AP state lost; restarting fallback AP");
+        startSoftAp();
         return;
+      }
+    }
+  }
+  if (!staConnecting_) {
+    if (softAp_ || fallbackWaiting_) {
+      const size_t count = WifiCredentials::count();
+      const bool intervalElapsed =
+          millis() - softApStartedMs_ >= WIFI_RETRY_INTERVAL_MS;
+      const size_t apClients = softAp_ ? WiFi.softAPgetStationNum() : 0;
+      const WifiFallbackPolicy::RetryDecision decision =
+          WifiFallbackPolicy::decide(count, intervalElapsed, apClients);
+      if (decision == WifiFallbackPolicy::RetryDecision::Wait) return;
+      if (decision ==
+          WifiFallbackPolicy::RetryDecision::DeferForActiveClient) {
+        // Never destabilize the no-router control path while an iPhone is
+        // attached. Reconsider after another full retry interval.
+        softApStartedMs_ = millis();
+        LOG_WIFI("Soft-AP station retry deferred; active_clients=%u",
+                 static_cast<unsigned>(apClients));
+        return;
+      }
       // SoftAP is a fallback state, not a terminal state. Periodically run a
-      // fresh asynchronous STA pass so restoring the router recovers without
-      // rebooting and without touching BLE.
-      LOG_WIFI("Soft-AP retry interval elapsed; retrying configured networks");
-      stopWifiServices();
+      // fresh asynchronous STA pass. Keep AP services alive throughout the
+      // pass so discovery and authenticated TCP are not torn down.
+      LOG_WIFI("fallback retry interval elapsed; retrying configured networks (ap=%s)", softAp_ ? "on" : "off");
       staAttempts_ = 0;
       const WifiCreds candidate = WifiCredentials::get(0);
-      startSta(candidate.ssid, candidate.pass, 0);
+      startSta(candidate.ssid, candidate.pass, 0, true);
       return;
     }
     if (WiFi.status() == WL_CONNECTED) {
@@ -1079,10 +1195,17 @@ void RadioManager::serviceStaConnection() {
   if (staAttempts_ < count) {
     const size_t next = (staCredentialIndex_ + 1) % count;
     const WifiCreds candidate = WifiCredentials::get(next);
-    startSta(candidate.ssid, candidate.pass, next);
+    startSta(candidate.ssid, candidate.pass, next, staRetryPreservesSoftAp_);
     return;
   }
-  LOG_WIFI("all configured networks unavailable; returning to Soft-AP discovery");
+  if (staRetryPreservesSoftAp_) {
+    staRetryPreservesSoftAp_ = false;
+    staConnecting_ = false;
+    LOG_WIFI("all configured networks unavailable; reinitializing fallback Soft-AP");
+    startSoftAp();
+    return;
+  }
+  LOG_WIFI("all configured networks unavailable; starting Soft-AP fallback");
   startSoftAp();
 }
 
@@ -1090,6 +1213,7 @@ void RadioManager::startWifi() {
   staCredentialIndex_ = 0;
   staAttempts_ = 0;
   staDisconnectedSinceMs_ = 0;
+  staRetryPreservesSoftAp_ = false;
   WifiCreds c = WifiCredentials::get(0);
   if (c.ssid.length() == 0) {
     LOG_WIFI("no STA credentials in NVS; starting Soft-AP setup");
@@ -1116,7 +1240,9 @@ void RadioManager::stopWifiServices() {
 void RadioManager::stopWifi() {
   stopWifiServices();
   staConnecting_ = false;
+  staRetryPreservesSoftAp_ = false;
   softAp_ = false;
+  fallbackWaiting_ = false;
   WiFi.softAPdisconnect(true);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
@@ -1133,12 +1259,29 @@ void RadioManager::applyWifiCredentials(const String &provisionedSsid) {
   }
   // Provisioning arrives through the live BLE Secure Session. Do not turn the
   // shared Wi-Fi/BLE controller fully off or block the main loop while joining
-  // the home network. Keep BLE responsive and advance STA setup from loop().
+  // the home network. When setup happens from the fallback AP, preserve that
+  // AP and its authenticated TCP session until STA has actually succeeded.
+  if (softAp_) {
+    const WifiCreds candidate = WifiCredentials::get(0);
+    if (candidate.ssid.length() > 0) {
+      LOG_WIFI("applying credentials; trying STA while preserving fallback AP");
+      staAttempts_ = 0;
+      startSta(candidate.ssid, candidate.pass, 0, true);
+      LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
+      return;
+    }
+  }
   LOG_WIFI("applying credentials; transitioning to STA asynchronously");
   stopWifiServices();
   WiFi.disconnect(false, false);
   startWifi();
   LOG_RADIO("mode=%s status=%s", radioModeToString(mode_), status_);
+}
+
+void RadioManager::applyFallbackApPreference() {
+  if (!wifiEnabled() || (!softAp_ && !fallbackWaiting_)) return;
+  stopWifi();
+  startWifi();
 }
 
 std::string RadioManager::wifiStatusJson() const {
@@ -1149,7 +1292,7 @@ std::string RadioManager::wifiStatusJson() const {
   } else if (WiFi.status() == WL_CONNECTED) {
     state = "connected";
     ip = WiFi.localIP().toString();
-  } else if (wifiEnabled()) {
+  } else if (wifiEnabled() && !fallbackWaiting_) {
     state = "connecting";
   }
   return "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
@@ -1193,6 +1336,7 @@ void RadioManager::startBle() {
       return;
     }
     s_bleServer->setCallbacks(&s_serverCallbacks);
+    s_bleServer->advertiseOnDisconnect(false);  // recovery belongs to loop()
     LOG_BLE("server created");
 
     NimBLEService *hidSvc = s_bleServer->createService(BLE_HID_SERVICE_UUID);
@@ -1236,11 +1380,18 @@ void RadioManager::startBle() {
       LOG_BLE("advertising object unavailable");
       return;
     }
-    const std::string identity = std::string("IP") + DeviceIdentity::deviceId();
+    // 3 flag bytes + 18 service bytes + 10 manufacturer bytes = 31.
+    // Put both identity and service in the primary advertisement so iOS can
+    // discover a saved device with a service filter while in the background.
+    std::string addressBytes;
+    const bool addressOk = decodeHex(DeviceIdentity::deviceId(), addressBytes) &&
+                           addressBytes.size() == 6;
+    const std::string identity = std::string("IP") + addressBytes;
     NimBLEAdvertisementData advData;
     NimBLEAdvertisementData scanData;
-    const bool identityOk = advData.setFlags(BLE_HS_ADV_F_DISC_GEN |
+    const bool identityOk = addressOk && advData.setFlags(BLE_HS_ADV_F_DISC_GEN |
                                               BLE_HS_ADV_F_BREDR_UNSUP) &&
+                            advData.addServiceUUID(BLE_HID_SERVICE_UUID) &&
                             advData.setManufacturerData(identity);
     const bool nameOk = scanData.setName(DeviceIdentity::deviceName());
     const bool payloadOk = identityOk && nameOk &&
@@ -1274,6 +1425,73 @@ void RadioManager::setBleAdvertisingStatus(bool active) {
   snprintf(status_, sizeof(status_), active ? "ble:adv" : "ble:adv-fail");
 }
 
+bool RadioManager::isBleAdvertising() const {
+  if (!bleEnabled() || !s_bleReady || !NimBLEDevice::isInitialized()) return false;
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  return adv && adv->isAdvertising();
+}
+
+bool RadioManager::isBleConnected() const {
+  return s_bleOwner.connected() || (s_bleServer && s_bleServer->getConnectedCount() > 0);
+}
+
+bool RadioManager::isControlSessionConnected() const {
+  return bleSessionEstablished() || s_tcpSecureSession.established();
+}
+
+bool RadioManager::serviceBleDisconnect() {
+  const int reason = s_bleDisconnectReason.exchange(BLE_NO_DISCONNECT);
+  if (reason == BLE_NO_DISCONNECT) return false;
+
+  // Run before accepting any newly queued protocol traffic. This also covers
+  // a fast reconnect that arrived before loop() observed the disconnection.
+  const HIDDiagnosticsSnapshot hid = deviceHidDiagnostics();
+  requestReleaseAll("ble-disconnect");
+  s_bleSecureSession.reset();
+  s_bleHandshakeDelivery = BLEHandshakeDelivery{};
+  g_bleOta.disconnected();
+
+  const char *reasonName = "UNKNOWN";
+  switch (reason) {
+    case 0x08: case BLE_HS_HCI_ERR(0x08): reasonName = "CONNECTION_TIMEOUT"; break;
+    case 0x13: case BLE_HS_HCI_ERR(0x13): reasonName = "REMOTE_USER_TERMINATED"; break;
+    case 0x16: case BLE_HS_HCI_ERR(0x16): reasonName = "LOCAL_HOST_TERMINATED"; break;
+    case 0x3e: case BLE_HS_HCI_ERR(0x3e): reasonName = "CONNECTION_ESTABLISHMENT_FAILED"; break;
+  }
+  LOG_BLE("central disconnected reason=%d reasonName=%s uptime=%lu heap=%u lastBleRxType=%u lastBleRxLength=%lu lastHidSequence=%lu lastQueuedEvent=%s lastExecutedEvent=%s; cleanup in loop",
+          reason, reasonName, static_cast<unsigned long>(millis()), ESP.getFreeHeap(),
+          hid.lastBleRxType, static_cast<unsigned long>(hid.lastBleRxLength),
+          static_cast<unsigned long>(hid.lastSequence), hid.lastQueuedEvent, hid.lastExecutedEvent);
+  return true;
+}
+
+void RadioManager::serviceBleAdvertising(bool immediate) {
+  const uint32_t now = millis();
+  if (!immediate && now - lastBleAdvertisingCheckMs_ < BLE_ADVERTISING_CHECK_INTERVAL_MS) return;
+  lastBleAdvertisingCheckMs_ = now;
+
+  const bool connected = isBleConnected();
+  const bool advertising = isBleAdvertising();
+  if (!BLEAdvertisingRecovery::shouldAttempt(
+          bleEnabled() && !s_bleTearingDown, s_bleReady,
+          connected, advertising)) return;
+
+  LOG_BLE("advertising watchdog detected inactive advertising; recovery attempt");
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv && adv->start() && adv->isAdvertising()) {
+    ++bleAdvertisingRecoveryCount_;
+    setBleAdvertisingStatus(true);
+    LOG_BLE("advertising watchdog recovery succeeded count=%lu",
+            static_cast<unsigned long>(bleAdvertisingRecoveryCount_));
+    return;
+  }
+
+  ++bleAdvertisingRecoveryFailureCount_;
+  setBleAdvertisingStatus(false);
+  LOG_BLE("advertising watchdog recovery failed count=%lu",
+          static_cast<unsigned long>(bleAdvertisingRecoveryFailureCount_));
+}
+
 void RadioManager::stopBle() {
   // IMPORTANT: we do NOT call NimBLEDevice::deinit() here. On arduino-esp32
   // 3.2.1 / IDF 5.4, esp_bt_controller_deinit (reached via nimble_port_deinit)
@@ -1303,9 +1521,16 @@ void RadioManager::stopBle() {
 
 // ---------------------------------------------------------------------------
 void RadioManager::loop() {
+  const bool disconnected = serviceBleDisconnect();
+  serviceBleAdvertising(disconnected);
   // Drain Secure Protocol traffic before evaluating its deadline. A proof
   // queued just before expiry must be allowed to establish the session.
   processBLEControlFrames();
+  s_bleHandshakeDelivery.flush(
+      s_bleConnectionGeneration, s_bleOwner.connected(),
+      s_bleServer && s_bleOwner.connected()
+          ? s_bleServer->getPeerMTU(s_bleOwner.owner()) : 0,
+      millis(), sendBleNotification);
   if (s_bleOwner.authenticationExpired(
           millis(), bleSessionEstablished())) {
     const uint16_t handle = s_bleOwner.owner();
@@ -1327,7 +1552,9 @@ void RadioManager::loop() {
   if (!wifiEnabled()) return;
 
   serviceStaConnection();
-  if (staConnecting_) return;
+  // A background STA retry from AP_STA must not pause the fallback portal or
+  // its authenticated TCP control session.
+  if (staConnecting_ && !softAp_) return;
 
   // Plain HTTP is discovery-only. Setup and management use the secure TCP port.
   g_wifiConfig.loop();
@@ -1376,13 +1603,17 @@ void RadioManager::loop() {
 }
 
 const char *RadioManager::statusStr() {
+  const char *bleState = isBleConnected() ? "conn" :
+                         (isBleAdvertising() ? "adv" : "adv-off");
   if (mode_ == RadioMode::WifiBle) {
-    if (softAp_) snprintf(status_, sizeof(status_), "wifi:ap+ble:%s", s_bleOwner.connected() ? "conn" : "adv");
+    if (softAp_) snprintf(status_, sizeof(status_), "wifi:ap+ble:%s", bleState);
     else if (WiFi.status() == WL_CONNECTED)
       snprintf(status_, sizeof(status_), "wifi:%s+ble:%s", WiFi.localIP().toString().c_str(),
-               s_bleOwner.connected() ? "conn" : "adv");
+               bleState);
+    else snprintf(status_, sizeof(status_), fallbackWaiting_
+                      ? "wifi:offline+ble:%s" : "wifi:connecting+ble:%s", bleState);
   } else if (mode_ == RadioMode::Ble) {
-    snprintf(status_, sizeof(status_), "ble:%s", s_bleOwner.connected() ? "conn" : "adv");
+    snprintf(status_, sizeof(status_), "ble:%s", bleState);
   } else if (mode_ == RadioMode::Wifi) {
     if (softAp_) {
       snprintf(status_, sizeof(status_), "wifi:ap");

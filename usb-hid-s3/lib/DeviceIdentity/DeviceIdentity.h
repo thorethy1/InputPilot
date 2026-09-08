@@ -10,15 +10,16 @@
  *
  * device_id: 12 lowercase hex chars (no separators), e.g. "aabbccddeeff"
  * suffix:    last 4 hex of device_id, e.g. "eeff"
- * Soft-AP:   InputPilot-<SUFFIX_UPPER>
+ * Friendly:  InputPilot-<WORD><DIGIT>, derived from the complete MAC/device ID.
+ * Soft-AP and BLE use the same friendly name. mDNS keeps the stable hex suffix.
  * mDNS:      inputpilot-<suffix_lower>
  */
 
 // Pure helpers (unit-testable on host).
 bool deviceIdFromMacBytes(const uint8_t mac[6], char outId[13], char outSuffix[5]);
-void formatSoftApSsid(const char *suffix4, char out[24]);
+void formatSoftApSsid(const char *deviceId, char out[24]);
 void formatMdnsHostname(const char *suffix4, char out[24]);
-void formatDeviceName(const char *suffix4, char out[24]);
+void formatDeviceName(const char *deviceId, char out[24]);
 
 #ifndef UNIT_TEST
 class DeviceIdentity {
@@ -28,8 +29,8 @@ public:
 
   static const char *deviceId();      // 12-hex
   static const char *suffix();        // 4-hex lowercase
-  static const char *softApSsid();    // InputPilot-XXXX
-  static const char *deviceName();    // InputPilot-XXXX
+  static const char *softApSsid();    // InputPilot-<WORD><DIGIT>
+  static const char *deviceName();    // InputPilot-<WORD><DIGIT>
   static const char *mdnsHostname();  // inputpilot-xxxx
   static const char *mdnsFqdn();      // inputpilot-xxxx.local
 };

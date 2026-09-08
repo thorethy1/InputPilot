@@ -24,6 +24,7 @@
 #include "KeepAwakeConfig.h"
 #include "PairingInputFrame.h"
 #include "PairingSecretStore.h"
+#include "PresetEngine.h"
 #include "KeyMap.h"
 #include "RadioMode.h"
 #include "RadioManager.h"
@@ -37,12 +38,16 @@
 #include <esp_attr.h>
 #include <esp_system.h>
 #include <atomic>
+#include <cstdlib>
+#include <vector>
 
 // Kept in the application image so both the device and clients can reject a
 // valid ESP32 image built for another product or board before activation.
 extern "C" const char inputPilotFirmwareMetadata[] __attribute__((used)) =
     FW_METADATA_PREFIX "product=" FW_PRODUCT ";board=" FW_BOARD ";version=" FW_VERSION
-    ";protocol=2;otaSchema=1;commit=" FW_GIT_COMMIT ";";
+    ";protocol=" INPUTPILOT_STRINGIFY(FW_IMAGE_PROTOCOL_VERSION)
+    ";otaSchema=" INPUTPILOT_STRINGIFY(OTA_SCHEMA_VERSION)
+    ";commit=" FW_GIT_COMMIT ";";
 
 // ---------------------------------------------------------------------------
 // USB devices (core stack). ARDUINO_USB_CDC_ON_BOOT=0, so the core does NOT
@@ -81,6 +86,7 @@ static HIDDiagnosticsSnapshot g_hidStats;
 static portMUX_TYPE g_hidStatsMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE g_breadcrumbMux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t g_mouseButtons = 0;
+static uint8_t g_heldKeyboardModifiers = 0;
 static char g_activeText[256]{};
 static size_t g_activeTextOffset = 0;
 static HIDEvent g_activeTextEvent;
@@ -88,6 +94,8 @@ static bool g_activeTextOK = true;
 static std::atomic<bool> g_cancelActiveText{false};
 static uint32_t g_hidPauseUntil = 0;
 static std::atomic<bool> g_hidExecuting{false};
+static PresetEngine g_presetEngine;
+static uint32_t g_presetPendingSequence = 0;
 
 struct HIDExecutionContext {
   uint32_t sequence = 0;
@@ -254,6 +262,7 @@ static bool hidMouseButton(MouseBtn b, bool down) {
 
 static bool executeReleaseAll() {
   g_activeText[0] = '\0'; g_activeTextOffset = 0; g_mouseButtons = 0;
+  g_heldKeyboardModifiers = 0;
   hid_mouse_report_t mouse = {.buttons = 0, .x = 0, .y = 0, .wheel = 0, .pan = 0};
   hid_keyboard_report_t keyboard = {};
   const bool mouseOk = sendUSBReport(HID_RID_MOUSE, &mouse, sizeof(mouse),
@@ -279,9 +288,10 @@ static bool hidTypeCharacter(uint8_t character) {
   else if (usage & 0x40) { modifier |= 0x40; usage &= ~0x40; }
   if (usage == 0x32) usage = 0x64;
   hid_keyboard_report_t down = {};
-  down.modifier = modifier;
+  down.modifier = modifier | g_heldKeyboardModifiers;
   down.keycode[0] = usage;
   hid_keyboard_report_t up = {};
+  up.modifier = g_heldKeyboardModifiers;
   const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &down, sizeof(down),
                                     HIDExecutionPhase::UsbKeyboardReport);
   return sendUSBReport(HID_RID_KEYBOARD, &up, sizeof(up),
@@ -293,17 +303,32 @@ static bool hidKey(const KeyCode &kc) {
     LOG_HID("key skipped: not-ready");
     return false;
   }
-  hid_keyboard_report_t report = {};
-  report.modifier = kc.modifier;
-  report.keycode[0] = kc.keycode;
-  hid_keyboard_report_t empty = {};
-  const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &report, sizeof(report),
+  hid_keyboard_report_t down = {};
+  down.modifier = kc.modifier | g_heldKeyboardModifiers;
+  down.keycode[0] = kc.keycode;
+  hid_keyboard_report_t up = {};
+  up.modifier = g_heldKeyboardModifiers;
+  const bool downOk = sendUSBReport(HID_RID_KEYBOARD, &down, sizeof(down),
                                     HIDExecutionPhase::UsbKeyboardReport);
-  return sendUSBReport(HID_RID_KEYBOARD, &empty, sizeof(empty),
+  return sendUSBReport(HID_RID_KEYBOARD, &up, sizeof(up),
                        HIDExecutionPhase::UsbKeyboardReport) && downOk;
 }
 
+// Modifier-only reports (keycode 0) hold or release modifier state across
+// subsequent reports; pinch-to-zoom relies on holding Ctrl while wheel
+// reports arrive on the mouse interface.
 static bool hidReport(uint8_t modifier, uint8_t keycode) {
+  if (!hidReady()) {
+    LOG_HID("report skipped: not-ready");
+    return false;
+  }
+  if (keycode == 0) {
+    g_heldKeyboardModifiers = modifier;
+    hid_keyboard_report_t report = {};
+    report.modifier = g_heldKeyboardModifiers;
+    return sendUSBReport(HID_RID_KEYBOARD, &report, sizeof(report),
+                         HIDExecutionPhase::UsbKeyboardReport);
+  }
   KeyCode kc;
   kc.found = true;
   kc.modifier = modifier;
@@ -364,6 +389,160 @@ static bool enqueueHIDEventWithSequence(const HIDEvent &input, const char *sourc
 
 bool enqueueHIDEvent(const HIDEvent &input, const char *source) {
   return enqueueHIDEventWithSequence(input, source, nullptr);
+}
+
+static const char *presetResultError(PresetEngine::Result result) {
+  switch (result) {
+    case PresetEngine::Result::Busy: return "preset_busy";
+    case PresetEngine::Result::WrongToken: return "preset_wrong_token";
+    case PresetEngine::Result::WrongOffset: return "preset_wrong_offset";
+    case PresetEngine::Result::TooLarge: return "preset_too_large";
+    case PresetEngine::Result::ChecksumMismatch: return "preset_checksum_mismatch";
+    case PresetEngine::Result::Invalid: return "preset_invalid";
+    case PresetEngine::Result::Ok: default: return "";
+  }
+}
+
+static bool parseHex64(const std::string &value, uint64_t &output) {
+  if (value.empty() || value.size() > 16) return false;
+  char *end = nullptr;
+  output = strtoull(value.c_str(), &end, 16);
+  return end && *end == '\0' && output != 0;
+}
+
+static std::string presetStatusReply() {
+  char buffer[112];
+  snprintf(buffer, sizeof(buffer), "preset %s %016llx %u %u",
+           g_presetEngine.stateName(),
+           static_cast<unsigned long long>(g_presetEngine.token()),
+           static_cast<unsigned>(g_presetEngine.state() == PresetEngine::State::Uploading
+                                     ? g_presetEngine.received()
+                                     : g_presetEngine.position()),
+           static_cast<unsigned>(g_presetEngine.size()));
+  return buffer;
+}
+
+bool devicePresetWrite(uint64_t token, uint32_t offset, const uint8_t *data,
+                       size_t length, std::string &reply) {
+  const PresetEngine::Result result = g_presetEngine.write(token, offset, data, length);
+  if (result != PresetEngine::Result::Ok) {
+    reply = std::string("error ") + presetResultError(result);
+    return true;
+  }
+  char buffer[80];
+  snprintf(buffer, sizeof(buffer), "preset ack %016llx %u",
+           static_cast<unsigned long long>(token),
+           static_cast<unsigned>(g_presetEngine.received()));
+  reply = buffer;
+  return true;
+}
+
+bool devicePresetCommand(const std::string &command, std::string &reply) {
+  if (command == "PRESET STATUS") {
+    reply = presetStatusReply();
+    return true;
+  }
+  if (command.rfind("PRESET ", 0) != 0) return false;
+  std::vector<std::string> fields;
+  size_t cursor = 0;
+  while (cursor < command.size()) {
+    while (cursor < command.size() && command[cursor] == ' ') ++cursor;
+    const size_t start = cursor;
+    while (cursor < command.size() && command[cursor] != ' ') ++cursor;
+    if (cursor > start) fields.push_back(command.substr(start, cursor - start));
+  }
+  uint64_t token = 0;
+  if (fields.size() >= 3 && !parseHex64(fields[2], token)) {
+    reply = "error preset_invalid";
+    return true;
+  }
+  if (fields.size() == 5 && fields[1] == "BEGIN") {
+    char *sizeEnd = nullptr;
+    char *checksumEnd = nullptr;
+    const unsigned long size = strtoul(fields[3].c_str(), &sizeEnd, 10);
+    const unsigned long checksum = strtoul(fields[4].c_str(), &checksumEnd, 16);
+    const PresetEngine::Result result =
+        (!sizeEnd || *sizeEnd || !checksumEnd || *checksumEnd)
+            ? PresetEngine::Result::Invalid
+            : g_presetEngine.begin(token, size, static_cast<uint32_t>(checksum));
+    if (result != PresetEngine::Result::Ok) reply = std::string("error ") + presetResultError(result);
+    else {
+      char buffer[80];
+      snprintf(buffer, sizeof(buffer), "preset ready %016llx %u",
+               static_cast<unsigned long long>(token),
+               static_cast<unsigned>(g_presetEngine.received()));
+      reply = buffer;
+    }
+    return true;
+  }
+  if (fields.size() == 5 && fields[1] == "DATA") {
+    char *offsetEnd = nullptr;
+    const unsigned long offset = strtoul(fields[3].c_str(), &offsetEnd, 10);
+    const std::string &encoded = fields[4];
+    if (!offsetEnd || *offsetEnd || encoded.empty() || (encoded.size() & 1)) {
+      reply = "error preset_invalid";
+      return true;
+    }
+    std::vector<uint8_t> bytes(encoded.size() / 2);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+      char pair[3] = {encoded[i * 2], encoded[i * 2 + 1], '\0'};
+      char *end = nullptr;
+      const unsigned long byte = strtoul(pair, &end, 16);
+      if (!end || *end) { reply = "error preset_invalid"; return true; }
+      bytes[i] = static_cast<uint8_t>(byte);
+    }
+    return devicePresetWrite(token, static_cast<uint32_t>(offset), bytes.data(),
+                             bytes.size(), reply);
+  }
+  if (fields.size() == 3 && fields[1] == "RUN") {
+    const PresetEngine::Result result = g_presetEngine.run(token);
+    reply = result == PresetEngine::Result::Ok
+                ? presetStatusReply()
+                : std::string("error ") + presetResultError(result);
+    return true;
+  }
+  if ((fields.size() == 2 || fields.size() == 3) && fields[1] == "ABORT") {
+    if (fields.size() == 2) token = 0;
+    const bool cancelled = g_presetEngine.abort(token);
+    if (cancelled) {
+      g_presetPendingSequence = 0;
+      requestReleaseAll("preset-abort");
+    }
+    reply = presetStatusReply();
+    return true;
+  }
+  reply = "error preset_invalid";
+  return true;
+}
+
+bool devicePresetActive() {
+  return g_presetEngine.state() == PresetEngine::State::Uploading ||
+         g_presetEngine.state() == PresetEngine::State::Running ||
+         g_presetEngine.state() == PresetEngine::State::Completing;
+}
+
+static void servicePresetEngine() {
+  if (g_presetPendingSequence != 0) {
+    if (g_hidProcessedSequence.load() < g_presetPendingSequence) return;
+    g_presetPendingSequence = 0;
+    g_presetEngine.instructionCompleted();
+  }
+  PresetEngine::Instruction instruction;
+  if (!g_presetEngine.poll(millis(), instruction)) return;
+  HIDEvent event;
+  if (instruction.type == PresetEngine::InstructionType::KeyboardReport) {
+    event.type = HIDEventType::KeyboardReport;
+    event.modifier = instruction.modifier;
+    event.keycode = instruction.keycode;
+  } else if (instruction.type == PresetEngine::InstructionType::MouseClick) {
+    event.type = HIDEventType::Click;
+    event.button = instruction.mouseButton;
+  } else {
+    event = HIDEvent::releaseAll();
+  }
+  uint32_t sequence = 0;
+  if (enqueueHIDEventWithSequence(event, "preset", &sequence))
+    g_presetPendingSequence = sequence;
 }
 
 void requestReleaseAll(const char *source) {
@@ -479,7 +658,7 @@ static void printHelp() {
   LOG_INFO("  release all");
   LOG_INFO("  type <text>              type a string");
   LOG_INFO("  key <name[+name...]>     press a key/combo (enter,esc,cmd+space,...)");
-  LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report");
+  LOG_INFO("  report <modifier> <usage> send a layout-resolved USB HID key report; usage 0 holds (modifier != 0) or releases (modifier == 0) modifiers");
   LOG_INFO("  hidtest mouse|keyboard   exercise USB HID without a radio transport");
   LOG_INFO("  jiggle on|off|status|interval <ms>");
   LOG_INFO("  autoclick on|off|status|interval <ms>");
@@ -905,10 +1084,12 @@ void setup() {
 }
 
 void loop() {
+  servicePresetEngine();
   processHIDQueue(6);
   serviceSerialCommands();
   servicePairingButton();
   g_radio.loop();
+  servicePresetEngine();
   processHIDQueue(6);
   g_statusLed.loop();
 

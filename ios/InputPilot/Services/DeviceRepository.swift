@@ -41,12 +41,15 @@ final class DeviceRepository {
         let results = await withTaskGroup(of: (String, DeviceStatus?, String).self) { group in
             for snapshot in snapshots {
                 group.addTask {
-                    let urls = DeviceEndpointResolver.endpointURLs(
+                    let urls = DeviceEndpointResolver.probeURLs(
                         mdnsHost: snapshot.mdnsHost,
                         staIP: snapshot.staIP
                     )
                     for url in urls {
-                        if let status = try? await api.status(baseURL: url) {
+                        if let status = try? await api.status(baseURL: url),
+                           status.deviceId?.caseInsensitiveCompare(snapshot.deviceId) == .orderedSame,
+                           status.protocolVersion == 2,
+                           status.capabilities.contains("secure_protocol_v2") {
                             return (snapshot.deviceId, status, url.host ?? snapshot.mdnsHost)
                         }
                     }

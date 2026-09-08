@@ -39,6 +39,26 @@
 		A10000000000000000000032 /* TrackpadInputBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000035 /* TrackpadInputBridge.swift */; };
 		A10000000000000000000033 /* KeyboardLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000036 /* KeyboardLayoutTests.swift */; };
 		A10000000000000000000034 /* HIDRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000037 /* HIDRemoteTests.swift */; };
+		A10000000000000000000037 /* TrackpadGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000041 /* TrackpadGestures.swift */; };
+		A10000000000000000000038 /* TrackpadGesturesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* TrackpadGesturesTests.swift */; };
+		A10000000000000000000039 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000043 /* KeyboardView.swift */; };
+		A10000000000000000000040 /* KeyboardLatchesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000044 /* KeyboardLatchesTests.swift */; };
+		A10000000000000000000051 /* ActionExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000051 /* ActionExecutor.swift */; };
+		A10000000000000000000052 /* ActionExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000052 /* ActionExecutorTests.swift */; };
+		A10000000000000000000053 /* StoredSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000053 /* StoredSecret.swift */; };
+		A10000000000000000000054 /* SecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000054 /* SecretStore.swift */; };
+		A10000000000000000000055 /* SecretStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000055 /* SecretStoreTests.swift */; };
+		A10000000000000000000056 /* SecretsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000056 /* SecretsView.swift */; };
+		A10000000000000000000057 /* SecretReferenceScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000057 /* SecretReferenceScannerTests.swift */; };
+		A10000000000000000000058 /* PresetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000058 /* PresetsView.swift */; };
+		A10000000000000000000059 /* PresetsViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000059 /* PresetsViewModelTests.swift */; };
+		A10000000000000000000060 /* InputPilotIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000060 /* InputPilotIntents.swift */; };
+		A10000000000000000000061 /* AppIntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000061 /* AppIntentSupport.swift */; };
+		A10000000000000000000062 /* InputPilotShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000062 /* InputPilotShortcuts.swift */; };
+		A10000000000000000000063 /* AppIntentSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000063 /* AppIntentSupportTests.swift */; };
+		A10000000000000000000070 /* MacroController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000070 /* MacroController.swift */; };
+		A10000000000000000000071 /* MacrosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000071 /* MacrosView.swift */; };
+		A10000000000000000000072 /* MacroControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000072 /* MacroControllerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,7 +107,27 @@
 		A20000000000000000000035 /* TrackpadInputBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadInputBridge.swift; sourceTree = "<group>"; };
 		A20000000000000000000036 /* KeyboardLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayoutTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000037 /* HIDRemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HIDRemoteTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000041 /* TrackpadGestures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadGestures.swift; sourceTree = "<group>"; };
+		A20000000000000000000042 /* TrackpadGesturesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadGesturesTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000043 /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
+		A20000000000000000000044 /* KeyboardLatchesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLatchesTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000040 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ../Version.xcconfig; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000051 /* ActionExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionExecutor.swift; sourceTree = "<group>"; };
+		A20000000000000000000052 /* ActionExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionExecutorTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000053 /* StoredSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredSecret.swift; sourceTree = "<group>"; };
+		A20000000000000000000054 /* SecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000055 /* SecretStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretStoreTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000056 /* SecretsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000057 /* SecretReferenceScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretReferenceScannerTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000058 /* PresetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000059 /* PresetsViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsViewModelTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000060 /* InputPilotIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InputPilotIntents.swift; path = AppIntents/InputPilotIntents.swift; sourceTree = "<group>"; };
+		A20000000000000000000061 /* AppIntentSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppIntentSupport.swift; path = AppIntents/AppIntentSupport.swift; sourceTree = "<group>"; };
+		A20000000000000000000062 /* InputPilotShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InputPilotShortcuts.swift; path = AppIntents/InputPilotShortcuts.swift; sourceTree = "<group>"; };
+		A20000000000000000000063 /* AppIntentSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentSupportTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000070 /* MacroController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroController.swift; sourceTree = "<group>"; };
+		A20000000000000000000071 /* MacrosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacrosView.swift; sourceTree = "<group>"; };
+		A20000000000000000000072 /* MacroControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroControllerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -126,9 +166,14 @@
 				A20000000000000000000031 /* HIDControl.swift */,
 				A20000000000000000000032 /* KeyboardLayout.swift */,
 				A20000000000000000000033 /* KeyboardInputBridge.swift */,
+				A20000000000000000000043 /* KeyboardView.swift */,
 				A20000000000000000000038 /* SecurePairing.swift */,
 				A20000000000000000000034 /* MouseEventCoalescer.swift */,
 				A20000000000000000000035 /* TrackpadInputBridge.swift */,
+				A20000000000000000000041 /* TrackpadGestures.swift */,
+				A20000000000000000000060 /* InputPilotIntents.swift */,
+				A20000000000000000000061 /* AppIntentSupport.swift */,
+				A20000000000000000000062 /* InputPilotShortcuts.swift */,
 				A70000000000000000000009 /* Views */,
 				A70000000000000000000005 /* Models */,
 				A70000000000000000000006 /* Services */,
@@ -154,6 +199,14 @@
 				A20000000000000000000036 /* KeyboardLayoutTests.swift */,
 				A20000000000000000000037 /* HIDRemoteTests.swift */,
 				A20000000000000000000039 /* SecurePairingTests.swift */,
+				A20000000000000000000042 /* TrackpadGesturesTests.swift */,
+				A20000000000000000000044 /* KeyboardLatchesTests.swift */,
+				A20000000000000000000052 /* ActionExecutorTests.swift */,
+				A20000000000000000000072 /* MacroControllerTests.swift */,
+				A20000000000000000000055 /* SecretStoreTests.swift */,
+				A20000000000000000000057 /* SecretReferenceScannerTests.swift */,
+				A20000000000000000000059 /* PresetsViewModelTests.swift */,
+				A20000000000000000000063 /* AppIntentSupportTests.swift */,
 			);
 			path = InputPilotTests;
 			sourceTree = "<group>";
@@ -174,6 +227,7 @@
 				A20000000000000000000014 /* DeviceEndpointResolver.swift */,
 				A20000000000000000000026 /* DevicePresenceStatus.swift */,
 				A20000000000000000000028 /* SavedDeviceIndex.swift */,
+				A20000000000000000000053 /* StoredSecret.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -183,6 +237,9 @@
 			children = (
 				A20000000000000000000016 /* DeviceDetailView.swift */,
 				A20000000000000000000020 /* AddDeviceWizardView.swift */,
+				A20000000000000000000056 /* SecretsView.swift */,
+				A20000000000000000000058 /* PresetsView.swift */,
+				A20000000000000000000071 /* MacrosView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -193,6 +250,9 @@
 				A20000000000000000000004 /* DeviceAPIClient.swift */,
 				A20000000000000000000015 /* DeviceRepository.swift */,
 				A20000000000000000000005 /* BonjourBrowser.swift */,
+				A20000000000000000000051 /* ActionExecutor.swift */,
+				A20000000000000000000070 /* MacroController.swift */,
+				A20000000000000000000054 /* SecretStore.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -333,6 +393,18 @@
 				A10000000000000000000035 /* SecurePairing.swift in Sources */,
 				A10000000000000000000031 /* MouseEventCoalescer.swift in Sources */,
 				A10000000000000000000032 /* TrackpadInputBridge.swift in Sources */,
+				A10000000000000000000037 /* TrackpadGestures.swift in Sources */,
+				A10000000000000000000039 /* KeyboardView.swift in Sources */,
+				A10000000000000000000051 /* ActionExecutor.swift in Sources */,
+				A10000000000000000000070 /* MacroController.swift in Sources */,
+				A10000000000000000000053 /* StoredSecret.swift in Sources */,
+				A10000000000000000000054 /* SecretStore.swift in Sources */,
+				A10000000000000000000056 /* SecretsView.swift in Sources */,
+				A10000000000000000000058 /* PresetsView.swift in Sources */,
+				A10000000000000000000071 /* MacrosView.swift in Sources */,
+				A10000000000000000000060 /* InputPilotIntents.swift in Sources */,
+				A10000000000000000000061 /* AppIntentSupport.swift in Sources */,
+				A10000000000000000000062 /* InputPilotShortcuts.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -351,6 +423,14 @@
 				A10000000000000000000033 /* KeyboardLayoutTests.swift in Sources */,
 				A10000000000000000000034 /* HIDRemoteTests.swift in Sources */,
 				A10000000000000000000036 /* SecurePairingTests.swift in Sources */,
+				A10000000000000000000038 /* TrackpadGesturesTests.swift in Sources */,
+				A10000000000000000000040 /* KeyboardLatchesTests.swift in Sources */,
+				A10000000000000000000052 /* ActionExecutorTests.swift in Sources */,
+				A10000000000000000000072 /* MacroControllerTests.swift in Sources */,
+				A10000000000000000000055 /* SecretStoreTests.swift in Sources */,
+				A10000000000000000000057 /* SecretReferenceScannerTests.swift in Sources */,
+				A10000000000000000000059 /* PresetsViewModelTests.swift in Sources */,
+				A10000000000000000000063 /* AppIntentSupportTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

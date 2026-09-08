@@ -74,6 +74,7 @@ class InitialFlashPackagingTests(unittest.TestCase):
             "CFBundleIdentifier": "com.thorethy.inputpilot",
             "CFBundleShortVersionString": "0.8.15",
             "CFBundleVersion": "19",
+            "InputPilotUpdateChannel": "stable",
             "NSBluetoothAlwaysUsageDescription": "Bluetooth usage",
             "NSLocalNetworkUsageDescription": "Local network usage",
         }
@@ -90,6 +91,45 @@ class InitialFlashPackagingTests(unittest.TestCase):
         self.assertEqual(version["size"], ipa.stat().st_size)
         self.assertEqual({item["name"] for item in app["appPermissions"]["privacy"]},
                          {"BluetoothAlways", "LocalNetwork"})
+
+    def test_beta_altstore_source_uses_numeric_marketing_version_and_beta_download(self):
+        ipa = self.root / "InputPilot-v0.9.0-beta.2-ios-unsigned.ipa"
+        info = {
+            "CFBundleIdentifier": "com.thorethy.inputpilot",
+            "CFBundleShortVersionString": "0.9.0",
+            "CFBundleVersion": "102",
+            "InputPilotUpdateChannel": "beta",
+            "NSBluetoothAlwaysUsageDescription": "Bluetooth usage",
+            "NSLocalNetworkUsageDescription": "Local network usage",
+        }
+        with zipfile.ZipFile(ipa, "w") as archive:
+            archive.writestr("Payload/InputPilot.app/Info.plist", plistlib.dumps(info))
+        destination = self.root / "altstore-beta-source.json"
+        package.create_altstore_source(ipa, "v0.9.0-beta.2", "2026-09-10", destination)
+        source = json.loads(destination.read_text())
+        version = source["apps"][0]["versions"][0]
+        self.assertEqual(source["name"], "InputPilot Beta")
+        self.assertEqual(version["version"], "0.9.0")
+        self.assertEqual(version["buildVersion"], "102")
+        self.assertEqual(version["marketingVersion"], "0.9.0-beta.2")
+        self.assertIn("/releases/download/v0.9.0-beta.2/", version["downloadURL"])
+
+    def test_beta_altstore_source_rejects_stable_app_build(self):
+        ipa = self.root / "InputPilot-v0.9.0-beta.3-ios-unsigned.ipa"
+        info = {
+            "CFBundleIdentifier": "com.thorethy.inputpilot",
+            "CFBundleShortVersionString": "0.9.0",
+            "CFBundleVersion": "103",
+            "InputPilotUpdateChannel": "stable",
+            "NSBluetoothAlwaysUsageDescription": "Bluetooth usage",
+            "NSLocalNetworkUsageDescription": "Local network usage",
+        }
+        with zipfile.ZipFile(ipa, "w") as archive:
+            archive.writestr("Payload/InputPilot.app/Info.plist", plistlib.dumps(info))
+        with self.assertRaises(ValueError):
+            package.create_altstore_source(
+                ipa, "v0.9.0-beta.3", "2026-09-11", self.root / "invalid.json"
+            )
 
 
 if __name__ == "__main__":

@@ -7,27 +7,108 @@ import SwiftData
 import SwiftUI
 import UIKit
 
-enum AppLogCategory: String, CaseIterable, Identifiable { case all = "All", input = "Input", control = "Control", bluetooth = "Bluetooth", tcp = "TCP", diagnostics = "Diagnostics", errors = "Errors"; var id: String { rawValue } }
-struct AppLogRecord: Identifiable, Equatable {
-    let id = UUID(); let date: Date; let category: AppLogCategory; let message: String
+enum AppLogCategory: String, CaseIterable, Codable, Identifiable, Sendable { case all = "All", input = "Input", control = "Control", bluetooth = "Bluetooth", tcp = "TCP", diagnostics = "Diagnostics", errors = "Errors"; var id: String { rawValue } }
+struct AppLogRecord: Identifiable, Equatable, Codable, Sendable {
+    let id: UUID; let date: Date; let category: AppLogCategory; let message: String
+    init(id: UUID = UUID(), date: Date, category: AppLogCategory, message: String) {
+        self.id = id; self.date = date; self.category = category; self.message = message
+    }
     var line: String { "\(date.formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))) \(category.rawValue.uppercased()) \(message)" }
     func matches(_ filter: AppLogCategory) -> Bool { filter == .all || filter == category || (filter == .errors && message.localizedCaseInsensitiveContains("error")) }
 }
 @MainActor final class AppLog: ObservableObject {
     static let shared = AppLog(); static let capacity = 1000
-    @Published private(set) var records: [AppLogRecord] = []
+    nonisolated private static let persistenceQueue = DispatchQueue(
+        label: "app.inputpilot.diagnostics.persistence",
+        qos: .utility
+    )
+    @Published private(set) var records: [AppLogRecord]
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "InputPilot", category: "diagnostics")
+    private let storeURL: URL?
+    private var persistenceTask: Task<Void, Never>?
+
+    private init() {
+        storeURL = Self.makeStoreURL()
+        records = storeURL.flatMap(Self.load(from:)) ?? []
+    }
+
     func write(_ category: AppLogCategory, _ message: String) {
         logger.log("[\(category.rawValue, privacy: .public)] \(message, privacy: .public)")
         records.append(AppLogRecord(date: Date(), category: category, message: message))
         if records.count > Self.capacity { records.removeFirst(records.count - Self.capacity) }
+        schedulePersistence(immediate: category == .errors)
     }
-    func clear() { records.removeAll(keepingCapacity: true) }
+    func flush() {
+        persistenceTask?.cancel(); persistenceTask = nil
+        persist(records)
+    }
+    func clear() {
+        persistenceTask?.cancel(); persistenceTask = nil
+        records.removeAll(keepingCapacity: true)
+        let url = storeURL
+        Self.persistenceQueue.sync {
+            if let url { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    private func schedulePersistence(immediate: Bool) {
+        if immediate {
+            persistenceTask?.cancel(); persistenceTask = nil
+            persist(records)
+        } else {
+            guard persistenceTask == nil else { return }
+            persistenceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                let snapshot = self.records
+                let url = self.storeURL
+                Self.persistenceQueue.async {
+                    Self.persist(snapshot, to: url)
+                }
+                self.persistenceTask = nil
+            }
+        }
+    }
+
+    private func persist(_ snapshot: [AppLogRecord]) {
+        let url = storeURL
+        Self.persistenceQueue.sync {
+            Self.persist(snapshot, to: url)
+        }
+    }
+
+    nonisolated private static func persist(_ snapshot: [AppLogRecord], to url: URL?) {
+        guard let url, let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    private static func makeStoreURL() -> URL? {
+        guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("app-diagnostics.json", isDirectory: false)
+    }
+
+    private static func load(from url: URL) -> [AppLogRecord]? {
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([AppLogRecord].self, from: data) else { return nil }
+        return Array(decoded.suffix(capacity))
+    }
 }
 enum AppLogContext { @TaskLocal static var eventID: UInt64? }
-private func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
+func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
 
 enum MouseButton: UInt8, Codable, CaseIterable { case left = 0, right = 1, middle = 2 }
+
+extension MouseButton {
+    var displayName: String {
+        switch self {
+        case .left: "Left"
+        case .right: "Right"
+        case .middle: "Middle"
+        }
+    }
+}
 enum HIDEvent: Codable, Equatable {
     case mouseMove(Int16, Int16), scroll(Int16), mouseDown(MouseButton), mouseUp(MouseButton)
     case click(MouseButton), typeText(String), key(String), keyCombo(String)
@@ -81,7 +162,15 @@ enum ConnectionMode: String, CaseIterable, Codable, Identifiable {
     case bluetoothOnly = "Bluetooth Only", wifiOnly = "Wi-Fi Only"
     var id: String { rawValue }
 }
-enum TransportKind: String { case bluetooth = "Bluetooth", tcp = "Wi-Fi" }
+enum TransportKind: String, CaseIterable, Hashable, Identifiable {
+    case bluetooth = "Bluetooth", tcp = "Wi-Fi"
+    var id: Self { self }
+}
+struct TransportStatusSnapshot: Identifiable, Equatable {
+    let kind: TransportKind
+    let state: TransportConnectionState
+    var id: TransportKind { kind }
+}
 enum TransportConnectionState: String, Equatable {
     case unavailable, offline, discovering, discovered, connecting, connected, reconnecting, authenticating, ready, authenticationFailed
 
@@ -110,11 +199,48 @@ protocol HIDControlTransport: AnyObject {
     var state: TransportConnectionState { get }
     func connect() async
     func send(_ event: HIDEvent) async throws
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String
     func disconnect() async
+}
+
+extension HIDControlTransport {
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        throw TransportError.failed("This transport does not support device-side presets.")
+    }
+
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        try await managementRequest(
+            "PRESET DATA \(String(format: "%016llx", token)) \(offset) \(data.hex)",
+            timeout: 8
+        )
+    }
 }
 
 enum TransportError: LocalizedError { case unavailable, encoding, failed(String)
     var errorDescription: String? { switch self { case .unavailable: "Transport unavailable"; case .encoding: "Could not encode event"; case let .failed(s): s } }
+}
+
+struct DevicePresetStatus: Equatable, Sendable {
+    enum Phase: String, Sendable { case idle, uploading, running, completed, cancelled, failed }
+    let phase: Phase
+    let token: UInt64
+    let position: Int
+    let size: Int
+
+    var isActive: Bool { phase == .uploading || phase == .running }
+
+    init?(reply: String) {
+        let fields = reply.split(separator: " ")
+        guard fields.count == 5, fields[0] == "preset",
+              let phase = Phase(rawValue: String(fields[1])),
+              let token = UInt64(fields[2], radix: 16),
+              let position = Int(fields[3]), let size = Int(fields[4]) else { return nil }
+        self.phase = phase
+        self.token = token
+        self.position = position
+        self.size = size
+    }
 }
 
 struct USBIdentity: Codable, Equatable {
@@ -151,7 +277,11 @@ struct USBIdentity: Codable, Equatable {
 
 final class TCPHIDControlTransport: HIDControlTransport {
     let kind = TransportKind.tcp
-    private let host: NWEndpoint.Host; private let deviceId: String; private var connection: NWConnection?
+    private var host: NWEndpoint.Host { NWEndpoint.Host(hosts[hostIndex]) }
+    private var hosts: [String]
+    private var hostIndex = 0
+    private var connectionTimeoutWork: DispatchWorkItem?
+    private let deviceId: String; private var connection: NWConnection?
     private var secureChannel: SecureChannel?
     private(set) var isAvailable = false
     private(set) var state: TransportConnectionState = .offline
@@ -159,6 +289,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var receiveBuffer = Data()
     private var receiving = false
     private var authTimeoutWork: DispatchWorkItem?
+    private var reconnectWork: DispatchWorkItem?
     private let authTimeout: TimeInterval
     private struct PendingReply {
         let id: UUID
@@ -171,9 +302,16 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var otaCancelled = false
     private var otaTransferActive = false
     private var otaUsesWindowedFlow = false
-    init(host: String, deviceId: String, authTimeout: TimeInterval = 4) { self.host = NWEndpoint.Host(host); self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout }
+    init(host: String, deviceId: String, authTimeout: TimeInterval = 4, fallbackHosts: [String] = []) {
+        hosts = [host] + fallbackHosts.filter { $0 != host }
+        self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout
+    }
+    func addFallbackHosts(_ candidates: [String]) {
+        for candidate in candidates where !hosts.contains(candidate) { hosts.append(candidate) }
+    }
     func connect() async {
         shouldReconnect = true
+        reconnectWork?.cancel(); reconnectWork = nil
         if connection != nil { return }
         state = state == .offline ? .connecting : .reconnecting
         let conn = NWConnection(host: host, port: 3333, using: .tcp); connection = conn
@@ -181,6 +319,8 @@ final class TCPHIDControlTransport: HIDControlTransport {
             guard let self, let conn, self.connection === conn else { return }
             switch state {
             case .ready:
+                self.connectionTimeoutWork?.cancel(); self.connectionTimeoutWork = nil
+                appLog(.tcp, "connected host=\(self.host) deviceId=\(self.deviceId); authenticating")
                 self.startReceiveLoop(on: conn)
                 if let secret = PairingKeyStore.load(deviceId: self.deviceId),
                    let channel = try? SecureChannel(deviceId: deviceId, secret: secret) {
@@ -193,13 +333,34 @@ final class TCPHIDControlTransport: HIDControlTransport {
                     })
                 } else { self.failAuthentication(on: conn) }
             case .failed, .cancelled:
+                appLog(.tcp, "connection ended host=\(self.host) state=\(String(describing: state)) reconnect=\(self.shouldReconnect)")
+                self.connectionTimeoutWork?.cancel(); self.connectionTimeoutWork = nil
                 self.authTimeoutWork?.cancel(); self.authTimeoutWork = nil; self.receiving = false; self.receiveBuffer.removeAll(); self.secureChannel = nil; self.isAvailable = false; self.connection = nil; self.failPendingReplies(TransportError.unavailable)
                 let authFailed = self.state == .authenticationFailed
                 self.state = authFailed ? .authenticationFailed : (self.shouldReconnect ? .reconnecting : .offline)
-                if self.shouldReconnect && !authFailed { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in Task { await self?.connect() } } }
+                if self.shouldReconnect && !authFailed {
+                    self.hostIndex = (self.hostIndex + 1) % self.hosts.count
+                    self.reconnectWork?.cancel()
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self, self.shouldReconnect else { return }
+                        Task { await self.connect() }
+                    }
+                    self.reconnectWork = work
+                    appLog(.tcp, "reconnect scheduled host=\(self.host) delay=2s")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+                }
             default: self.isAvailable = false
             }
         }
+        // Bound unreachable addresses and NWConnection.waiting (e.g. a stale
+        // DHCP lease) so the next saved endpoint gets a turn during an intent.
+        let timeout = DispatchWorkItem { [weak self, weak conn] in
+            guard let self, let conn, self.connection === conn,
+                  self.state != .ready, self.state != .authenticating else { return }
+            self.failConnection("Wi-Fi endpoint connection timed out.", on: conn)
+        }
+        connectionTimeoutWork = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timeout)
         conn.start(queue: .main)
     }
     private func startReceiveLoop(on conn: NWConnection) {
@@ -360,11 +521,16 @@ final class TCPHIDControlTransport: HIDControlTransport {
             })
         }
     }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        try await request(command, timeout: timeout)
+    }
     func installFirmware(_ firmware: Data, version: String, sha256: String,
+                         allowDowngrade: Bool = false,
                          progress: @escaping (Int) -> Void) async throws {
         var reply: String
         do {
-            reply = try await request("START protocol=2 version=\(version) size=\(firmware.count) sha256=\(sha256) flow=windowed binary=1", allowDuringOTA: true)
+            let downgradeFlag = allowDowngrade ? " allow_downgrade=1" : ""
+            reply = try await request("START protocol=2 version=\(version) size=\(firmware.count) sha256=\(sha256) flow=windowed binary=1\(downgradeFlag)", allowDuringOTA: true)
         } catch {
             // START delivery is ambiguous when its reply is lost. A best-effort
             // abort releases a receiver that may already own the OTA engine.
@@ -594,7 +760,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
             appLog(.tcp, "id=\(eid) delivered")
         } catch { appLog(.errors, "TCP id=\(eid) error=\(error.localizedDescription)"); isAvailable = false; state = .reconnecting; connection?.cancel(); throw error }
     }
-    func disconnect() async { shouldReconnect = false; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); failPendingReplies(TransportError.unavailable); isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; reconnectWork?.cancel(); reconnectWork = nil; authTimeoutWork?.cancel(); authTimeoutWork = nil; receiving = false; connection?.cancel(); connection = nil; secureChannel = nil; receiveBuffer.removeAll(); failPendingReplies(TransportError.unavailable); isAvailable = false; state = .offline }
 }
 
 enum FirmwareUpdateState: Equatable {
@@ -653,9 +819,27 @@ enum FirmwareReleaseStatus: Equatable {
         }
     }
 
-    var canDownload: Bool {
-        if case .updateAvailable = self { return true }
-        return false
+    func canDownload(allowDowngrade: Bool = false) -> Bool {
+        switch self {
+        case .updateAvailable: true
+        case .installedNewer: allowDowngrade
+        default: false
+        }
+    }
+}
+
+struct FirmwareInstallOptions: Equatable {
+    var allowDowngrade = false
+    var ignorePublishedChecksum = false
+}
+
+enum FirmwareInstallPolicy {
+    static func downgradeBlocked(installed: String?, target: String,
+                                 allowDowngrade: Bool) -> Bool {
+        guard !allowDowngrade,
+              let installed, let current = SemanticVersion(installed),
+              let candidate = SemanticVersion(target) else { return false }
+        return candidate < current
     }
 }
 
@@ -697,16 +881,20 @@ enum FirmwareReleaseEvaluator {
 }
 
 enum FirmwareValidationError: LocalizedError, Equatable {
-    case notESP32Image, notApplicationImage, tooSmall, tooLarge, missingMetadata, wrongProduct, wrongBoard, unsupportedProtocol, unsupportedSchema
+    case notESP32Image, notApplicationImage, tooSmall, tooLarge, sizeMismatch
+    case missingMetadata, wrongProduct, wrongBoard, unsupportedProtocol, unsupportedSchema
+    case checksumMismatch
     var errorDescription: String? {
         switch self {
         case .notESP32Image: "The selected file is not an ESP32 application image."
         case .notApplicationImage: "Select firmware.bin only. Full-flash, bootloader, and partition images cannot be installed through OTA."
         case .tooSmall: "The selected firmware file is too small."
         case .tooLarge: "This firmware file is too large for the InputPilot OTA slot."
+        case .sizeMismatch: "The firmware size does not match the published manifest."
         case .missingMetadata, .wrongProduct, .wrongBoard: "This firmware is not compatible with InputPilot."
         case .unsupportedProtocol: "This firmware uses an unsupported OTA protocol."
         case .unsupportedSchema: "This firmware requires a newer OTA schema."
+        case .checksumMismatch: "The firmware SHA-256 does not match the published manifest."
         }
     }
 }
@@ -761,6 +949,22 @@ struct BLEDiscoveredDevice: Identifiable, Equatable {
     let id: UUID; let deviceId: String; let name: String; let rssi: Int
 }
 
+enum BLEMetadataRecovery {
+    static let invalidHandleMessage = "Bluetooth had cached outdated InputPilot services. Toggle Bluetooth off and on once, then retry setup."
+
+    static func isInvalidHandle(_ error: Error?) -> Bool {
+        guard let error = error as NSError? else { return false }
+        return (error.domain == CBATTErrorDomain &&
+                error.code == CBATTError.Code.invalidHandle.rawValue) ||
+            (error.domain == CBErrorDomain &&
+             error.code == CBError.Code.invalidHandle.rawValue)
+    }
+
+    static func userFacingError(_ error: Error) -> Error {
+        isInvalidHandle(error) ? TransportError.failed(invalidHandleMessage) : error
+    }
+}
+
 final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var devices: [BLEDiscoveredDevice] = []
     @Published private(set) var isScanning = false
@@ -771,11 +975,18 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     private var completion: ((Result<BLEDeviceMetadata, Error>) -> Void)?
     private var resultPendingDisconnect: Result<BLEDeviceMetadata, Error>?
     private var metadataTimeoutWork: DispatchWorkItem?
+    private var invalidHandleRetriesRemaining = 0
+    private var reconnectingAfterInvalidHandle = false
     private let otaService = CBUUID(string: "7D9F1001-4F4D-4F56-4552-484944000001")
     private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
 
     override init() { super.init(); central = CBCentralManager(delegate: self, queue: .main) }
     static func deviceId(from manufacturerData: Data) -> String? {
+        // Compact identity fits alongside the 128-bit service UUID in the
+        // primary 31-byte advertisement. Keep decoding older firmware too.
+        if manufacturerData.count == 8, manufacturerData.prefix(2) == Data("IP".utf8) {
+            return manufacturerData.dropFirst(2).map { String(format: "%02x", $0) }.joined()
+        }
         guard let value = String(data: manufacturerData, encoding: .utf8), value.count == 14,
               value.hasPrefix("IP"), value.dropFirst(2).allSatisfy({ $0.isHexDigit }) else { return nil }
         return String(value.dropFirst(2)).lowercased()
@@ -792,6 +1003,9 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     func metadata(for device: BLEDiscoveredDevice) async throws -> BLEDeviceMetadata {
         guard let peripheral = peripherals[device.id] else { throw TransportError.unavailable }
         stop(); selected = peripheral
+        invalidHandleRetriesRemaining = 1
+        reconnectingAfterInvalidHandle = false
+        resultPendingDisconnect = nil
         return try await withCheckedThrowingContinuation { continuation in
             completion = { continuation.resume(with: $0) }
             central.connect(peripheral)
@@ -812,7 +1026,8 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { peripheral.delegate = self; peripheral.discoverServices([otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        finish(.failure(error ?? TransportError.unavailable))
+        if let error, recoverInvalidHandle(error, peripheral: peripheral) { return }
+        finish(.failure(error.map(BLEMetadataRecovery.userFacingError) ?? TransportError.unavailable))
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         if let pending = resultPendingDisconnect {
@@ -820,20 +1035,36 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
             complete(pending)
             return
         }
+        if reconnectingAfterInvalidHandle, completion != nil {
+            reconnectingAfterInvalidHandle = false
+            reconnect(peripheral)
+            return
+        }
         guard completion != nil else { return }
         finish(.failure(error ?? TransportError.failed("Bluetooth disconnected during metadata setup.")))
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil, let service = peripheral.services?.first(where: { $0.uuid == otaService }) else { finish(.failure(error ?? TransportError.failed("InputPilot metadata service not found."))); return }
+        if let error {
+            if recoverInvalidHandle(error, peripheral: peripheral) { return }
+            finish(.failure(BLEMetadataRecovery.userFacingError(error))); return
+        }
+        guard let service = peripheral.services?.first(where: { $0.uuid == otaService }) else { finish(.failure(TransportError.failed("InputPilot metadata service not found."))); return }
         peripheral.discoverCharacteristics([otaStatus], for: service)
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard error == nil, let status = service.characteristics?.first(where: { $0.uuid == otaStatus }) else { finish(.failure(error ?? TransportError.failed("InputPilot metadata not available."))); return }
+        if let error {
+            if recoverInvalidHandle(error, peripheral: peripheral) { return }
+            finish(.failure(BLEMetadataRecovery.userFacingError(error))); return
+        }
+        guard let status = service.characteristics?.first(where: { $0.uuid == otaStatus }) else { finish(.failure(TransportError.failed("InputPilot metadata not available."))); return }
         peripheral.readValue(for: status)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == otaStatus else { return }
-        if let error { finish(.failure(error)); return }
+        if let error {
+            if recoverInvalidHandle(error, peripheral: peripheral) { return }
+            finish(.failure(BLEMetadataRecovery.userFacingError(error))); return
+        }
         guard let value = characteristic.value, let metadata = try? JSONDecoder().decode(BLEDeviceMetadata.self, from: value), metadata.product == "InputPilot", metadata.board == "esp32-s3-zero-4mb" else {
             finish(.failure(TransportError.failed("Invalid InputPilot Bluetooth metadata."))); return
         }
@@ -848,6 +1079,29 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         metadataTimeoutWork = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
     }
+    private func recoverInvalidHandle(_ error: Error, peripheral: CBPeripheral) -> Bool {
+        guard BLEMetadataRecovery.isInvalidHandle(error),
+              invalidHandleRetriesRemaining > 0, completion != nil else { return false }
+        invalidHandleRetriesRemaining -= 1
+        reconnectingAfterInvalidHandle = true
+        appLog(.bluetooth, "stale BLE GATT handle detected during setup; reconnecting and rediscovering services once")
+        startMetadataTimeout()
+        if peripheral.state == .disconnected {
+            reconnectingAfterInvalidHandle = false
+            reconnect(peripheral)
+        } else {
+            central.cancelPeripheralConnection(peripheral)
+        }
+        return true
+    }
+    private func reconnect(_ peripheral: CBPeripheral) {
+        let retry = DispatchWorkItem { [weak self, weak peripheral] in
+            guard let self, let peripheral, self.completion != nil else { return }
+            peripheral.delegate = self
+            self.central.connect(peripheral)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: retry)
+    }
     private func finish(_ result: Result<BLEDeviceMetadata, Error>) {
         metadataTimeoutWork?.cancel(); metadataTimeoutWork = nil
         if let selected, selected.state != .disconnected {
@@ -859,6 +1113,8 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     }
     private func complete(_ result: Result<BLEDeviceMetadata, Error>) {
         let callback = completion; completion = nil
+        reconnectingAfterInvalidHandle = false
+        invalidHandleRetriesRemaining = 0
         selected = nil
         callback?(result)
     }
@@ -879,6 +1135,7 @@ struct AppVersionInfo: Equatable {
 
 struct DiagnosticsMetadata: Codable, Equatable {
     struct HIDCounters: Codable, Equatable { let rxBle: UInt64?; let rxTcp: UInt64?; let rxSerial: UInt64?; let decoded: UInt64?; let decodeErrors: UInt64?; let queued: UInt64?; let queueRejected: UInt64?; let executed: UInt64?; let failed: UInt64?; let mouseExecuted: UInt64?; let keyboardExecuted: UInt64?; let usbReportsAttempted: UInt64?; let usbReportsSucceeded: UInt64?; let usbReportsFailed: UInt64?; let lastSource: String?; let lastType: String?; let lastSequence: UInt64?; let lastPhase: String?; let previousBreadcrumbValid: Bool?; let previousSequence: UInt64?; let previousSource: String?; let previousEventType: UInt8?; let previousPhase: UInt8?; let previousBleRxType: UInt8?; let previousBleRxLength: UInt64?; let previousQueueDepth: UInt64? }
+    struct BLEState: Codable, Equatable { let connected: Bool?; let advertising: Bool?; let advertisingRecoveries: UInt64?; let advertisingRecoveryFailures: UInt64? }
     let product: String
     let firmware: String
     let board: String
@@ -891,10 +1148,11 @@ struct DiagnosticsMetadata: Codable, Equatable {
     let heap: UInt64?
     let firmwareCommit: String?
     let resetReason: String?
+    let ble: BLEState?
     let hid: HIDCounters?
     enum CodingKeys: String, CodingKey {
         case product, firmware, board, protocolVersion = "protocol", otaSchema, deviceId
-        case runningPartition, bootPartition, uptime, heap, firmwareCommit, resetReason, hid
+        case runningPartition, bootPartition, uptime, heap, firmwareCommit, resetReason, ble, hid
     }
 }
 
@@ -1044,16 +1302,19 @@ private struct FirmwareLogsResponse: Decodable {
 }
 
 enum FirmwareManifestValidator {
-    static func validate(_ manifest: FirmwareManifest, firmware: Data? = nil) throws {
+    static func validate(_ manifest: FirmwareManifest, firmware: Data? = nil,
+                         ignorePublishedChecksum: Bool = false) throws {
         guard manifest.product == "InputPilot" else { throw FirmwareValidationError.wrongProduct }
         guard manifest.board == "esp32-s3-zero-4mb" else { throw FirmwareValidationError.wrongBoard }
         guard manifest.protocolVersion == 2 else { throw FirmwareValidationError.unsupportedProtocol }
         guard manifest.otaSchema == 1 else { throw FirmwareValidationError.unsupportedSchema }
         guard manifest.sha256.count == 64, manifest.sha256.allSatisfy({ $0.isHexDigit }) else { throw FirmwareValidationError.missingMetadata }
         if let firmware {
-            guard firmware.count == manifest.size else { throw FirmwareValidationError.tooLarge }
+            guard firmware.count == manifest.size else { throw FirmwareValidationError.sizeMismatch }
             let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
-            guard digest == manifest.sha256.lowercased() else { throw FirmwareValidationError.missingMetadata }
+            guard ignorePublishedChecksum || digest == manifest.sha256.lowercased() else {
+                throw FirmwareValidationError.checksumMismatch
+            }
             let metadata = try FirmwareImageMetadata.parseAndValidate(firmware)
             guard metadata.version == manifest.version else { throw FirmwareValidationError.missingMetadata }
         }
@@ -1062,17 +1323,42 @@ enum FirmwareManifestValidator {
 
 struct SemanticVersion: Comparable, Equatable {
     let components: [Int]
+    let prerelease: [String]
     init?(_ value: String) {
-        let core = value.split(separator: "+", maxSplits: 1)[0].split(separator: "-", maxSplits: 1)[0]
-        let parts = core.split(separator: ".")
+        let withoutBuild = value.split(separator: "+", maxSplits: 1)[0]
+        let releaseParts = withoutBuild.split(separator: "-", maxSplits: 1)
+        let parts = releaseParts[0].split(separator: ".")
         guard !parts.isEmpty, parts.allSatisfy({ Int($0) != nil }) else { return nil }
         components = parts.map { Int($0)! }
+        if releaseParts.count == 2 {
+            let identifiers = releaseParts[1].split(separator: ".").map(String.init)
+            guard !identifiers.isEmpty,
+                  identifiers.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" } }) else { return nil }
+            prerelease = identifiers
+        } else {
+            prerelease = []
+        }
     }
     static func < (lhs: Self, rhs: Self) -> Bool {
         for index in 0..<max(lhs.components.count, rhs.components.count) {
             let l = index < lhs.components.count ? lhs.components[index] : 0
             let r = index < rhs.components.count ? rhs.components[index] : 0
             if l != r { return l < r }
+        }
+        if lhs.prerelease.isEmpty || rhs.prerelease.isEmpty {
+            return !lhs.prerelease.isEmpty && rhs.prerelease.isEmpty
+        }
+        for index in 0..<max(lhs.prerelease.count, rhs.prerelease.count) {
+            guard index < lhs.prerelease.count else { return true }
+            guard index < rhs.prerelease.count else { return false }
+            let left = lhs.prerelease[index], right = rhs.prerelease[index]
+            if left == right { continue }
+            switch (Int(left), Int(right)) {
+            case let (.some(l), .some(r)): return l < r
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return left < right
+            }
         }
         return false
     }
@@ -1121,6 +1407,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
     private var connectionMode: ConnectionMode = .automatic
     private var capabilities: Set<String> = []
     private var hasSecurePairing = false
+    private var installedBeforeUpdate: String?
     var metadataHandler: ((BLEDeviceMetadata) -> Void)?
 
     static func transportOrder(mode: ConnectionMode, wifiAvailable: Bool, bluetoothAvailable: Bool) -> [FirmwareUpdateTransportKind] {
@@ -1153,6 +1440,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         connectionMode = mode; capabilities = Set(device.capabilities)
         hasSecurePairing = PairingKeyStore.load(deviceId: device.deviceId) != nil
         preUpdateDeviceId = device.deviceId
+        installedBeforeUpdate = device.firmwareVersion
         let host = device.staIP ?? device.mdnsHost
         wifiTransport = host.isEmpty ? nil : InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
     }
@@ -1202,7 +1490,16 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         if case .completed = state { rebootTimeoutWork?.cancel(); rebootTimeoutWork = nil }
     }
 
-    func install(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+    func install(_ firmware: Data, version: String, expectedSHA256: String? = nil,
+                 options: FirmwareInstallOptions = .init()) async {
+        guard !FirmwareInstallPolicy.downgradeBlocked(
+            installed: installedBeforeUpdate,
+            target: version,
+            allowDowngrade: options.allowDowngrade
+        ) else {
+            state = .failed("Firmware downgrade blocked. Enable the developer downgrade override to continue.")
+            return
+        }
         let wifiCapable = Self.wifiOTAAvailable(
             hasSecurePairing: hasSecurePairing,
             capabilities: capabilities,
@@ -1213,15 +1510,16 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         let order = Self.transportOrder(mode: connectionMode, wifiAvailable: wifiCapable, bluetoothAvailable: bleCapable)
         guard let selected = order.first else { state = .failed("No permitted firmware update transport is available."); return }
         if selected == .wifi {
-            do { try await installWiFi(firmware, version: version, expectedSHA256: expectedSHA256); return }
-            catch where order.contains(.bluetooth) && state == .preparing && !cancelled { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256); return }
+            do { try await installWiFi(firmware, version: version, expectedSHA256: expectedSHA256, options: options); return }
+            catch where order.contains(.bluetooth) && state == .preparing && !cancelled { await installBLE(firmware, version: version, expectedSHA256: expectedSHA256, options: options); return }
             catch is CancellationError { if cancelled { state = .cancelled }; return }
             catch { state = .failed(error.localizedDescription); return }
         }
-        await installBLE(firmware, version: version, expectedSHA256: expectedSHA256)
+        await installBLE(firmware, version: version, expectedSHA256: expectedSHA256, options: options)
     }
 
-    private func installBLE(_ firmware: Data, version: String, expectedSHA256: String? = nil) async {
+    private func installBLE(_ firmware: Data, version: String, expectedSHA256: String? = nil,
+                            options: FirmwareInstallOptions) async {
         activeTransport = .bluetooth
         guard let peripheral, let control, let data else { state = .failed("Connect to this InputPilot over Bluetooth first."); return }
         let metadata: FirmwareImageMetadata
@@ -1229,7 +1527,11 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         catch { state = .failed(error.localizedDescription); return }
         guard version == metadata.version else { state = .failed("The target version does not match the firmware image metadata."); return }
         let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
-        if let expectedSHA256, expectedSHA256.lowercased() != digest { state = .failed("Firmware verification failed. The selected file was not transferred."); return }
+        if let expectedSHA256, !options.ignorePublishedChecksum,
+           expectedSHA256.lowercased() != digest {
+            state = .failed("Firmware verification failed. The selected file was not transferred.")
+            return
+        }
         cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema; totalBytes = firmware.count; bytesSent = 0; acknowledged = 0; state = .preparing; lastProgress = Date()
         statusEvent = ""
         if let status, !status.isNotifying {
@@ -1240,7 +1542,8 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
             }
             guard status.isNotifying else { state = .failed("InputPilot firmware update status is not ready."); return }
         }
-        let command = "START protocol=2 version=\(version) size=\(firmware.count) sha256=\(digest)"
+        let downgradeFlag = options.allowDowngrade ? " allow_downgrade=1" : ""
+        let command = "START protocol=2 version=\(version) size=\(firmware.count) sha256=\(digest)\(downgradeFlag)"
         guard let seal else { state = .failed("The authenticated session was lost."); return }
         do { peripheral.writeValue(try seal(Data(command.utf8)), for: control, type: .withResponse) }
         catch { state = .failed("Could not encrypt the firmware update command."); return }
@@ -1300,11 +1603,15 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         state = .cancelled
     }
 
-    private func installWiFi(_ firmware: Data, version: String, expectedSHA256: String?) async throws {
+    private func installWiFi(_ firmware: Data, version: String, expectedSHA256: String?,
+                             options: FirmwareInstallOptions) async throws {
         let metadata = try FirmwareImageMetadata.parseAndValidate(firmware)
         guard metadata.version == version else { throw TransportError.failed("The target version does not match the firmware image metadata.") }
         let digest = SHA256.hash(data: firmware).map { String(format: "%02x", $0) }.joined()
-        if let expectedSHA256, expectedSHA256.lowercased() != digest { throw TransportError.failed("Firmware verification failed before transfer.") }
+        if let expectedSHA256, !options.ignorePublishedChecksum,
+           expectedSHA256.lowercased() != digest {
+            throw TransportError.failed("Firmware verification failed before transfer.")
+        }
         activeTransport = .wifi; cancelled = false; targetVersion = version; requiredSchema = metadata.otaSchema
         totalBytes = firmware.count; bytesSent = 0; state = .preparing
         let base = try await reachableWiFiEndpoint(); activeWiFiEndpoint = base
@@ -1313,7 +1620,10 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         try await wifiTransport.waitUntilReady()
         state = .transferring
         let started = Date()
-        try await wifiTransport.installFirmware(firmware, version: version, sha256: digest) { [weak self] sent in
+        try await wifiTransport.installFirmware(
+            firmware, version: version, sha256: digest,
+            allowDowngrade: options.allowDowngrade
+        ) { [weak self] sent in
             DispatchQueue.main.async {
                 self?.bytesSent = sent
                 self?.bytesPerSecond = Double(sent) / max(0.1, Date().timeIntervalSince(started))
@@ -1383,6 +1693,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         case "checksum_mismatch", "image_invalid": "Firmware verification failed. The update was not installed."
         case "invalid_metadata", "incompatible_product", "incompatible_board": "This firmware is not compatible with InputPilot."
         case "version_mismatch": "The firmware version does not match the selected target version."
+        case "downgrade_rejected": "This firmware is older than the installed version. Enable the developer downgrade override to continue."
         case "firmware_too_large": "This firmware file is too large for this InputPilot device."
         case "reflash_required": "This device must be reflashed over USB before Bluetooth updates are available."
         case "unauthorized": "Authentication is required before updating firmware."
@@ -1402,12 +1713,43 @@ final class UnavailableHIDControlTransport: HIDControlTransport {
     func disconnect() async {}
 }
 
+struct BLEReconnectGate: Equatable {
+    private(set) var requiresAdvertisement = false
+    var permitsCachedPeripheral: Bool { !requiresAdvertisement }
+    mutating func connectionAttemptFailed() { requiresAdvertisement = true }
+    mutating func advertisementObserved() { requiresAdvertisement = false }
+}
+
+/// Handshake replies have fixed ASCII lengths. Accept both legacy whole
+/// notifications and fragments delivered at ATT's default 23-byte MTU.
+struct BLEHandshakeReplyBuffer {
+    private var bytes = Data()
+
+    mutating func reset() { bytes.removeAll() }
+
+    mutating func append(_ data: Data) -> String? {
+        bytes.append(data)
+        guard bytes.count <= 128 else { reset(); return nil }
+        guard let reply = String(data: bytes, encoding: .utf8) else { reset(); return nil }
+        let expected: Int
+        if reply.hasPrefix("secure challenge ") { expected = 64 }
+        else if reply.hasPrefix("secure ready ") { expected = 77 }
+        else if reply == "secure failed" { expected = 13 }
+        else { return nil }
+        guard bytes.count == expected else { return nil }
+        reset()
+        return reply
+    }
+}
+
 final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransport, CBCentralManagerDelegate, CBPeripheralDelegate {
     let kind = TransportKind.bluetooth
     @Published private(set) var isAvailable = false
     @Published private(set) var state: TransportConnectionState = .offline
     @Published private(set) var radioState: BluetoothRadioState = .unknown
     private var central: CBCentralManager!; private var peripheral: CBPeripheral?; private var characteristics: [CBUUID: CBCharacteristic] = [:]
+    private var handshakeReplies = BLEHandshakeReplyBuffer()
+    private var handshakeStarted = false
     private var secureChannel: SecureChannel?
     private let deviceId: String
     private let service = CBUUID(string: "7D9F0001-4F4D-4F56-4552-484944000001")
@@ -1423,11 +1765,14 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     private var reconnectWork: DispatchWorkItem?
     private var scanTimeoutWork: DispatchWorkItem?
+    private var connectionTimeoutWork: DispatchWorkItem?
     private var peripheralIdentifier: UUID?
+    private var reconnectGate = BLEReconnectGate()
     private var shouldReconnect = false
     private var pendingServices = 0
     private var authTimeoutWork: DispatchWorkItem?
     private let authTimeout: TimeInterval
+    private let connectionTimeout: TimeInterval
     private struct PendingWrite {
         let id: String
         let characteristic: CBCharacteristic
@@ -1445,6 +1790,16 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     }
     private var pendingSecureReplies: [PendingSecureReply] = []
     private var secureRequestInFlight = false
+    // A persisted CoreBluetooth identifier lets the transport reconnect to a
+    // known peripheral without scanning. That is what makes App Intents from
+    // Apple Shortcuts work on a cold start: background scanning is throttled
+    // so restore the identifier before the first scan attempt. Service-filtered
+    // discovery is the fallback when the identifier is missing or stale.
+    private static func persistedIdentifierKey(deviceId: String) -> String { "inputpilot.blePeripheral.\(deviceId.lowercased())" }
+    private func rememberPeripheralIdentifier(_ identifier: UUID) {
+        peripheralIdentifier = identifier
+        UserDefaults.standard.set(identifier.uuidString, forKey: Self.persistedIdentifierKey(deviceId: deviceId))
+    }
     static func writeType(for event: HIDEvent, properties: CBCharacteristicProperties) -> CBCharacteristicWriteType? {
         let highFrequency: Bool = {
             if case .mouseMove = event { return true }
@@ -1456,27 +1811,69 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         if properties.contains(.writeWithoutResponse) { return .withoutResponse }
         return nil
     }
-    init(deviceId: String, authTimeout: TimeInterval = 10) { self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout; super.init(); central = CBCentralManager(delegate: self, queue: .main) }
+    init(deviceId: String, authTimeout: TimeInterval = 10, connectionTimeout: TimeInterval = 8) {
+        self.deviceId = deviceId.lowercased(); self.authTimeout = authTimeout; self.connectionTimeout = connectionTimeout
+        super.init()
+        if let stored = UserDefaults.standard.string(forKey: Self.persistedIdentifierKey(deviceId: deviceId)) {
+            peripheralIdentifier = UUID(uuidString: stored)
+        }
+        central = CBCentralManager(delegate: self, queue: .main)
+    }
     private func scan() {
         guard shouldReconnect, central.state == .poweredOn, !central.isScanning, peripheral == nil else { return }
-        if let peripheralIdentifier,
+        if reconnectGate.permitsCachedPeripheral, let peripheralIdentifier,
            let known = central.retrievePeripherals(withIdentifiers: [peripheralIdentifier]).first {
             peripheral = known
             state = .connecting
             appLog(.bluetooth, "reconnecting known peripheral deviceId=\(deviceId)")
             central.connect(known)
+            startConnectionTimeout(for: known, source: "cached")
             return
         }
         state = state == .reconnecting ? .reconnecting : .discovering
-        // Identity is advertised in manufacturer data because the compact BLE
-        // advertisement cannot also carry the 128-bit service UUID.
-        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        // iOS requires an explicit service filter for background discovery.
+        // Legacy firmware without advertised services remains discoverable in
+        // the foreground; cached peripheral reconnects work in either state.
+        let services: [CBUUID]? = UIApplication.shared.applicationState == .active ? nil : [service]
+        central.scanForPeripherals(withServices: services, options: nil)
         appLog(.bluetooth, "control scan started deviceId=\(deviceId)")
         scanTimeoutWork?.cancel()
-        let timeout = DispatchWorkItem { [weak self] in guard let self else { return }; self.central.stopScan(); self.state = .offline; let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
+        let timeout = DispatchWorkItem { [weak self] in guard let self, self.central.isScanning else { return }; self.central.stopScan(); self.state = .offline; appLog(.bluetooth, "control scan timed out deviceId=\(self.deviceId)"); let retry = DispatchWorkItem { [weak self] in self?.scan() }; self.reconnectWork = retry; DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: retry) }
         scanTimeoutWork = timeout; DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
     }
-    func connect() async { shouldReconnect = true; scan() }
+    private func startConnectionTimeout(for candidate: CBPeripheral, source: String) {
+        connectionTimeoutWork?.cancel()
+        let timeout = DispatchWorkItem { [weak self, weak candidate] in
+            guard let self, let candidate, self.peripheral === candidate,
+                  self.state == .connecting else { return }
+            appLog(.errors, "BLE \(source) connection timed out deviceId=\(self.deviceId); cancelling and forcing advertisement scan")
+            self.reconnectGate.connectionAttemptFailed()
+            self.connectionTimeoutWork = nil
+            self.central.cancelPeripheralConnection(candidate)
+            self.peripheral = nil
+            self.isAvailable = false
+            self.state = self.shouldReconnect ? .reconnecting : .offline
+            if self.shouldReconnect {
+                // Let CoreBluetooth deliver the cancellation callback before a
+                // scan can rediscover the same CBPeripheral object.
+                let recovery = DispatchWorkItem { [weak self] in self?.scan() }
+                self.reconnectWork = recovery
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: recovery)
+            }
+        }
+        connectionTimeoutWork = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + connectionTimeout, execute: timeout)
+    }
+    func connect() async {
+        shouldReconnect = true
+        // A scan started by the UI may still be unfiltered when a Shortcut
+        // takes over after the app moves to the background.
+        if UIApplication.shared.applicationState != .active, central.isScanning {
+            central.stopScan()
+            scanTimeoutWork?.cancel()
+        }
+        scan()
+    }
     func waitUntilReady(timeout: TimeInterval = 10) async throws {
         await connect()
         let deadline = Date().addingTimeInterval(timeout)
@@ -1492,27 +1889,43 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn: radioState = .poweredOn; if state == .unavailable { state = .offline }; scan()
-        case .poweredOff: radioState = .poweredOff; isAvailable = false; state = .unavailable
-        case .unsupported: radioState = .unsupported; isAvailable = false; state = .unavailable
-        case .unauthorized: radioState = .unauthorized; isAvailable = false; state = .unavailable
-        case .resetting: radioState = .resetting; isAvailable = false; state = .unavailable
-        case .unknown: radioState = .unknown; isAvailable = false; state = .unavailable
-        @unknown default: radioState = .unknown; isAvailable = false; state = .unavailable
+        case .poweredOff: radioState = .poweredOff; resetForUnavailableRadio(); state = .unavailable
+        case .unsupported: radioState = .unsupported; resetForUnavailableRadio(); state = .unavailable
+        case .unauthorized: radioState = .unauthorized; resetForUnavailableRadio(); state = .unavailable
+        case .resetting: radioState = .resetting; resetForUnavailableRadio(); state = .offline
+        case .unknown: radioState = .unknown; resetForUnavailableRadio(); state = .offline
+        @unknown default: radioState = .unknown; resetForUnavailableRadio(); state = .unavailable
         }
+    }
+    private func resetForUnavailableRadio() {
+        reconnectWork?.cancel(); scanTimeoutWork?.cancel(); connectionTimeoutWork?.cancel()
+        authTimeoutWork?.cancel(); authTimeoutWork = nil
+        handshakeReplies.reset(); handshakeStarted = false
+        central.stopScan()
+        if let peripheral { central.cancelPeripheralConnection(peripheral) }
+        peripheral = nil; isAvailable = false; secureChannel = nil
+        characteristics.removeAll(); pendingServices = 0
+        failPendingWrites(TransportError.unavailable)
+        failPendingSecureReplies(TransportError.unavailable)
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard BLEDeviceDiscoveryManager.advertisement(advertisementData, matches: deviceId) else { return }
         appLog(.bluetooth, "discovered deviceId=\(deviceId) rssi=\(RSSI) connect requested")
+        reconnectGate.advertisementObserved()
         self.peripheral = peripheral
-        peripheralIdentifier = peripheral.identifier
+        rememberPeripheralIdentifier(peripheral.identifier)
         scanTimeoutWork?.cancel()
         central.stopScan()
         state = .discovered
         central.connect(peripheral)
         state = .connecting
+        startConnectionTimeout(for: peripheral, source: "scan")
     }
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
+    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) { guard self.peripheral === peripheral else { central.cancelPeripheralConnection(peripheral); return }; connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; reconnectGate.advertisementObserved(); appLog(.bluetooth, "didConnect deviceId=\(deviceId)"); if peripheralIdentifier == nil { rememberPeripheralIdentifier(peripheral.identifier) }; state = .connected; peripheral.delegate = self; peripheral.discoverServices([service, otaService]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { appLog(.bluetooth, "ignored stale BLE connect failure deviceId=\(deviceId)"); return }
+        connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil
+        reconnectGate.connectionAttemptFailed()
         appLog(.errors, "BLE connection failed error=\(error?.localizedDescription ?? "unknown")")
         self.peripheral = nil; isAvailable = false; state = shouldReconnect ? .reconnecting : .offline
         guard shouldReconnect else { return }
@@ -1521,6 +1934,8 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         reconnectWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        guard self.peripheral === peripheral else { appLog(.bluetooth, "ignored stale BLE disconnect deviceId=\(deviceId)"); return }
+        connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil
         appLog(error == nil ? .bluetooth : .errors, "BLE disconnected error=\(error?.localizedDescription ?? "none") reconnect=\(shouldReconnect)")
         let authFailed = state == .authenticationFailed
         isAvailable = false
@@ -1537,8 +1952,9 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         reconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard error == nil, let services = peripheral.services, !services.isEmpty else { appLog(.errors, "BLE service discovery error=\(error?.localizedDescription ?? "empty")"); central.cancelPeripheralConnection(peripheral); return }; appLog(.bluetooth, "services discovered count=\(services.count)"); pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
+    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) { guard self.peripheral === peripheral, state == .connected else { return }; guard error == nil, let services = peripheral.services, !services.isEmpty else { appLog(.errors, "BLE service discovery error=\(error?.localizedDescription ?? "empty")"); central.cancelPeripheralConnection(peripheral); return }; appLog(.bluetooth, "services discovered count=\(services.count)"); pendingServices = services.count; services.forEach { peripheral.discoverCharacteristics(nil, for: $0) } }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard self.peripheral === peripheral, state == .connected, pendingServices > 0 else { return }
         if error == nil { service.characteristics?.forEach { characteristic in characteristics[characteristic.uuid] = characteristic; appLog(.bluetooth, "characteristic uuid=\(characteristic.uuid.uuidString) properties=\(characteristic.properties.rawValue)") } }
         pendingServices -= 1
         guard pendingServices == 0 else { return }
@@ -1549,21 +1965,26 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             failAuthentication(peripheral); return
         }
         secureChannel = channel
+        handshakeReplies.reset()
+        handshakeStarted = false
         state = .authenticating
+        startAuthTimeout(peripheral)
         peripheral.setNotifyValue(true, for: tx)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard characteristic.uuid == secureStatus, state == .authenticating else { return }
+        guard self.peripheral === peripheral, characteristic.uuid == secureStatus,
+              state == .authenticating, !handshakeStarted else { return }
         guard error == nil, characteristic.isNotifying, let rx = characteristics[control] else { failAuthentication(peripheral); return }
-        startAuthTimeout(peripheral)
+        handshakeStarted = true
         peripheral.writeValue(Data("secure begin".utf8), for: rx, type: .withResponse)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard self.peripheral === peripheral else { return }
         if characteristic.uuid == otaStatus { firmwareUpdater.receive(characteristic.value, error: error); return }
         guard characteristic.uuid == secureStatus, error == nil,
               let data = characteristic.value else { return }
         if state == .authenticating, let secureChannel {
-            guard let reply = String(data: data, encoding: .utf8) else { return }
+            guard let reply = handshakeReplies.append(data) else { return }
             do {
                 if reply.hasPrefix("secure challenge "), let rx = characteristics[control] {
                     peripheral.writeValue(Data(try secureChannel.hello(for: reply).utf8), for: rx, type: .withResponse)
@@ -1619,11 +2040,11 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         peripheral.setNotifyValue(true, for: status)
     }
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) { firmwareUpdater.writerReady(); drainWrites(peripheral) }
-    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.state == .authenticating else { return }; self.retryAfterAuthenticationTimeout(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
+    private func startAuthTimeout(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); let work = DispatchWorkItem { [weak self, weak peripheral] in guard let self, let peripheral, self.peripheral === peripheral, self.state == .authenticating else { return }; self.retryAfterAuthenticationTimeout(peripheral) }; authTimeoutWork = work; DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work) }
     private func failAuthentication(_ peripheral: CBPeripheral) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; central.cancelPeripheralConnection(peripheral) }
     private func retryAfterAuthenticationTimeout(_ peripheral: CBPeripheral) {
         authTimeoutWork?.cancel(); authTimeoutWork = nil
-        appLog(.bluetooth, "Secure handshake timed out; reconnecting without invalidating USB trust")
+        appLog(.bluetooth, "Secure handshake timed out deviceId=\(deviceId) notifyStarted=\(handshakeStarted) writePayload=\(peripheral.maximumWriteValueLength(for: .withoutResponse)); reconnecting without invalidating USB trust")
         isAvailable = false; secureChannel = nil
         state = shouldReconnect ? .reconnecting : .offline
         central.cancelPeripheralConnection(peripheral)
@@ -1647,6 +2068,28 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
               let secureChannel else { throw TransportError.encoding }
         return try await requestPayload(timeout: timeout) {
             Data(try secureChannel.sealText(command).utf8)
+        }
+    }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        try await request(command, timeout: timeout)
+    }
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        guard data.count <= 180 else {
+            throw TransportError.failed("Bluetooth preset chunk is too large.")
+        }
+        var plaintext = Data([0xFE, 0x06])
+        var bigToken = token.bigEndian
+        var bigOffset = offset.bigEndian
+        withUnsafeBytes(of: &bigToken) { plaintext.append(contentsOf: $0) }
+        withUnsafeBytes(of: &bigOffset) { plaintext.append(contentsOf: $0) }
+        plaintext.append(data)
+        return try await requestPayload(timeout: 8) {
+            guard let secureChannel, let peripheral else { throw TransportError.unavailable }
+            let payload = try secureChannel.sealBinary(plaintext)
+            guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+                throw TransportError.failed("The negotiated Bluetooth packet size is too small for preset upload.")
+            }
+            return payload
         }
     }
     private func requestPayload(
@@ -1986,7 +2429,7 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
         pendingSecureReplies.removeAll()
         pending.forEach { $0.timeout.cancel(); $0.continuation.resume(throwing: error) }
     }
-    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); failPendingSecureReplies(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
+    func disconnect() async { shouldReconnect = false; reconnectWork?.cancel(); scanTimeoutWork?.cancel(); connectionTimeoutWork?.cancel(); connectionTimeoutWork = nil; authTimeoutWork?.cancel(); authTimeoutWork = nil; failPendingWrites(TransportError.unavailable); failPendingSecureReplies(TransportError.unavailable); central.stopScan(); if let peripheral { central.cancelPeripheralConnection(peripheral) }; self.peripheral = nil; secureChannel = nil; characteristics.removeAll(); pendingServices = 0; isAvailable = false; state = .offline }
 }
 
 @MainActor enum InputPilotBluetoothManager {
@@ -2006,11 +2449,15 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
 
 enum InputPilotWiFiManager {
     private static var sessions: [String: TCPHIDControlTransport] = [:]
-    static func session(host: String, deviceId: String) -> TCPHIDControlTransport {
+    static func session(host: String, deviceId: String, fallbackHosts: [String] = []) -> TCPHIDControlTransport {
         let normalizedHost = DeviceEndpointResolver.sanitizeHost(host).lowercased()
+        let fallbacks = fallbackHosts.map { DeviceEndpointResolver.sanitizeHost($0).lowercased() }.filter { !$0.isEmpty && $0 != normalizedHost }
         let key = "\(deviceId.lowercased())|\(normalizedHost)"
-        if let existing = sessions[key] { return existing }
-        let session = TCPHIDControlTransport(host: normalizedHost, deviceId: deviceId)
+        if let existing = sessions[key] {
+            existing.addFallbackHosts(fallbacks)
+            return existing
+        }
+        let session = TCPHIDControlTransport(host: normalizedHost, deviceId: deviceId, fallbackHosts: fallbacks)
         sessions[key] = session
         return session
     }
@@ -2027,16 +2474,20 @@ enum InputPilotWiFiManager {
     @Published var activeTransport: TransportKind?
     @Published var lastError: String?
     @Published private(set) var isConnecting = false
-    let capabilities: Set<String>
+    @Published private(set) var transportStates: [TransportKind: TransportConnectionState] = [:]
+    private let initialCapabilities: Set<String>
+    private weak var device: StoredDevice?
     let protocolVersion: Int
     var onEvent: ((HIDEvent) -> Void)?
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport
     private var leasedTransport: HIDControlTransport?
     private var nextEventID: UInt64 = 0
-    private var lastReleaseAllAt = Date.distantPast
+    private var transportMonitor: Task<Void, Never>?
     init(device: StoredDevice) {
+        self.device = device
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
-        let host = device.staIP ?? device.mdnsHost
+        let hosts = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).compactMap(\.host)
+        let host = hosts.first ?? ""
         let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId)
         bluetooth.metadataHandler = { [weak device] metadata in
             guard let device, metadata.deviceId.lowercased() == device.deviceId.lowercased() else { return }
@@ -2044,15 +2495,42 @@ enum InputPilotWiFiManager {
         }
         ble = bluetooth
         tcp = host.isEmpty ? UnavailableHIDControlTransport(kind: .tcp) :
-            InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
-        capabilities = Set(device.capabilities)
+            InputPilotWiFiManager.session(host: host, deviceId: device.deviceId, fallbackHosts: Array(hosts.dropFirst()))
+        initialCapabilities = Set(device.capabilities)
         protocolVersion = device.protocolVersion
+        refreshTransportStates()
     }
     init(ble: HIDControlTransport, tcp: HIDControlTransport, capabilities: Set<String> = [], protocolVersion: Int = 2) {
         mode = .automatic
-        self.ble = ble; self.tcp = tcp; self.capabilities = capabilities; self.protocolVersion = protocolVersion
+        self.ble = ble; self.tcp = tcp; self.initialCapabilities = capabilities; self.protocolVersion = protocolVersion
+        refreshTransportStates()
     }
-    func connect() async { isConnecting = true; async let b: Void = ble.connect(); async let t: Void = tcp.connect(); _ = await (b, t); isConnecting = false }
+    func connect() async {
+        isConnecting = true
+        async let b: Void = ble.connect(); async let t: Void = tcp.connect()
+        _ = await (b, t)
+        refreshTransportStates()
+        isConnecting = false
+    }
+    // connect() only starts the transports; BLE scan/auth and the Wi-Fi handshake
+    // finish asynchronously. Callers that need a ready session immediately after
+    // connecting (App Intents, automations) must wait for readiness first.
+    // Transports that are merely offline at the start (radio powering up, Wi-Fi
+    // handshake pending, BLE retry backoff) must keep the wait alive; only
+    // terminal states (authentication failed, radio unavailable, no transport at
+    // all) end it early.
+    func waitUntilReady(timeout: TimeInterval = 10) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if Task.isCancelled { return false }
+            let permitted = candidateTransports(lowLatency: false)
+            if permitted.contains(where: { $0.isAvailable && $0.state == .ready }) { return true }
+            let participating = permitted.filter { !($0 is UnavailableHIDControlTransport) && $0.state != .unavailable }
+            if participating.isEmpty || participating.allSatisfy({ $0.state == .authenticationFailed }) { return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
     func disconnect() async { await releaseAll(); activeTransport = nil }
     @discardableResult func send(_ event: HIDEvent) async -> Bool {
         nextEventID &+= 1; let eventID = nextEventID
@@ -2067,14 +2545,14 @@ enum InputPilotWiFiManager {
                 await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport was lost; sequence stopped.")
                 return false
             }
-            do { try await AppLogContext.$eventID.withValue(eventID) { try await leasedTransport.send(event) }; activeTransport = leasedTransport.kind; lastError = nil; onEvent?(event); return true }
+            do { try await AppLogContext.$eventID.withValue(eventID) { try await leasedTransport.send(event) }; activeTransport = leasedTransport.kind; lastError = nil; if !MacroRecordingContext.suppressed { onEvent?(event) }; return true }
             catch { await abortOrderedSession(reason: "Active \(leasedTransport.kind.rawValue) transport failed; sequence stopped."); return false }
         }
         var failure: String?; let available = candidates(for: event).filter { $0.isAvailable && $0.state == .ready }
         appLog(.control, "id=\(eventID) candidates=\(available.map(\.kind.rawValue).joined(separator: ","))")
         for (index, transport) in available.enumerated() {
             appLog(.control, "id=\(eventID) selected=\(transport.kind.rawValue)")
-            do { try await AppLogContext.$eventID.withValue(eventID) { try await transport.send(event) }; activeTransport = transport.kind; lastError = nil; onEvent?(event); return true }
+            do { try await AppLogContext.$eventID.withValue(eventID) { try await transport.send(event) }; activeTransport = transport.kind; lastError = nil; if !MacroRecordingContext.suppressed { onEvent?(event) }; return true }
             catch {
                 failure = error.localizedDescription; appLog(.errors, "CONTROL id=\(eventID) transport=\(transport.kind.rawValue) error=\(error.localizedDescription)")
                 if !event.safeToRetryAfterUncertainDelivery {
@@ -2090,12 +2568,8 @@ enum InputPilotWiFiManager {
         return false
     }
     func releaseAll() async {
-        let now = Date()
-        guard now.timeIntervalSince(lastReleaseAllAt) >= 0.5 else {
-            appLog(.control, "release_all coalesced duplicate=yes")
-            return
-        }
-        lastReleaseAllAt = now
+        // A recent release does not prove no new input has been held since.
+        // In particular, short macro repeats must each release their own input.
         await send(.releaseAll)
     }
     func releaseAllPreservingError() async {
@@ -2108,10 +2582,21 @@ enum InputPilotWiFiManager {
         if ownsSession && !beginOrderedSession(lowLatency: false) { return false }
         defer { if ownsSession { endOrderedSession() } }
         do {
-            for stroke in try layout.strokes(for: text) {
+            let strokes = try layout.strokes(for: text)
+            // The firmware drains its HID queue at a fixed rate and rejects
+            // events when the 32-slot queue fills. Bluetooth writes are paced
+            // by the ATT acknowledgement, but the Wi-Fi socket acknowledges
+            // before the device consumes anything, so keep a minimum gap
+            // between keystrokes to protect the queue tail (e.g. enter-after).
+            let paces = (leasedTransport?.kind ?? TransportKind.tcp) == .tcp
+            for (index, stroke) in strokes.enumerated() {
                 if Task.isCancelled { return false }
                 guard await send(.keyboardReport(modifiers: stroke.modifiers, usage: stroke.usage)) else { return false }
-                if delayMilliseconds > 0 { try? await Task.sleep(for: .milliseconds(delayMilliseconds)) }
+                if delayMilliseconds > 0 {
+                    try? await Task.sleep(for: .milliseconds(delayMilliseconds))
+                } else if paces, index + 1 < strokes.count {
+                    try? await Task.sleep(for: .milliseconds(8))
+                }
             }
             return true
         } catch { lastError = error.localizedDescription; return false }
@@ -2135,7 +2620,136 @@ enum InputPilotWiFiManager {
         }
         lastError = reason + " Release-all was attempted."
     }
-    func supports(_ capability: String) -> Bool { capabilities.contains(capability) }
+
+    @discardableResult func startPreset(program: Data, token: UInt64) async -> Bool {
+        guard !program.isEmpty, program.count <= 64 * 1024 else {
+            lastError = "The compiled preset is too large for the device."
+            return false
+        }
+        let tokenText = String(format: "%016llx", token)
+        var hash: UInt32 = 2_166_136_261
+        for byte in program { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        guard let beginReply = await presetRequest({ transport in
+            try await transport.managementRequest(
+                "PRESET BEGIN \(tokenText) \(program.count) \(String(format: "%08x", hash))",
+                timeout: 8
+            )
+        }) else { return false }
+        let beginFields = beginReply.split(separator: " ")
+        guard beginFields.count == 4, beginFields[0] == "preset", beginFields[1] == "ready",
+              UInt64(beginFields[2], radix: 16) == token,
+              let acknowledged = Int(beginFields[3]), (0 ... program.count).contains(acknowledged) else {
+            lastError = presetProtocolError(beginReply)
+            await discardFailedPreset(token: token)
+            return false
+        }
+        var offset = acknowledged
+        while offset < program.count {
+            if Task.isCancelled {
+                await discardFailedPreset(token: token)
+                return false
+            }
+            // 120 bytes keeps the encrypted BLE record below iOS' common
+            // negotiated ATT payload while remaining well below the TCP line cap.
+            let end = min(offset + 120, program.count)
+            let chunk = Data(program[offset ..< end])
+            guard let reply = await presetRequest({ transport in
+                try await transport.uploadPresetChunk(token: token, offset: UInt32(offset), data: chunk)
+            }) else {
+                await discardFailedPreset(token: token)
+                return false
+            }
+            let fields = reply.split(separator: " ")
+            guard fields.count == 4, fields[0] == "preset", fields[1] == "ack",
+                  UInt64(fields[2], radix: 16) == token, Int(fields[3]) == end else {
+                lastError = presetProtocolError(reply)
+                await discardFailedPreset(token: token)
+                return false
+            }
+            offset = end
+        }
+        guard let runReply = await presetRequest({ transport in
+            try await transport.managementRequest("PRESET RUN \(tokenText)", timeout: 8)
+        }), let status = DevicePresetStatus(reply: runReply), status.token == token,
+              status.phase == .running else {
+            if lastError == nil { lastError = "The device did not start the preset." }
+            await discardFailedPreset(token: token)
+            return false
+        }
+        lastError = nil
+        return true
+    }
+
+    private func discardFailedPreset(token: UInt64) async {
+        let preservedError = lastError
+        let tokenText = String(format: "%016llx", token)
+        _ = await presetRequest { transport in
+            try await transport.managementRequest("PRESET ABORT \(tokenText)", timeout: 3)
+        }
+        lastError = preservedError
+    }
+
+    func presetStatus() async -> DevicePresetStatus? {
+        guard let reply = await presetRequest({ transport in
+                  try await transport.managementRequest("PRESET STATUS", timeout: 5)
+              }), let status = DevicePresetStatus(reply: reply) else { return nil }
+        lastError = nil
+        return status
+    }
+
+    @discardableResult func abortPreset(token: UInt64 = 0) async -> Bool {
+        let command = token == 0 ? "PRESET ABORT" :
+            "PRESET ABORT \(String(format: "%016llx", token))"
+        guard let reply = await presetRequest({ transport in
+            try await transport.managementRequest(command, timeout: 5)
+        }), let status = DevicePresetStatus(reply: reply),
+              status.phase == .cancelled || status.phase == .idle || status.phase == .completed else {
+            if lastError == nil { lastError = "The device did not confirm that the preset stopped." }
+            return false
+        }
+        lastError = nil
+        return true
+    }
+
+    private func presetRequest(
+        _ operation: (HIDControlTransport) async throws -> String
+    ) async -> String? {
+        var failure = "No permitted control transport is ready."
+        for attempt in 0 ..< 3 {
+            let ready = candidateTransports(lowLatency: false).filter { $0.isAvailable && $0.state == .ready }
+            for transport in ready {
+                do {
+                    let reply = try await operation(transport)
+                    activeTransport = transport.kind
+                    if reply.hasPrefix("error ") {
+                        lastError = presetProtocolError(reply)
+                        return nil
+                    }
+                    return reply
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
+            if attempt < 2 { try? await Task.sleep(for: .milliseconds(150)) }
+        }
+        lastError = failure
+        return nil
+    }
+
+    private func presetProtocolError(_ reply: String) -> String {
+        let code = reply.hasPrefix("error ") ? String(reply.dropFirst(6)) : reply
+        return switch code {
+        case "preset_busy": "Another preset is already running on the device."
+        case "preset_too_large": "The compiled preset is too large for the device."
+        case "preset_checksum_mismatch": "Preset upload verification failed. Nothing was executed."
+        case "preset_invalid": "This firmware does not support this preset action."
+        case "ota_busy": "A firmware update is currently using the device."
+        default: "The device rejected the preset (\(code.replacingOccurrences(of: "_", with: " ")))."
+        }
+    }
+    func supports(_ capability: String) -> Bool {
+        initialCapabilities.contains(capability) || device?.capabilities.contains(capability) == true
+    }
     func supports(_ event: HIDEvent) -> Bool { requiredCapability(for: event).map { supports($0) } ?? true }
     var unsupportedControlMessages: [String] {
         var messages: [String] = []
@@ -2145,6 +2759,13 @@ enum InputPilotWiFiManager {
         return messages
     }
     var transportReadiness: [(TransportKind, Bool)] { [(.bluetooth, ble.isAvailable), (.tcp, tcp.isAvailable)] }
+    var visibleTransportStates: [TransportStatusSnapshot] {
+        TransportKind.allCases.compactMap { kind in
+            let capability = kind == .bluetooth ? "ble_transport" : "wifi_transport"
+            guard supports(capability) else { return nil }
+            return TransportStatusSnapshot(kind: kind, state: transportStates[kind] ?? .offline)
+        }
+    }
     var connectionSummary: String {
         if protocolVersion != 2 { return "Firmware must be reflashed" }
         if let activeTransport, transport(for: activeTransport).state == .ready { return "Active \(activeTransport.rawValue)" }
@@ -2157,6 +2778,28 @@ enum InputPilotWiFiManager {
         return "Offline"
     }
     private var allTransports: [HIDControlTransport] { [ble, tcp] }
+    private func refreshTransportStates() {
+        let latest: [TransportKind: TransportConnectionState] = [
+            .bluetooth: ble.state,
+            .tcp: tcp.state
+        ]
+        if transportStates != latest { transportStates = latest }
+    }
+    func startTransportStatusUpdates() {
+        guard transportMonitor == nil else { return }
+        transportMonitor = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard self != nil else { return }
+                self?.refreshTransportStates()
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+    func stopTransportStatusUpdates() {
+        transportMonitor?.cancel()
+        transportMonitor = nil
+        refreshTransportStates()
+    }
     private func transport(for kind: TransportKind) -> HIDControlTransport {
         switch kind { case .bluetooth: ble; case .tcp: tcp }
     }
@@ -2194,111 +2837,604 @@ enum InputPilotWiFiManager {
     }
 }
 
-@Model final class HIDPreset {
-    var name: String; var payload: String; var shortcut: Bool; var favorite: Bool; var order: Int; var enterAfter: Bool; var typingDelayMs: Int
-    init(name: String, payload: String, shortcut: Bool = false, favorite: Bool = false, order: Int = 0, enterAfter: Bool = false, typingDelayMs: Int = 0) { self.name = name; self.payload = payload; self.shortcut = shortcut; self.favorite = favorite; self.order = order; self.enterAfter = enterAfter; self.typingDelayMs = typingDelayMs }
-}
-struct RecordedEvent: Codable { let offset: TimeInterval; let event: HIDEvent }
-@Model final class HIDMacro {
-    var name: String; var macroDescription: String = ""; var encodedEvents: Data; var createdAt: Date
-    init(name: String, description: String = "", events: [RecordedEvent]) { self.name = name; macroDescription = description; encodedEvents = (try? JSONEncoder().encode(events)) ?? Data(); createdAt = Date() }
-    var events: [RecordedEvent] { (try? JSONDecoder().decode([RecordedEvent].self, from: encodedEvents)) ?? [] }
+/// Deliberately small, line-oriented preset script. Parse before sending any keys.
+///
+/// Syntax: a line wrapped in brackets is a command — `[ENTER]`, `[CTRL+A]`,
+/// `[SECRET name]` or `[DELAY 500]`. Every other line is typed as literal text
+/// and `#` starts a comment. Legacy DuckyScript lines (`STRING`, `REM`,
+/// unbracketed `DELAY`/`SECRET`/keys) are rewritten once by
+/// `migratedLegacyScript` so existing presets keep working.
+enum PresetScript {
+    enum Step: Equatable { case text(String), key(String), click(MouseButton), delay(Int), secret(String) }
+    struct ParseError: LocalizedError {
+        let line: Int
+        let reason: String
+        var errorDescription: String? { "Script line \(line): \(reason)" }
+    }
+    static let modifiers: Set<String> = ["CTRL", "CONTROL", "SHIFT", "ALT", "OPTION", "OPT", "GUI", "WIN", "CMD", "COMMAND", "SUPER", "META"]
+    static let keys: Set<String> = Set("ENTER RETURN TAB ESC ESCAPE BACKSPACE BKSP SPACE SPACEBAR DELETE DEL INSERT INS HOME END PAGEUP PGUP PAGEDOWN PGDN RIGHT RIGHTARROW LEFT LEFTARROW DOWN DOWNARROW UP UPARROW CAPSLOCK CAPS PRINTSCREEN PRTSC".split(separator: " ").map(String.init)).union((1...12).map { "F\($0)" })
+
+    static func parseKeyCombo(_ combo: String) -> Step? {
+        let tokens = combo.uppercased().split(whereSeparator: { $0 == "+" || $0.isWhitespace }).map(String.init)
+        guard let first = tokens.first,
+              keys.contains(first) || modifiers.contains(first),
+              let last = tokens.last,
+              tokens.dropLast().allSatisfy({ modifiers.contains($0) }),
+              keys.contains(last) || (tokens.count > 1 && last.count == 1 && last.unicodeScalars.allSatisfy({ (65...90).contains(Int($0.value)) || (48...57).contains(Int($0.value)) })) else {
+            return nil
+        }
+        return .key(tokens.joined(separator: "+").lowercased())
+    }
+
+    static func parse(_ source: String) throws -> [Step] {
+        var steps: [Step] = []
+        for (index, raw) in source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n").enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if line.hasPrefix("#") { continue }
+            if !line.hasPrefix("[") {
+                steps.append(.text(raw))
+                continue
+            }
+            guard line.count >= 2, line.hasSuffix("]") else {
+                throw ParseError(line: index + 1, reason: "Missing closing bracket.")
+            }
+            let command = String(line.dropFirst().dropLast())
+            let parts = command.split(maxSplits: 1, whereSeparator: { $0.isWhitespace })
+            let name = parts.first.map(String.init)?.uppercased() ?? ""
+            let argument = parts.count > 1 ? String(parts[1]) : ""
+            if name == "DELAY" {
+                let value = argument.trimmingCharacters(in: .whitespaces)
+                guard !value.isEmpty, value.allSatisfy({ $0.isASCII && $0.isNumber }), let ms = Int(value), (0...60000).contains(ms) else {
+                    throw ParseError(line: index + 1, reason: "DELAY needs 0–60000 milliseconds, e.g. [DELAY 500].")
+                }
+                steps.append(.delay(ms)); continue
+            }
+            if name == "SECRET" {
+                let secretName = argument.trimmingCharacters(in: .whitespaces)
+                guard !secretName.isEmpty else {
+                    throw ParseError(line: index + 1, reason: "SECRET needs a name, e.g. [SECRET work-password].")
+                }
+                steps.append(.secret(secretName)); continue
+            }
+            if name == "CLICK" {
+                let buttonName = argument.trimmingCharacters(in: .whitespaces).lowercased()
+                let button: MouseButton
+                switch buttonName {
+                case "", "left": button = .left
+                case "right": button = .right
+                case "middle": button = .middle
+                default:
+                    throw ParseError(line: index + 1, reason: "CLICK uses LEFT, RIGHT or MIDDLE, e.g. [CLICK LEFT].")
+                }
+                steps.append(.click(button)); continue
+            }
+            if name == "REM" { continue }
+            guard let combo = parseKeyCombo(command) else {
+                throw ParseError(line: index + 1, reason: "Unknown command. Use [ENTER], [CTRL+A], [CLICK LEFT], [SECRET name] or [DELAY 500], or plain text without brackets.")
+            }
+            steps.append(combo)
+        }
+        return steps
+    }
+
+    /// Rewrites legacy DuckyScript lines into the bracket syntax. Returns nil
+    /// when the script already uses the current syntax.
+    static func migratedLegacyScript(_ source: String) -> String? {
+        var changed = false
+        var output: [String] = []
+        for raw in source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n") {
+            // Legacy commands allowed leading whitespace but kept trailing
+            // whitespace in STRING content, so only strip the leading side.
+            let stripped = String(raw.drop(while: { $0.isWhitespace }))
+            if stripped.isEmpty || stripped.hasPrefix("#") {
+                output.append(raw)
+                continue
+            }
+            let upper = stripped.uppercased()
+            if upper == "STRING" || upper.hasPrefix("STRING ") || upper.hasPrefix("STRING\t") {
+                // Legacy kept the content after the keyword and one separator,
+                // including trailing spaces.
+                let content = stripped.dropFirst(6).dropFirst()
+                output.append(String(content))
+                changed = true
+                continue
+            }
+            if upper == "REM" || upper.hasPrefix("REM ") || upper.hasPrefix("REM\t") {
+                output.append("# " + String(stripped.dropFirst(3).dropFirst()))
+                changed = true
+                continue
+            }
+            if upper == "DELAY" || upper.hasPrefix("DELAY ") || upper == "SECRET" || upper.hasPrefix("SECRET ") {
+                output.append("[" + stripped + "]")
+                changed = true
+                continue
+            }
+            if let combo = legacyKeyComboLine(stripped) {
+                output.append("[" + combo + "]")
+                changed = true
+                continue
+            }
+            output.append(raw)
+        }
+        return changed ? output.joined(separator: "\n") : nil
+    }
+
+    /// Mirrors the legacy parser's key-line decision so migration reproduces
+    /// exactly what used to run.
+    private static func legacyKeyComboLine(_ line: String) -> String? {
+        guard let step = parseKeyCombo(line), case let .key(combo) = step else { return nil }
+        return combo.uppercased()
+    }
 }
 
-@MainActor final class MacroController: ObservableObject {
-    @Published var isRecording = false; @Published var isPlaying = false; @Published var recorded: [RecordedEvent] = []
-    private var started = Date(); private var playback: Task<Void, Never>?
-    var recordingDuration: TimeInterval { isRecording ? Date().timeIntervalSince(started) : 0 }
-    func startRecording() { recorded = []; started = Date(); isRecording = true }
-    func capture(_ event: HIDEvent) {
-        guard isRecording else { return }
-        let now = Date().timeIntervalSince(started)
-        if case let .mouseMove(x, y) = event, let last = recorded.last,
-           now - last.offset <= 0.02, case let .mouseMove(lastX, lastY) = last.event {
-            recorded[recorded.count - 1] = RecordedEvent(offset: now, event: .mouseMove(Int16(clamping: Int(lastX) + Int(x)), Int16(clamping: Int(lastY) + Int(y))))
-        } else { recorded.append(RecordedEvent(offset: now, event: event)) }
-    }
-    func stopRecording() { isRecording = false }
-    func play(_ macro: HIDMacro, speed: Double, repeats: Int?, delay: Double, manager: HIDConnectionManager) {
-        stop(manager: manager); isPlaying = true
-        playback = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(delay)) } catch { self?.isPlaying = false; return }; var iteration = 0
-            guard manager.beginOrderedSession(lowLatency: macro.events.first?.event.prefersLowLatency ?? true) else { self?.isPlaying = false; return }
-            defer { manager.endOrderedSession() }
-            while !Task.isCancelled && (repeats == nil || iteration < repeats!) {
-                var previous = 0.0
-                for item in macro.events { if Task.isCancelled { break }; do { try await Task.sleep(for: .seconds(max(0, item.offset - previous) / speed)) } catch { break }; guard !Task.isCancelled else { break }; previous = item.offset; if !(await manager.send(item.event)) { self?.isPlaying = false; await manager.releaseAllPreservingError(); return } }
-                iteration += 1
-            }
-            await manager.releaseAll(); self?.isPlaying = false
-        }
-    }
-    func stop(manager: HIDConnectionManager) { playback?.cancel(); playback = nil; isPlaying = false; Task { await manager.releaseAll() } }
+@Model final class HIDPreset {
+    var script: Bool = false
+    var id: UUID = UUID()
+    var icon: String = "keyboard"
+    var name: String; var payload: String; var shortcut: Bool; var favorite: Bool; var order: Int; var enterAfter: Bool; var typingDelayMs: Int
+    init(name: String, payload: String, shortcut: Bool = false, favorite: Bool = false, order: Int = 0, enterAfter: Bool = false, typingDelayMs: Int = 0, script: Bool = false, icon: String = "keyboard") { self.script = script; self.id = UUID(); self.icon = icon; self.name = name; self.payload = payload; self.shortcut = shortcut; self.favorite = favorite; self.order = order; self.enterAfter = enterAfter; self.typingDelayMs = typingDelayMs }
 }
 
 struct HIDControlView: View {
     @Bindable var device: StoredDevice
+    var devices: [StoredDevice]
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @StateObject private var manager: HIDConnectionManager
     @StateObject private var macros = MacroController()
     @State private var section: ControlSection = .trackpad
-    enum ControlSection: String, CaseIterable, Identifiable { case trackpad = "Trackpad", keyboard = "Keyboard", presets = "Presets", macros = "Macros"; var id: Self { self } }
-    init(device: StoredDevice) { self.device = device; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    enum ControlSection: String, CaseIterable, Identifiable {
+        case trackpad = "Trackpad", keyboard = "Keyboard", presets = "Presets", macros = "Macros"
+        var id: Self { self }
+    }
+    init(device: StoredDevice, devices: [StoredDevice] = []) { self.device = device; self.devices = devices; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Circle().fill(manager.connectionSummary.hasPrefix("Active") || manager.connectionSummary.hasPrefix("Ready") ? .green : .orange).frame(width: 9, height: 9); Text(manager.connectionSummary).font(.caption).lineLimit(1); Spacer(); Picker("Connection", selection: $manager.mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }
-                .padding(.horizontal)
-            Picker("Control", selection: $section) { ForEach(ControlSection.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding(.horizontal)
-            Group { switch section { case .trackpad: TrackpadView(manager: manager); case .keyboard: LiveKeyboardView(manager: manager); case .presets: PresetsView(manager: manager); case .macros: MacrosView(manager: manager, controller: macros) } }
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+                DeviceConnectionBanner(device: device)
+                ControlTransportStatus(manager: manager)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, AppTheme.Spacing.compact)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    controlPicker.pickerStyle(.menu)
+                } else {
+                    controlPicker.pickerStyle(.segmented)
+                }
+            }
+            .padding(.horizontal, AppTheme.Spacing.spacious)
+            .padding(.top, AppTheme.Spacing.compact)
+            .padding(.bottom, AppTheme.Spacing.standard)
+            if macros.isRecording {
+                Label("Recording · use Trackpad or Keyboard, then stop in Macros", systemImage: "record.circle")
+                    .font(.caption).foregroundStyle(AppColors.error).padding(.horizontal)
+            }
+            Group {
+                switch section {
+                case .trackpad:
+                    TrackpadView(manager: manager) { switchSection(to: .keyboard) }
+                case .keyboard:
+                    LiveKeyboardView(manager: manager) { switchSection(to: .trackpad) }
+                case .presets: PresetsView(manager: manager).disabled(macros.isRecording)
+                case .macros: MacrosView(manager: manager, controller: macros)
+                }
+            }
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: section)
         }
         .navigationTitle(device.displayName).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if devices.count > 1 {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        ActiveDevicePicker(devices: devices, selection: $selectedDeviceId)
+                    } label: {
+                        Label("Switch Device", systemImage: "memorychip")
+                    }
+                    .disabled(macros.isPlaying || macros.isRecording || !macros.recorded.isEmpty)
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) { if !manager.unsupportedControlMessages.isEmpty { Text(manager.unsupportedControlMessages.joined(separator: " ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal).accessibilityIdentifier("capability-limitations") } }
-        .task { manager.onEvent = { macros.capture($0) }; await manager.connect() }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in macros.stop(manager: manager) }
-        .onDisappear { Task { macros.stop(manager: manager); await manager.disconnect() } }
+        .task {
+            manager.startTransportStatusUpdates()
+            manager.onEvent = { macros.capture($0) }
+            await manager.connect()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            macros.stopRecording(); macros.cancel()
+            Task { await macros.waitForPlayback(); await manager.releaseAll() }
+        }
+        .onDisappear {
+            manager.stopTransportStatusUpdates()
+            macros.stopRecording(); macros.cancel()
+            Task { await macros.waitForPlayback(); await manager.disconnect() }
+        }
+    }
+
+    private var controlPicker: some View {
+        Picker("Control", selection: Binding(
+            get: { section },
+            set: { switchSection(to: $0) }
+        )) {
+            ForEach(ControlSection.allCases) { item in
+                Text(item.rawValue).tag(item)
+            }
+        }
+        .disabled(macros.isPlaying)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 18)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height),
+                          abs(value.translation.width) > 36 else { return }
+                    moveSection(by: value.translation.width < 0 ? 1 : -1)
+                }
+        )
+        .accessibilityHint("Tap a section or swipe left and right to switch.")
+    }
+
+    private func moveSection(by offset: Int) {
+        let sections = ControlSection.allCases
+        guard let current = sections.firstIndex(of: section) else { return }
+        let target = min(max(current + offset, sections.startIndex), sections.index(before: sections.endIndex))
+        guard target != current else { return }
+        switchSection(to: sections[target])
+    }
+
+    private func switchSection(to target: ControlSection) {
+        guard target != section, !macros.isPlaying else { return }
+        if reduceMotion { section = target }
+        else { withAnimation(.snappy(duration: 0.22)) { section = target } }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+}
+
+private struct ControlTransportStatus: View {
+    @ObservedObject var manager: HIDConnectionManager
+
+    var body: some View {
+        HStack(spacing: AppTheme.Spacing.compact) {
+            ForEach(manager.visibleTransportStates) { status in
+                Label(status.state.title, systemImage: status.kind == .bluetooth ? "bluetooth" : "wifi")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(color(for: status.state))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(color(for: status.state).opacity(0.1), in: Capsule())
+                    .accessibilityLabel("\(status.kind.rawValue): \(status.state.title)")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func color(for state: TransportConnectionState) -> Color {
+        switch state {
+        case .ready: AppColors.connected
+        case .authenticationFailed: AppColors.error
+        case .discovering, .discovered, .connecting, .connected, .reconnecting, .authenticating:
+            AppColors.available
+        case .offline, .unavailable: AppColors.offline
+        }
     }
 }
 
 struct TrackpadView: View {
-    @ObservedObject var manager: HIDConnectionManager; @State private var dragging = false; @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
+    @ObservedObject var manager: HIDConnectionManager
+    let onKeyboardRequested: () -> Void
+    @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
+    @AppStorage("trackpadHintsSeen") private var hintsSeen = false
+    @State private var gestureState: TrackpadGestureState = .idle
+    @State private var pointerFilter = PointerMotionFilter()
+    @State private var pointerAccumulator = PointerAccumulator()
+    @State private var scrollAccumulator = FractionalAccumulator()
+    @State private var zoomAccumulator = FractionalAccumulator()
+    @State private var zoomActive = false
+    @State private var zoomControlTask: Task<Void, Never>?
+    @State private var momentumTask: Task<Void, Never>?
+    @State private var showGestureHints = false
     private let coalescer: MouseEventCoalescer
     private let scrollCoalescer: ScrollEventCoalescer
-    init(manager: HIDConnectionManager) {
+    private var canZoom: Bool { manager.supports("mouse_scroll") && manager.supports("keyboard_layout") }
+
+    init(manager: HIDConnectionManager, onKeyboardRequested: @escaping () -> Void = {}) {
         self.manager = manager
+        self.onKeyboardRequested = onKeyboardRequested
         coalescer = MouseEventCoalescer { [weak manager] x, y in await manager?.send(.mouseMove(x, y)) }
         scrollCoalescer = ScrollEventCoalescer { [weak manager] value in await manager?.send(.scroll(value)) }
     }
+
     var body: some View {
-        VStack { TrackpadInputBridge(move: { x, y in guard manager.supports("mouse_move") else { return }; Task { await coalescer.add(x: Int(x * sensitivity), y: Int(y * sensitivity)) } }, scroll: { value in guard manager.supports("mouse_scroll") else { return }; let lines = Int(-value / 5); if lines != 0 { Task { await scrollCoalescer.add(lines) } } }, click: { count in guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { for _ in 0..<count { await manager.send(.click(.left)) } } }, drag: { active in guard manager.supports("mouse_button_state") else { return }; dragging = active; Task { if active { guard manager.beginOrderedSession(lowLatency: true) else { dragging = false; return } }; let sent = await manager.send(active ? .mouseDown(.left) : .mouseUp(.left)); if !active || !sent { manager.endOrderedSession() }; if !sent { dragging = false; await manager.releaseAllPreservingError() } } }, rightClick: { guard manager.supports("mouse_click") else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); Task { await manager.send(.click(.right)) } }, cancel: { dragging = false; Task { await coalescer.cancel(); await scrollCoalescer.cancel(); manager.endOrderedSession(); await manager.releaseAll() } }).overlay { Text(dragging ? "Dragging" : "Trackpad").foregroundStyle(.secondary).allowsHitTesting(false) }.padding()
-            HStack { Button("Left") { Task { await manager.send(.click(.left)) } }; Button("Middle") { Task { await manager.send(.click(.middle)) } }; Button("Right") { Task { await manager.send(.click(.right)) } } }.buttonStyle(.borderedProminent).disabled(!manager.supports("mouse_click"))
-            HStack { Text("Sensitivity"); Slider(value: $sensitivity, in: 0.4...2.5) }.padding()
-        }.onChange(of: manager.lastError) { _, error in if error != nil && dragging { dragging = false; Task { await coalescer.cancel(); await manager.releaseAll() } } }
+        VStack(spacing: AppTheme.Spacing.compact) {
+            sensitivityControl
+            trackpad
+            if !hintsSeen {
+                Label("Tap the ? on the trackpad for gesture help.", systemImage: "hand.tap")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onDisappear {
+            stopMomentum()
+            recoverFromError()
+        }
+        .onChange(of: manager.lastError) { _, error in if error != nil { recoverFromError() } }
     }
-}
 
-struct LiveKeyboardView: View {
-    @ObservedObject var manager: HIDConnectionManager; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
-    @State private var modifiers: UInt8 = 0
-    let keys = ["esc", "tab", "enter", "backspace", "delete", "home", "end", "pageup", "pagedown", "left", "up", "down", "right"]
-    private var layout: KeyboardLayout { KeyboardLayout(rawValue: layoutName) ?? .german }
-    var body: some View { ScrollView { VStack(spacing: 12) { Picker("Layout", selection: $layoutName) { ForEach(KeyboardLayout.allCases) { Text($0.rawValue).tag($0.rawValue) } }.pickerStyle(.segmented).disabled(!manager.supports("keyboard_layout")); KeyboardInputBridge { event in Task { switch event { case let .insert(text):
-                    if modifiers == 0 { await manager.sendText(text, layout: layout) }
-                    else if let strokes = try? layout.strokes(for: text), let first = strokes.first { let oneShot = modifiers; modifiers = 0; guard await manager.send(.keyboardReport(modifiers: first.modifiers | oneShot, usage: first.usage)) else { return }; for stroke in strokes.dropFirst() { guard await manager.send(.keyboardReport(modifiers: stroke.modifiers, usage: stroke.usage)) else { return } } }
-                case .deleteBackward: await manager.send(.key("backspace")) } } }.disabled(!manager.supports("keyboard_layout")).frame(minHeight: 90).padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12));
-            HStack { modifierButton("Ctrl", 0x01); modifierButton("Shift", 0x02); modifierButton("Alt", 0x04); modifierButton("Win/Cmd", 0x08) }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 82))]) { ForEach(keys, id: \.self) { key in Button(key.capitalized) { UIImpactFeedbackGenerator(style: .light).impactOccurred(); let prefix = modifierNames; modifiers = 0; Task { await manager.send(prefix.isEmpty ? .key(key) : .keyCombo((prefix + [key]).joined(separator: "+"))) } }.buttonStyle(.bordered) } }; Text("Shortcuts").font(.headline); HStack { ForEach(["ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+shift+z", "ctrl+a", "ctrl+f", "alt+tab", "ctrl+shift+t", "cmd+space"], id: \.self) { combo in Button(combo) { Task { await manager.send(.keyCombo(combo)) } } }.buttonStyle(.borderedProminent) }.padding() } }
+    private var sensitivityControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Pointer Sensitivity")
+                Spacer()
+                Text("\(Int((sensitivity * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: AppTheme.Spacing.compact) {
+                Image(systemName: "tortoise")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Slider(value: $sensitivity, in: 0.4...2.5, step: 0.1)
+                    .accessibilityLabel("Pointer sensitivity")
+                    .accessibilityValue("\(Int((sensitivity * 100).rounded())) percent")
+                Image(systemName: "hare")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal)
     }
-    private var modifierNames: [String] { let values: [(UInt8, String)] = [(0x01, "ctrl"), (0x02, "shift"), (0x04, "alt"), (0x08, "cmd")]; return values.compactMap { modifiers & $0.0 == 0 ? nil : $0.1 } }
-    private func modifierButton(_ title: String, _ bit: UInt8) -> some View { Button(title) { modifiers ^= bit }.buttonStyle(.borderedProminent).tint(modifiers & bit == 0 ? .gray : .accentColor).accessibilityValue(modifiers & bit == 0 ? "Off" : "One shot") }
-}
 
-struct PresetsView: View {
-    @ObservedObject var manager: HIDConnectionManager; @Environment(\.modelContext) private var context; @Query(sort: \HIDPreset.order) private var presets: [HIDPreset]; @State private var name = ""; @State private var payload = ""; @State private var shortcut = false; @State private var favorite = false; @State private var enterAfter = false; @State private var typingDelayMs = 0; @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
-    var body: some View { NavigationStack { List { Section("New preset") { TextField("Name", text: $name); TextField("Text or shortcut", text: $payload, axis: .vertical); Picker("Type", selection: $shortcut) { Text("Text").tag(false); Text("Keyboard Shortcut").tag(true) }; Toggle("Favorite", isOn: $favorite); Toggle("Enter after", isOn: $enterAfter).disabled(shortcut); Picker("Typing speed", selection: $typingDelayMs) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(shortcut); Button("Add Preset") { context.insert(HIDPreset(name: name.isEmpty ? "Preset" : name, payload: payload, shortcut: shortcut, favorite: favorite, order: presets.count, enterAfter: enterAfter, typingDelayMs: typingDelayMs)); name = ""; payload = ""; shortcut = false; favorite = false; enterAfter = false; typingDelayMs = 0 } }; Section("Presets") { ForEach(presets) { preset in VStack(alignment: .leading, spacing: 8) { HStack { Button { preset.favorite.toggle() } label: { Image(systemName: preset.favorite ? "star.fill" : "star") }.buttonStyle(.borderless); TextField("Name", text: Binding(get: { preset.name }, set: { preset.name = $0 })); Spacer(); Button("Run") { run(preset) }.buttonStyle(.borderedProminent) }; TextField("Content", text: Binding(get: { preset.payload }, set: { preset.payload = $0 }), axis: .vertical).font(.caption); Toggle("Shortcut", isOn: Binding(get: { preset.shortcut }, set: { preset.shortcut = $0 })); Toggle("Enter after", isOn: Binding(get: { preset.enterAfter }, set: { preset.enterAfter = $0 })); Picker("Typing speed", selection: Binding(get: { preset.typingDelayMs }, set: { preset.typingDelayMs = $0 })) { ForEach([0,10,25,50,100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) } }.disabled(preset.shortcut) }.buttonStyle(.borderless).swipeActions { Button(role: .destructive) { context.delete(preset) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDPreset(name: preset.name + " Copy", payload: preset.payload, shortcut: preset.shortcut, favorite: preset.favorite, order: presets.count, enterAfter: preset.enterAfter, typingDelayMs: preset.typingDelayMs)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } }.onMove { source, destination in var ordered = presets; ordered.move(fromOffsets: source, toOffset: destination); for (index, item) in ordered.enumerated() { item.order = index } } } }.toolbar { EditButton() } } }
-    private func run(_ preset: HIDPreset) { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); Task { let sent: Bool; if preset.shortcut { sent = await manager.send(.keyCombo(preset.payload)) } else { sent = await manager.sendText(preset.payload, layout: KeyboardLayout(rawValue: layoutName) ?? .german, delayMilliseconds: preset.typingDelayMs) }; if sent && preset.enterAfter { await manager.send(.key("enter")) } } }
-}
+    private var trackpad: some View {
+        TrackpadInputBridge(
+            move: { x, y in
+                guard manager.supports("mouse_move") else { return }
+                stopMomentum()
+                if gestureState != .moving && gestureState != .dragging { gestureState = .moving }
+                let filtered = pointerFilter.update(
+                    dx: Double(x), dy: Double(y), sensitivity: sensitivity
+                )
+                let scaled = pointerAccumulator.add(dx: filtered.x, dy: filtered.y)
+                guard scaled.x != 0 || scaled.y != 0 else { return }
+                Task { await coalescer.add(x: scaled.x, y: scaled.y) }
+            },
+            moveEnded: {
+                pointerFilter.reset()
+                if gestureState == .moving { gestureState = .idle }
+            },
+            scroll: { value in
+                guard manager.supports("mouse_scroll") else { return }
+                stopMomentum()
+                if gestureState != .dragging { gestureState = .scrolling }
+                let lines = scrollAccumulator.add(TrackpadGestures.scrollContribution(panDeltaY: value, natural: true))
+                guard lines != 0 else { return }
+                Task { await scrollCoalescer.add(lines) }
+            },
+            scrollEnded: { velocity in
+                let residue = scrollAccumulator.flush()
+                if residue != 0 { Task { await scrollCoalescer.add(residue) } }
+                if gestureState == .scrolling { gestureState = .idle }
+                startMomentum(velocityY: velocity)
+            },
+            click: { count in
+                guard manager.supports("mouse_click") else { return }
+                stopMomentum()
+                gestureState = .clicking
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task {
+                    for _ in 0..<count { await manager.send(.click(.left)) }
+                    if gestureState == .clicking { gestureState = .idle }
+                }
+            },
+            drag: { active in
+                guard manager.supports("mouse_button_state") else { return }
+                stopMomentum()
+                if active {
+                    guard manager.beginOrderedSession(lowLatency: true) else {
+                        KeyboardHaptics.error()
+                        return
+                    }
+                    gestureState = .dragging
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task {
+                        guard await manager.send(.mouseDown(.left)) else {
+                            gestureState = .idle
+                            manager.endOrderedSession()
+                            KeyboardHaptics.error()
+                            await manager.releaseAllPreservingError()
+                            return
+                        }
+                    }
+                } else {
+                    if gestureState == .dragging { gestureState = .idle }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task {
+                        // Deliver queued pointer movement before the button
+                        // lifts so the drop lands where the finger stopped.
+                        await coalescer.flush()
+                        let sent = await manager.send(.mouseUp(.left))
+                        manager.endOrderedSession()
+                        if !sent { await manager.releaseAllPreservingError() }
+                    }
+                }
+            },
+            rightClick: {
+                guard manager.supports("mouse_click") else { return }
+                stopMomentum()
+                gestureState = .clicking
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task {
+                    await manager.send(.click(.right))
+                    if gestureState == .clicking { gestureState = .idle }
+                }
+            },
+            middleClick: {
+                guard manager.supports("mouse_click") else { return }
+                stopMomentum()
+                gestureState = .clicking
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task {
+                    await manager.send(.click(.middle))
+                    if gestureState == .clicking { gestureState = .idle }
+                }
+            },
+            zoom: { change in
+                guard canZoom else { return }
+                stopMomentum()
+                hintsSeen = true
+                if !zoomActive {
+                    guard manager.beginOrderedSession(lowLatency: true) else {
+                        KeyboardHaptics.error()
+                        return
+                    }
+                    zoomActive = true
+                    zoomAccumulator.reset()
+                    gestureState = .zooming
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    // The firmware holds modifier-only reports, so this Ctrl
+                    // press must be delivered before the first wheel line.
+                    zoomControlTask = Task {
+                        guard await manager.send(.keyboardReport(modifiers: HIDModifiers.ctrl, usage: 0)) else { return }
+                    }
+                }
+                let lines = zoomAccumulator.add(TrackpadGestures.zoomContribution(scaleChange: change))
+                guard lines != 0 else { return }
+                let holdCtrl = zoomControlTask
+                Task {
+                    await holdCtrl?.value
+                    await scrollCoalescer.add(lines)
+                }
+            },
+            zoomEnded: { cancelled in
+                guard zoomActive else { return }
+                zoomActive = false
+                zoomControlTask = nil
+                let residue = zoomAccumulator.flush()
+                if gestureState == .zooming { gestureState = .idle }
+                Task {
+                    // Flush every remaining zoom line first so the Ctrl key
+                    // can never be released while wheel lines are in flight.
+                    if residue != 0 { await scrollCoalescer.add(residue) }
+                    await scrollCoalescer.flush()
+                    await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0))
+                    manager.endOrderedSession()
+                    if cancelled { await manager.releaseAll() }
+                }
+            },
+            sectionSwipe: { translationX in
+                guard translationX <= -CGFloat(TwoFingerArbiter.sectionSwipeLockDistance) else { return }
+                stopMomentum()
+                onKeyboardRequested()
+            },
+            cancel: {
+                stopMomentum()
+                let wasZooming = zoomActive
+                zoomActive = false
+                zoomControlTask = nil
+                gestureState = .idle
+                pointerFilter.reset()
+                pointerAccumulator.reset()
+                scrollAccumulator.reset()
+                zoomAccumulator.reset()
+                Task {
+                    if wasZooming { await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0)) }
+                    await coalescer.cancel()
+                    await scrollCoalescer.cancel()
+                    manager.endOrderedSession()
+                    await manager.releaseAll()
+                }
+            }
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Remote trackpad")
+        .accessibilityValue(gestureState.overlayTitle)
+        .accessibilityHint("Swipe left with two fingers to open Keyboard.")
+        .overlay {
+            Text(gestureState.overlayTitle)
+                .foregroundStyle(.secondary)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .topTrailing) { hintsButton }
+        .popover(isPresented: $showGestureHints) { gestureHints }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
 
-struct MacrosView: View {
-    @ObservedObject var manager: HIDConnectionManager; @ObservedObject var controller: MacroController; @Environment(\.modelContext) private var context; @Query(sort: \HIDMacro.createdAt, order: .reverse) private var saved: [HIDMacro]; @State private var speed = 1.0; @State private var repeatCount = 1; @State private var delay = 0; @State private var showSave = false; @State private var macroName = ""; @State private var macroDescription = ""
-    var body: some View { VStack { if controller.isPlaying { Button("STOP", role: .destructive) { UINotificationFeedbackGenerator().notificationOccurred(.warning); controller.stop(manager: manager) }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large) }; HStack { Button(controller.isRecording ? "Stop & Save" : "Record") { if controller.isRecording { controller.stopRecording(); macroName = "Macro \(saved.count + 1)"; showSave = true; UIImpactFeedbackGenerator(style: .medium).impactOccurred() } else { controller.startRecording(); UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }.buttonStyle(.borderedProminent); if controller.isRecording { Button("Cancel", role: .cancel) { controller.stopRecording(); controller.recorded = [] } }; TimelineView(.periodic(from: .now, by: 1)) { _ in Text(recordingStatus) } }; Form { Picker("Speed", selection: $speed) { ForEach([0.5, 1, 1.5, 2], id: \.self) { Text("\($0, specifier: "%g")×").tag($0) } }; Picker("Repeat", selection: $repeatCount) { ForEach([1, 2, 5, 10, 0], id: \.self) { Text($0 == 0 ? "Infinite" : "\($0)×").tag($0) } }; Picker("Start delay", selection: $delay) { ForEach([0, 3, 5, 10], id: \.self) { Text("\($0) s").tag($0) } }; Section("Saved") { ForEach(saved) { macro in HStack { VStack(alignment: .leading) { TextField("Name", text: Binding(get: { macro.name }, set: { macro.name = $0 })); Text("\(macro.events.count) events").font(.caption) }; Spacer(); Button("Play") { UIImpactFeedbackGenerator(style: .medium).impactOccurred(); controller.play(macro, speed: speed, repeats: repeatCount == 0 ? nil : repeatCount, delay: Double(delay), manager: manager) } }.swipeActions { Button(role: .destructive) { context.delete(macro) } label: { Label("Delete", systemImage: "trash") }; Button { context.insert(HIDMacro(name: macro.name + " Copy", description: macro.macroDescription, events: macro.events)) } label: { Label("Duplicate", systemImage: "plus.square.on.square") } } } } } } .alert("Save Macro", isPresented: $showSave) { TextField("Name", text: $macroName); TextField("Description (optional)", text: $macroDescription); Button("Save") { context.insert(HIDMacro(name: macroName.isEmpty ? "Macro" : macroName, description: macroDescription, events: controller.recorded)); controller.recorded = [] }; Button("Cancel", role: .cancel) { controller.recorded = [] } } }
-    private var recordingStatus: String { guard controller.isRecording else { return "\(controller.recorded.count) events" }; let seconds = Int(controller.recordingDuration); return String(format: "🔴 Recording · %02d:%02d · %d events", seconds / 60, seconds % 60, controller.recorded.count) }
+    private var hintsButton: some View {
+        Button {
+            showGestureHints = true
+            hintsSeen = true
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(8)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .accessibilityLabel("Trackpad gesture help")
+    }
+
+    private var gestureHints: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+            Text("Trackpad Gestures").font(.headline)
+            Label("One finger moves the pointer.", systemImage: "hand.point.up.left")
+            Label("Tap or double-tap to click.", systemImage: "hand.tap")
+            Label("Two fingers scroll.", systemImage: "arrow.up.arrow.down")
+            Label("Swipe left with two fingers to open Keyboard.", systemImage: "arrow.left")
+            Label("Pinch with two fingers to zoom.", systemImage: "arrow.up.left.and.arrow.down.right")
+            Label("Hold, then move to drag.", systemImage: "hand.press")
+            Label("Hold and release without moving to right-click.", systemImage: "cursorarrow.rays")
+            Label("Tap with two fingers to right-click, with three for a middle click.", systemImage: "hand.tap.fill")
+            if !canZoom {
+                Label("Zoom needs mouse_scroll and keyboard_layout firmware support.", systemImage: "info.circle")
+            }
+        }
+        .font(.subheadline)
+        .padding()
+        .frame(maxWidth: 320, alignment: .leading)
+        .presentationCompactAdaptation(.popover)
+    }
+
+    private func startMomentum(velocityY: CGFloat) {
+        var generator = MomentumGenerator(velocity: velocityY, natural: true)
+        guard !generator.isFinished else { return }
+        let coalescer = scrollCoalescer
+        momentumTask?.cancel()
+        momentumTask = Task {
+            while !Task.isCancelled, !generator.isFinished {
+                let lines = generator.nextLine()
+                if lines != 0 { await coalescer.add(lines) }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    private func stopMomentum() {
+        momentumTask?.cancel()
+        momentumTask = nil
+    }
+
+    private func recoverFromError() {
+        stopMomentum()
+        let wasZooming = zoomActive
+        zoomActive = false
+        zoomControlTask = nil
+        gestureState = .idle
+        pointerFilter.reset()
+        pointerAccumulator.reset()
+        scrollAccumulator.reset()
+        zoomAccumulator.reset()
+        Task {
+            if wasZooming { await manager.send(.keyboardReport(modifiers: HIDModifiers.none, usage: 0)) }
+            await coalescer.cancel()
+            await scrollCoalescer.cancel()
+            manager.endOrderedSession()
+            await manager.releaseAll()
+        }
+    }
 }

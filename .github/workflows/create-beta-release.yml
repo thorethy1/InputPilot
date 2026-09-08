@@ -29,8 +29,48 @@ jobs:
       - name: Checkout latest beta
         uses: actions/checkout@v4
         with:
-          ref: beta
+          ref: refs/heads/beta
           fetch-depth: 0
+
+      - name: Require green CI on beta head
+        id: push_ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --commit "$head_sha" --event push --limit 20 \
+            --json databaseId,status,conclusion,url)"
+          latest="$(jq -r 'if length > 0 then .[0] else empty end' <<<"$runs")"
+          if [[ -z "$latest" ]]; then
+            echo "::error::No push-triggered CI run found for beta head $head_sha. Push the versioned commit and let CI run first."
+            exit 1
+          fi
+          run_id="$(jq -r '.databaseId' <<<"$latest")"
+          status="$(jq -r '.status' <<<"$latest")"
+          conclusion="$(jq -r '.conclusion // "none"' <<<"$latest")"
+          url="$(jq -r '.url' <<<"$latest")"
+          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+            echo "::error::Latest CI run on beta ($head_sha) is status=$status conclusion=$conclusion: $url"
+            echo "Fix or wait for CI to be green, then retry."
+            exit 1
+          fi
+
+          artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100")"
+          if ! jq -e \
+            --arg firmware "InputPilot-Firmware-$head_sha" \
+            --arg ios "InputPilot-unsigned-$head_sha" '
+              [.artifacts[] | select(.expired == false) | .name] as $names |
+              ($names | index($firmware)) != null and
+              ($names | index($ios)) != null
+            ' <<<"$artifacts" >/dev/null; then
+            echo "::error::Green push CI run $run_id does not retain both release artifacts for $head_sha."
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "Latest push CI run on beta head $head_sha is green and has both release artifacts: $url"
 
       - name: Set beta version
         id: version
@@ -39,20 +79,23 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          git fetch origin beta --tags
-          git checkout -B beta origin/beta
           version="$RELEASE_VERSION"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
             echo "::error::Beta version must match MAJOR.MINOR.PATCH-beta.NUMBER; got '$version'."
             exit 1
           fi
           previous="$(python3 versioning.py show-release)"
-          python3 versioning.py set-release "$version" >/dev/null
           tag="v$version"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "::error::Tag $tag already exists. Increase the beta number."
             exit 1
           fi
+          original_sha="$(git rev-parse HEAD)"
+          if [[ "$original_sha" != '${{ steps.push_ci.outputs.sha }}' ]]; then
+            echo "::error::The validated push CI commit changed unexpectedly."
+            exit 1
+          fi
+          python3 versioning.py set-release "$version" >/dev/null
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add Version.xcconfig
@@ -60,43 +103,74 @@ jobs:
             git commit -m "Release InputPilot $version"
           fi
           sha="$(git rev-parse HEAD)"
-          branch="beta-release/$tag-$GITHUB_RUN_ID"
-          git push origin "HEAD:refs/heads/$branch"
+          if [[ "$sha" != "$original_sha" ]]; then
+            git push origin "HEAD:refs/heads/beta"
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" \
+              --ref beta -f release_only=true
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Start CI for beta release commit
-        shell: bash
-        run: >-
-          gh workflow run ci.yml
-          --ref '${{ steps.version.outputs.branch }}'
-          --repo "$GITHUB_REPOSITORY"
-
-      - name: Require successful CI
+      - name: Require versioned release artifacts
         id: ci
         shell: bash
         run: |
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
-          run_id=""
-          for attempt in $(seq 1 60); do
-            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-              --commit "$sha" --event workflow_dispatch --limit 10 \
-              --json databaseId,status,conclusion,url)"
-            run_id="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
-            if [[ -n "$run_id" ]]; then break; fi
-            echo "Waiting for CI run on $sha (attempt $attempt/60)..."
-            sleep 5
-          done
-          if [[ -z "$run_id" ]]; then
-            echo "::error::CI did not start for $sha."
-            exit 1
+
+          has_required_artifacts() {
+            local candidate="$1"
+            local artifacts
+            artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100")"
+            jq -e \
+              --arg firmware "InputPilot-Firmware-$sha" \
+              --arg ios "InputPilot-unsigned-$sha" '
+                [.artifacts[] | select(.expired == false) | .name] as $names |
+                ($names | index($firmware)) != null and
+                ($names | index($ios)) != null
+              ' <<<"$artifacts" >/dev/null
+          }
+
+          if [[ '${{ steps.version.outputs.needs_build }}' == 'false' ]]; then
+            run_id='${{ steps.push_ci.outputs.run_id }}'
+            has_required_artifacts "$run_id"
+          else
+            run_id=""
+            for attempt in $(seq 1 120); do
+              runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+                --commit "$sha" --event workflow_dispatch --limit 10 \
+                --json databaseId,status,conclusion,url)"
+              candidate="$(jq -r '.[0].databaseId // empty' <<<"$runs")"
+              if [[ -n "$candidate" ]]; then
+                status="$(jq -r '.[0].status' <<<"$runs")"
+                conclusion="$(jq -r '.[0].conclusion // "none"' <<<"$runs")"
+                if [[ "$status" == 'completed' ]]; then
+                  if [[ "$conclusion" != 'success' ]] || ! has_required_artifacts "$candidate"; then
+                    echo "::error::Release-only build $candidate failed or did not produce both artifacts."
+                    exit 1
+                  fi
+                  run_id="$candidate"
+                  break
+                fi
+                echo "Waiting for release-only build $candidate ($status, attempt $attempt/120)..."
+              else
+                echo "Waiting for release-only build to appear (attempt $attempt/120)..."
+              fi
+              sleep 5
+            done
+            if [[ -z "$run_id" ]]; then
+              echo "::error::Release-only build did not complete for $sha."
+              exit 1
+            fi
           fi
+
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          echo "Using versioned firmware and IPA from run $run_id."
 
       - name: Tag and publish prerelease
         shell: bash
@@ -104,7 +178,11 @@ jobs:
           set -euo pipefail
           tag='${{ steps.version.outputs.tag }}'
           sha='${{ steps.version.outputs.sha }}'
-          git push origin "$sha:refs/heads/beta"
+          beta_head="$(git ls-remote origin refs/heads/beta | cut -f1)"
+          if [[ "$beta_head" != "$sha" ]]; then
+            echo "::error::beta advanced from validated commit $sha to $beta_head; rerun after its push CI is green."
+            exit 1
+          fi
           git tag -a "$tag" "$sha" -m "InputPilot ${{ steps.version.outputs.version }}"
           git push origin "$tag"
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
@@ -121,7 +199,7 @@ jobs:
           set -euo pipefail
           sha='${{ steps.version.outputs.sha }}'
           gh workflow run release-assets.yml --repo "$GITHUB_REPOSITORY" \
-            --ref beta -f tag='${{ steps.version.outputs.tag }}'
+            --ref '${{ steps.version.outputs.tag }}' -f tag='${{ steps.version.outputs.tag }}'
           run_id=""
           for attempt in $(seq 1 60); do
             runs="$(gh run list --repo "$GITHUB_REPOSITORY" \
@@ -141,13 +219,8 @@ jobs:
           {
             echo "## InputPilot ${{ steps.version.outputs.version }}"
             echo
-            echo "Previous beta identity: ${{ steps.version.outputs.previous }}"
-            echo "CI run: ${{ steps.ci.outputs.run_id }}"
+            echo "Green push CI run: ${{ steps.push_ci.outputs.run_id }}"
+            echo "Release artifact build: ${{ steps.ci.outputs.run_id }}"
             echo "Release asset run: $run_id"
             echo "The versioned prerelease, OTA assets and rolling AltStore beta feed are complete."
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Remove temporary beta release branch
-        if: always() && steps.version.outputs.branch != ''
-        shell: bash
-        run: git push origin --delete '${{ steps.version.outputs.branch }}' || true

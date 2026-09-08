@@ -5,7 +5,9 @@
 #include "OTAProtocol.h"
 class BLEOTA {
  public:
-  bool begin(NimBLEServer *server); void loop(); void disconnected();
+  bool begin(NimBLEServer *server); void loop();
+  // Called from the firmware loop before processing a new control session.
+  void disconnected();
   bool active() const; OTAState state() const; static bool schemaAvailable();
  private:
   class ControlCallbacks; class DataCallbacks;

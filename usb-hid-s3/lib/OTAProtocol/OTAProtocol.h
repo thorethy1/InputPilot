@@ -14,6 +14,7 @@ struct OTAStartRequest {
   std::string sha256;
   bool windowed = false;
   bool binary = false;
+  bool allowDowngrade = false;
 };
 
 class OTAProtocol {
@@ -21,6 +22,8 @@ class OTAProtocol {
   static bool parseStart(const std::string &line, OTAStartRequest &request,
                          std::string &error);
   static bool validSha256(const std::string &value);
+  static bool isDowngrade(const std::string &current,
+                          const std::string &target);
   static bool acceptsOffset(uint32_t expected, uint32_t offset, size_t payload,
                             uint32_t total);
   static bool shouldAcknowledge(uint32_t received, uint32_t lastAck,

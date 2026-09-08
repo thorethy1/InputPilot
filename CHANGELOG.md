@@ -2,6 +2,118 @@
 
 ## Unreleased
 
+- Execute complete presets autonomously on the ESP32 after an acknowledged, resumable and checksummed BLE/Wi-Fi upload. Long delays continue when iOS or Shortcuts exits, the app restores device-side run status, and Stop Preset aborts on the firmware and releases all input.
+- Finalize 0.9.0 with a single Control connection summary plus live Bluetooth/Wi-Fi badges, Device Details routing into the shared Control tab, Settings-only transport selection, pointer sensitivity above the trackpad, and the established Devices and Control tab iconography.
+- Persist app diagnostics across relaunches and crashes and retain the firmware log tail in checksum-protected RTC memory across software, panic and watchdog resets.
+- Refine Keyboard with calmer word-flight feedback, no TX indicator and Liquid Glass action controls; switch Presets to a two-column rectangular Apple Shortcuts-style layout and move Macro search directly above recording.
+- Add Apple Shortcuts actions for saved macros (with speed/repeat/start-delay), mouse clicks, scrolling and emergency release-all, and expose status, send-text, click and release-all as suggested app shortcut tiles.
+- Reject firmware downgrades in both the iOS preflight and the authenticated firmware OTA receiver. Developer Mode exposes confirmed downgrade and published SHA-256 overrides while the device continues to verify the complete transfer hash and embedded image compatibility metadata.
+- Polish Firmware with an installed-to-available version summary, release notes, clearer download/validation state and actionable checksum errors. Add animated, haptic Control section changes with a swipe gesture on the native picker, guaranteed input release when leaving Trackpad or Keyboard, and a smoothed speed-sensitive pointer acceleration curve.
+- Add Apple Shortcuts actions to switch the active device and start or stop the firmware-persisted periodic mouse movement schedule through the shared authenticated device services.
+
+- Refresh native active-device and transport pickers immediately when the accent changes, including edits to a custom color, while preserving the selected device, transport and navigation.
+
+- Overhaul the macro library with search, editable names/descriptions, duplicate and confirmed delete, event editing/reordering, playback progress, repeat estimates and explicit completion/cancellation/failure states. Preserve legacy recordings, add Keychain Secret references and keep duplicate execution blocked until held-input cleanup finishes.
+- Open Control directly for the active device, add device switching in its toolbar, show recording status across control sections and use an accessible section menu at larger text sizes. Give Appearance its own Settings page, remove Standard/Rounded styling, and group device/firmware details into expandable sections.
+- Add Device Details → Disable AP with a firmware-persisted preference: suppress the fallback hotspot while retaining saved Wi-Fi station connections, retry behavior and Bluetooth. Feature detection works without enlarging BLE discovery metadata; older firmware prompts for an update.
+- Prevent preset Secrets from entering macro recordings, and ensure rapid release-all requests still release input held since the previous request.
+
+- Move BLE disconnect cleanup, HID release, logging and advertising recovery out of the NimBLE host callback into the firmware loop to reduce stack pressure when the phone disconnects. Clear the old secure session and OTA queues before processing reconnect traffic, and decode NimBLE HCI disconnect reasons in diagnostics.
+
+- Rework the Apple Shortcuts integration for real hardware use: App Intents share one long-lived connection per device and serialize connection/upload handoffs, while the device rejects overlapping preset runs; a run keeps waiting while the device is still starting up (radio powering on, BLE scan, Wi-Fi handshake) instead of failing the moment every transport reports offline; the Bluetooth transport persists its CoreBluetooth peripheral identifier so Shortcuts reconnect from a cold app start without relying on background scanning; the app declares the bluetooth-central background mode so Shortcuts may use Bluetooth while InputPilot is backgrounded; and the shared store opens with an in-memory fallback instead of crashing when a background launch cannot open the database.
+- Make preset output reliable end to end: Wi-Fi keystrokes are now paced so the device's 32-event HID queue cannot overflow mid-sequence, and the app lets the queue drain before the final release-all — the firmware clears queued events on release-all, which used to swallow still-pending keys such as the Enter after a text preset.
+- Simplify the preset script language to what the editor always showed: a bracketed line is a command — `[ENTER]`, `[CTRL+A]`, `[SECRET name]` or `[DELAY 500]` — every other line is typed literally, and `#` starts a comment. Legacy DuckyScript lines (`STRING`, `REM`, unbracketed `DELAY`, `SECRET` and bare key lines) are migrated automatically on first launch, the editor footer, placeholder and secret picker speak the bracket syntax, and secret renaming still rewrites both styles.
+- Fix the Presets grid on device: each tile now anchors its square size on a content-independent view so LazyVGrid no longer estimates unstable row heights — tiles no longer overlap and every preset renders, regardless of its type badge.
+
+- Harden the 0.9 automation work after code review: App Intents now give the connection a bounded window to finish (new `waitUntilReady` on the connection manager) instead of failing the moment BLE/Wi-Fi are still connecting, so Shortcuts run presets and report connection state reliably on a cold or backgrounded app; renaming a secret now lists the presets that reference it and rewrites their `SECRET` lines automatically; creating a duplicate secret is rejected by the store itself while an explicit replace flow updates the value in place; missing-secret errors name the secret instead of an internal UUID; the preset editor validates key combos before saving and gives the icon picker readable labels; and App Shortcuts no longer dispatch their own CI — releases require the latest branch CI run to be green.
+- Make InputPilot automatable from Apple Shortcuts and Siri with in-process App Intents that reuse the shared executor and transports: Run Preset (with optional device override), Connect Device, Check Device Status, Send Keyboard Shortcut and Send Text, plus registered Siri phrases and app shortcut tiles; missing devices and unreachable hardware answer with honest, actionable failures and there is deliberately no way to read a secret's value through Shortcuts.
+- Rebuild the Presets tab in Apple Shortcuts style: presets live on a tappable grid of colorful rounded tiles with a pastel tint derived from the preset name, white icon, type badge and Liquid Glass surfaces on iOS 26 with a clean fallback on older systems; tapping runs a preset with Ready → Running → Completed (checkmark, success haptic) → Failed (error haptic plus a tappable banner) feedback, only one preset runs at a time, and a context menu covers Run, Edit, Duplicate, Favorite and Delete. The new editor sheet shares create and edit flows with an SF Symbol icon picker, Text/Key Combo/Script type picker, live script validation with line numbers, a secret picker that inserts SECRET lines (with a link to create secrets), favorites, enter-after and typing-speed options; reorder mode and favorites-first/name sorting round out management, and existing presets keep running exactly as before through the shared executor.
+- Add a Secrets manager in Settings: create secrets with a name, Keychain-stored value and optional note, rename metadata, replace values without showing the old one, temporarily reveal a value behind an eye toggle that auto-hides after 20 s and is privacy-sensitive so app switcher and screenshots stay clean, and delete with a confirmation that lists every preset referencing the secret by name so breaking a preset is always a deliberate choice.
+- Add Keychain-backed secrets for presets: secret values live only in the iOS Keychain while SwiftData keeps name metadata, `SECRET <name>` lines in preset scripts type the current value at run time through the shared executor with the preset's typing speed, a missing or renamed secret fails the run clearly as "Secret 'x' is missing" after releasing held keys, and secret values are validated against the host keyboard layout and never appear in logs, diagnostics or error messages.
+- Extract preset execution into a shared, testable ActionExecutor service: one execution path validates text and secrets against the host keyboard layout, compiles HID reports and delays, and hands the verified program to the device; the Presets tab Run button reuses it with its duplicate-run guard, enter-after and error-banner behavior.
+- Make pinch-to-zoom actually reach the host computer: the firmware now keeps
+  modifier-only `report <m> 0` commands held (and clears them on `report 0 0`
+  and release-all) so Ctrl stays pressed while the zoom wheel lines arrive, and
+  the app queues the first wheel lines only after the Ctrl hold is confirmed
+  while also showing an error haptic when a drag or zoom can no longer start.
+- Polish the keyboard tab after review: a stopped transmission now explains why
+  it stopped and keeps the unsent text for retry, the sent confirmation can no
+  longer be hidden early by a previous transmission, trackpad taps and holds
+  surface the Clicking gesture state, and all keyboard controls meet the 44 pt
+  interaction target.
+- Rebuild the keyboard tab as a native, Termius-inspired control surface: a visible
+  text composer that streams typed characters to the device in real time while a
+  word-by-word flight animation lets each typed word rest briefly before it visibly
+  travels to the device, a clipboard paste flow that pauses in review mode until
+  Send is tapped, three-state modifier chips (off, latched one-shot, locked) with
+  distinct haptics, compact special-key and arrow clusters, an icon-card quick
+  shortcuts grid including a Win+L Lock Screen shortcut, Liquid Glass key and card
+  surfaces on iOS 26 with a clean fallback on older systems, an always-visible
+  Release All safety action, explicit keyboard dismissal and clear empty-clipboard
+  feedback.
+- Make trackpad right-click reliable by keeping taps and double taps mutually
+  exclusive with the long press, so a press-and-hold can no longer be followed
+  by a stray tap click that immediately closes the context menu it opened.
+- Simplify the trackpad surface: remove the on-screen left/middle/right click
+  buttons and the natural/momentum scrolling toggles, keep natural scrolling
+  with momentum always on, and let the trackpad grow into the freed space.
+- Rework the trackpad gesture engine so zoom, drag and every pointer action
+  work reliably through gestures: a custom two-finger recognizer arbitrates
+  scroll versus pinch from raw touch geometry (centroid translation against
+  finger-distance change) and locks the winner for the whole gesture, so
+  pinching always zooms and never scrolls; zoom wheel lines run through the
+  scroll coalescer and always flush before the Ctrl key releases for smooth
+  pinch zoom with strict ordering; drag now engages from movement after any
+  press-and-hold instead of requiring an exact tap-first sequence; and
+  two-finger tap right-clicks plus three-finger tap middle-clicks make every
+  mouse action reachable without the on-screen buttons.
+- Update the rolling AltStore channel feeds automatically on every release:
+  beta releases refresh the fixed beta feed asset with merged version
+  history, and stable releases carry a history-merged manifest so the
+  latest-release feed keeps prior versions.
+- Extend the trackpad with mutually exclusive gesture states, sub-pixel
+  pointer precision accumulation, natural-scrolling and momentum toggles with
+  decaying inertia, pinch-to-zoom over Ctrl+scroll, drag/zoom haptics, and a
+  dismissible gesture help popover.
+- Derive friendly Soft-AP/BLE names from the complete MAC with a 2,560-name
+  deterministic space, migrate the short-lived Beta 2 automatic names, and
+  recover once from stale CoreBluetooth GATT handles during secure setup.
+- Add a one-time protocol-1-to-protocol-2 migration firmware build whose
+  install metadata is accepted by app and firmware 0.8.8 while the installed
+  runtime advertises and enforces Secure Protocol v2.
+- Keep the optional fallback Soft-AP and its authenticated control services
+  stable while an iPhone is attached; background station retries are deferred
+  for active AP clients and otherwise run without tearing the AP down.
+- Replace the Wi-Fi-centric status LED rules with transport-neutral OTA,
+  fallback, Keep Awake, controller, ready and unavailable states, and animate
+  matching blink/breathe patterns in the iOS status matrix.
+- Add a pastel accent palette, a custom color picker and a rounded interface
+  style, apply the selected accent consistently, and remove the redundant
+  Secure Lifecycle Guide.
+- Cancel stale queued TCP reconnects when the iOS transport is disconnected to
+  prevent reconnect churn while endpoints or connection modes change.
+- Prepare 0.9.0 Beta 2 with a CoreBluetooth direct-reconnect timeout that
+  cancels stuck cached peripherals and forces a real advertisement scan before
+  cached reconnect is allowed again.
+- Add a firmware advertising watchdog with live advertising diagnostics,
+  recovery counters and recovery logging when BLE is enabled but idle.
+- Use deterministic MAC-derived friendly names for the Soft-AP, BLE and app
+  discovery.
+- Accept the ESP32 fallback Soft-AP as a verified Wi-Fi endpoint after device
+  identity and Secure Protocol checks, and show the physical status LED matrix
+  in the iOS app.
+- Start the 0.9 M1 device and connection experience with one remembered active
+  device across Devices, Control, Firmware and Settings; native list actions
+  for fast switching; a shared Connected/Connecting/Offline/Attention Required
+  banner with retry, permission and USB-trust recovery; and a dedicated
+  Diagnostics & Advanced screen for technical connection details.
+- Add aligned Stable/Beta app and firmware update channels, semantic beta
+  firmware versions, a dedicated beta release workflow, versioned GitHub
+  prereleases and a fixed rolling AltStore beta feed.
+- Start the 0.9 native iOS design foundation with System, Light and Dark
+  appearance choices, user-selectable accent colors, shared layout tokens and
+  semantic connection-state colors/icons that keep offline, failure and
+  destructive meaning separate from branding.
 - Prefer each device's last confirmed IP for immediate and VPN-safe access,
   while using background Bonjour discovery only to validate and cache address
   changes for the matching secure device identity.

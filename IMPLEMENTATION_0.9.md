@@ -8,6 +8,12 @@ This document defines the implementation strategy for the InputPilot 0.9 generat
 
 Development should continue through the existing beta/prerelease workflow. See [Stable and Beta Release Channels](RELEASE_CHANNELS.md).
 
+## Latest RC audit
+
+The [2026-09-07 RC audit](docs/RC_0.9_AUDIT.md) records the Macro/UI overhaul,
+persistent Disable AP setting, validation results and remaining roadmap gaps.
+Implementation completion does not mark the iOS/hardware release gates passed.
+
 ## Engineering principles
 
 Work is organized by product feature rather than artificial calendar milestones. Each feature should include its UI states, accessibility, failure behavior, automated coverage where practical and a short manual verification checklist.
@@ -137,20 +143,20 @@ The current code already contains useful trackpad behavior including movement, s
 
 ## Remaining work
 
-- [ ] Define/refine explicit mutually exclusive gesture states where useful: `idle → moving → scrolling → clicking → dragging → zooming`.
-- [ ] Improve low-speed pointer precision.
-- [ ] Improve pointer smoothing and acceleration curve.
-- [ ] Improve two-finger scrolling.
-- [ ] Add/tune natural scrolling option.
-- [ ] Add/tune momentum or inertial scrolling where it improves the experience.
+- [x] Define/refine explicit mutually exclusive gesture states where useful: `idle → moving → scrolling → clicking → dragging → zooming`.
+- [x] Improve low-speed pointer precision.
+- [x] Improve pointer smoothing and acceleration curve.
+- [x] Improve two-finger scrolling.
+- [x] Natural scrolling as the fixed default (option removed for a gesture-first trackpad).
+- [x] Add/tune momentum or inertial scrolling where it improves the experience (always on, toggle removed).
 - [ ] Verify tap-to-click and double-click behavior.
 - [ ] Verify press/hold and/or two-finger secondary click behavior.
-- [ ] Make drag-and-drop reliable, including guaranteed drag release.
-- [ ] Add pinch-to-zoom where the HID/protocol path can support it correctly.
-- [ ] Add configurable sensitivity.
-- [ ] Add subtle haptic feedback where useful.
-- [ ] Add lightweight first-use gesture hints without permanently cluttering the trackpad.
-- [ ] Keep explicit click controls as a reliable fallback if they remain useful.
+- [x] Make drag-and-drop reliable, including guaranteed drag release.
+- [x] Add pinch-to-zoom where the HID/protocol path can support it correctly.
+- [x] Add configurable sensitivity.
+- [x] Add subtle haptic feedback where useful.
+- [x] Add lightweight first-use gesture hints without permanently cluttering the trackpad.
+- [x] Remove explicit click controls once every action is gesture-reachable (taps, holds and multi-finger taps cover left/right/middle).
 
 ## Exit criteria
 
@@ -168,17 +174,19 @@ Turn keyboard control and InputPilot's internal Shortcuts into one polished, saf
 
 The current implementation already includes keyboard layouts, one-shot modifiers and `releaseAll` support. Preserve and harden these capabilities.
 
-- [ ] Redesign keyboard shortcut controls into compact native layouts rather than stretched full-width buttons.
-- [ ] Improve modifier presentation and sticky/latched behavior where useful.
-- [ ] Keep an explicit `Release All Keys` safety action.
-- [ ] Ensure modifiers and held keys are released after all relevant error/disconnect paths.
-- [ ] Improve key/send visual feedback.
-- [ ] Improve keyboard dismissal and text-composer behavior.
-- [ ] Add explicit `Paste Clipboard` action that reads the clipboard only after user interaction.
-- [ ] Paste clipboard contents into the editable field before transmission so the user can review/edit them.
-- [ ] Handle empty/unavailable clipboard clearly.
-- [ ] Never unnecessarily log or persist clipboard contents.
-- [ ] Preserve intentional field clearing after text is sent, with appropriate success/failure feedback.
+- [x] Redesign keyboard shortcut controls into compact native layouts rather than stretched full-width buttons.
+- [x] Improve modifier presentation and sticky/latched behavior where useful.
+- [x] Keep an explicit `Release All Keys` safety action.
+- [x] Ensure modifiers and held keys are released after all relevant error/disconnect paths.
+- [x] Improve key/send visual feedback.
+- [x] Improve keyboard dismissal and text-composer behavior.
+- [x] Add explicit `Paste Clipboard` action that reads the clipboard only after user interaction.
+- [x] Paste clipboard contents into the editable field before transmission so the user can review/edit them.
+- [x] Handle empty/unavailable clipboard clearly.
+- [x] Never unnecessarily log or persist clipboard contents.
+- [x] Preserve intentional field clearing after text is sent, with appropriate success/failure feedback.
+
+The redesigned keyboard lives in `KeyboardView.swift`. Typed text is transmitted to the device in real time while the composer keeps each word visible briefly and then flies it away as a whole word (`typed text → word flight animation → device → field clears`); pasted clipboard content pauses in review mode until the user taps Send. Modifiers support three states (off, latched one-shot, locked), the shortcut grid uses compact icon cards with Liquid Glass surfaces on iOS 26, and an explicit `Release All` action plus capability notices are always visible.
 
 Clipboard verification must cover normal, empty, multiline, special-character and large input plus unavailable/denied cases where applicable.
 
@@ -223,24 +231,30 @@ The repository already contains useful Preset favorite/duplicate/delete/drag ord
 
 ## Presets
 
-- [ ] Ensure Run works reliably.
-- [ ] Improve cards/rows and management consistency.
-- [ ] Support Rename, Duplicate, Edit, Delete, ordering and favorites coherently.
-- [ ] Provide Run/Running/Completed/Failed feedback.
-- [ ] Prevent unsafe duplicate execution.
-- [ ] Support Secret references.
-- [ ] Guarantee failure cleans up held input.
+- [x] Ensure Run works reliably.
+- [x] Improve cards/rows and management consistency.
+- [x] Support Rename, Duplicate, Edit, Delete, ordering and favorites coherently.
+- [x] Provide Run/Running/Completed/Failed feedback.
+- [x] Prevent unsafe duplicate execution.
+- [x] Support Secret references.
+- [x] Guarantee failure cleans up held input.
 
 ## Macros
 
-- [ ] Improve list/card presentation and management.
-- [ ] Support Rename, Duplicate and confirmed Delete.
-- [ ] Support event editing/deletion/reordering where technically safe.
-- [ ] Show playback progress, repeat count and approximate duration where available.
-- [ ] Allow immediate cancellation.
-- [ ] Support Secret references where appropriate.
-- [ ] Provide Running/Completed/Cancelled/Failed feedback.
-- [ ] Guarantee cancellation/failure cleans up held input.
+- [x] Improve list/card presentation and management.
+- [x] Support Rename, Duplicate and confirmed Delete.
+- [x] Support event editing/deletion/reordering where technically safe.
+- [x] Show playback progress, repeat count and approximate duration where available.
+- [x] Allow immediate cancellation.
+- [x] Support Secret references where appropriate.
+- [x] Provide Running/Completed/Cancelled/Failed feedback.
+- [x] Guarantee cancellation/failure cleans up held input.
+
+Implementation is present; XCTest/macOS and physical-device validation are still
+pending. The existing SwiftData attributes are retained; Secret UUIDs are optional
+fields inside the event payload. See [RC audit](docs/RC_0.9_AUDIT.md) for evidence,
+limitations and the focused manual checklist. Raw keyboard reports retain their
+recorded values; timing, order and deletion remain editable.
 
 ## Secrets
 
@@ -254,16 +268,16 @@ Storage contract:
 
 Never store plaintext Secret values in SwiftData.
 
-- [ ] Create Secret.
-- [ ] Rename Secret metadata.
-- [ ] Replace/update Secret value.
-- [ ] Delete Secret.
-- [ ] Explicitly reveal Secret only on deliberate user action.
-- [ ] Allow actions to select/reference a Secret without copying plaintext into their persistent model.
-- [ ] Handle deleted/missing/unavailable Keychain references safely and never substitute an empty value silently.
-- [ ] Clear temporary Secret UI state after use where practical.
-- [ ] Audit logging, diagnostics, errors, model descriptions and crash metadata so Secret values cannot leak.
-- [ ] Reduce accidental screenshot/app-switcher exposure where reasonably possible.
+- [x] Create Secret.
+- [x] Rename Secret metadata.
+- [x] Replace/update Secret value.
+- [x] Delete Secret.
+- [x] Explicitly reveal Secret only on deliberate user action.
+- [x] Allow actions to select/reference a Secret without copying plaintext into their persistent model.
+- [x] Handle deleted/missing/unavailable Keychain references safely and never substitute an empty value silently.
+- [x] Clear temporary Secret UI state after use where practical.
+- [x] Audit logging, diagnostics, errors, model descriptions and crash metadata so Secret values cannot leak.
+- [x] Reduce accidental screenshot/app-switcher exposure where reasonably possible.
 
 Preferred model:
 
@@ -298,15 +312,18 @@ Do not create independent BLE/TCP/REST implementations inside App Intents. Do no
 Prioritize:
 
 - [ ] Run InputPilot Shortcut.
-- [ ] Run Preset.
-- [ ] Run Macro.
-- [ ] Send Keyboard Shortcut.
-- [ ] Send Text.
-- [ ] Connect Device.
-- [ ] Switch Device.
-- [ ] Start Mouse Move.
-- [ ] Stop Mouse Move.
-- [ ] Check Device Status using high-level product state.
+- [x] Run Preset.
+- [x] Run Macro with device, speed, repeat and start-delay parameters.
+- [x] Send Keyboard Shortcut.
+- [x] Send Text.
+- [x] Connect Device.
+- [x] Switch Device.
+- [x] Start Mouse Move.
+- [x] Stop Mouse Move.
+- [x] Check Device Status using high-level product state.
+- [x] Click Mouse.
+- [x] Scroll.
+- [x] Release All Input.
 
 Expose device/action parameters only where useful and avoid leaking protocol internals.
 
@@ -344,16 +361,16 @@ The repository already contains firmware compatibility validation, detailed upda
 
 ## Remaining work
 
-- [ ] Audit compatibility metadata/capabilities such as firmware version, protocol version, OTA schema, minimum app/firmware requirements and supported features.
-- [ ] Never require `App Version == Firmware Version`.
-- [ ] Prevent unsupported firmware downgrade by default.
-- [ ] Ensure firmware-side downgrade rejection exists where required; the app alone must not be the security boundary.
-- [ ] Do not assume newer firmware is automatically incompatible; use explicit protocol/capability checks.
-- [ ] Present a clear newer-firmware/requires-newer-app message when applicable.
-- [ ] Clearly show installed → available firmware version and release notes where available.
-- [ ] Preserve understandable Downloading/Validating/Transferring/Installing/Rebooting/Reconnecting/Completed progress.
-- [ ] Provide dedicated success/failure results and actionable compatibility errors.
-- [ ] Keep an explicit developer-only downgrade override only if it remains useful.
+- [x] Audit compatibility metadata/capabilities such as firmware version, protocol version, OTA schema, minimum app/firmware requirements and supported features.
+- [x] Never require `App Version == Firmware Version`.
+- [x] Prevent unsupported firmware downgrade by default.
+- [x] Ensure firmware-side downgrade rejection exists where required; the app alone must not be the security boundary.
+- [x] Do not assume newer firmware is automatically incompatible; use explicit protocol/capability checks.
+- [x] Present a clear newer-firmware/requires-newer-app message when applicable.
+- [x] Clearly show installed → available firmware version and release notes where available.
+- [x] Preserve understandable Downloading/Validating/Transferring/Installing/Rebooting/Reconnecting/Completed progress.
+- [x] Provide dedicated success/failure results and actionable compatibility errors.
+- [x] Keep an explicit developer-only downgrade override only if it remains useful.
 
 ## Firmware size
 
@@ -393,8 +410,8 @@ Once the UI is stable:
 - [ ] Add/update current InputPilot logo.
 - [ ] Replace outdated screenshots with real current iOS screenshots.
 - [ ] Add relevant Android screenshots only where appropriate/current.
-- [ ] Update README feature overview.
-- [ ] Add/update architecture diagram: `iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer`.
+- [x] Update README feature overview.
+- [x] Add/update architecture diagram: `iPhone → BLE / Wi-Fi → ESP32-S3 → USB HID → Computer`.
 
 Recommended screenshots include Devices, Device Details, Trackpad, Keyboard, Shortcuts, Presets, Secrets, Firmware and Settings.
 
@@ -440,6 +457,11 @@ Mocks and simulators do not replace these hardware gates.
 - [ ] no Secret values in logs/diagnostics.
 - [ ] missing/deleted Secret reference behavior.
 - [ ] restart/migration/restore behavior where applicable.
+
+Note: CI unit tests run against an in-memory Keychain stand-in (`SecretStore` detects
+the missing keychain entitlement under XCTest), so the real `Security` framework
+path is only exercised on hardware. The first gate item must be verified on a
+physical device, not just from green CI.
 
 ### Apple Shortcuts gate
 

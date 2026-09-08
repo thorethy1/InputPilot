@@ -1,6 +1,5 @@
 import SwiftData
 import SwiftUI
-import UIKit
 
 struct DeviceDetailView: View {
     @Bindable var device: StoredDevice
@@ -8,6 +7,8 @@ struct DeviceDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var viewModel: HomeViewModel
     @ObservedObject private var bluetooth: BLEHIDControlTransport
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
+    @Binding private var selectedTab: InputPilotTab
 
     @State private var displayName: String = ""
     @State private var showDeleteConfirmation = false
@@ -22,6 +23,9 @@ struct DeviceDetailView: View {
     @State private var keepAwakeMessage: String?
     @State private var managementBusy = false
     @State private var managementMessage: String?
+    @State private var fallbackApEnabled: Bool?
+    @State private var apBusy = false
+    @State private var apMessage: String?
     @State private var wifiNetworks: [String] = []
     @State private var newWifiSSID = ""
     @State private var newWifiPassword = ""
@@ -29,8 +33,9 @@ struct DeviceDetailView: View {
     @State private var wifiMessage: String?
     @State private var showClearWiFiConfirmation = false
 
-    init(device: StoredDevice) {
+    init(device: StoredDevice, selectedTab: Binding<InputPilotTab>) {
         _device = Bindable(wrappedValue: device)
+        _selectedTab = selectedTab
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
         _displayName = State(initialValue: device.displayName)
         let identity = device.cachedUSBIdentity
@@ -45,37 +50,23 @@ struct DeviceDetailView: View {
     var body: some View {
         Form {
             Section("Live Connection") {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(presence.color)
-                        .frame(width: 10, height: 10)
-                        .accessibilityHidden(true)
-                    Text(presence.title)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Status \(presence.title)")
-                Text(presence.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if bluetooth.radioState == .unauthorized {
-                    Label("Bluetooth access is disabled for InputPilot", systemImage: "bluetooth.slash")
-                        .foregroundStyle(AppColors.warning)
-                    Button("Open InputPilot Settings") {
-                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-                        UIApplication.shared.open(url)
+                if selectedDeviceId == device.deviceId {
+                    Label("Active Device", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                } else {
+                    Button {
+                        selectedDeviceId = device.deviceId
+                    } label: {
+                        Label("Make Active Device", systemImage: "checkmark.circle")
                     }
-                } else if bluetooth.radioState == .poweredOff {
-                    Label("Bluetooth is off", systemImage: "bluetooth.slash")
-                        .foregroundStyle(AppColors.warning)
-                    Text("Turn on Bluetooth in Control Center or Settings. Wi-Fi remains available when the device is connected to the local network.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+                DeviceConnectionBanner(device: device)
             }
 
             Section("Control") {
-                NavigationLink {
-                    HIDControlView(device: device)
+                Button {
+                    selectedDeviceId = device.deviceId
+                    selectedTab = .control
                 } label: {
                     Label("Open Trackpad & Keyboard", systemImage: "computermouse")
                 }
@@ -112,21 +103,48 @@ struct DeviceDetailView: View {
             Section("Device") {
                 TextField("Friendly Name", text: $displayName)
                     .onSubmit { saveDisplayName() }
-                LabeledContent("Device ID", value: device.deviceId)
-                LabeledContent("USB Serial Number", value: usbSerialNumber.isEmpty ? "Unavailable" : usbSerialNumber)
-                LabeledContent("Hostname", value: device.mdnsHost)
-                if let staIP = device.staIP,
-                   DeviceEndpointResolver.sanitizeHost(staIP)
-                    != DeviceEndpointResolver.sanitizeHost(device.mdnsHost) {
-                    LabeledContent("IP", value: staIP)
+                DisclosureGroup("Connection Details") {
+                    LabeledContent("Device ID", value: device.deviceId)
+                    LabeledContent("USB Serial Number", value: usbSerialNumber.isEmpty ? "Unavailable" : usbSerialNumber)
+                    LabeledContent("Hostname", value: device.mdnsHost)
+                    if let staIP = device.staIP,
+                       DeviceEndpointResolver.sanitizeHost(staIP)
+                        != DeviceEndpointResolver.sanitizeHost(device.mdnsHost) {
+                        LabeledContent("IP", value: staIP)
+                    }
                 }
             }
 
             Section("Software") {
                 LabeledContent("Firmware", value: device.firmwareVersion ?? "Unknown")
-                LabeledContent("Secure Protocol", value: "v\(device.protocolVersion)")
-                LabeledContent("OTA Schema", value: String(device.otaSchema))
-                LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
+                DisclosureGroup("Firmware Details") {
+                    LabeledContent("Secure Protocol", value: "v\(device.protocolVersion)")
+                    LabeledContent("OTA Schema", value: String(device.otaSchema))
+                    LabeledContent("Running Slot", value: device.runningPartition ?? "Unknown")
+                }
+            }
+
+            Section {
+                Toggle("Disable AP", isOn: Binding(
+                    get: { fallbackApEnabled == false },
+                    set: { disabled in Task { await setFallbackAP(enabled: !disabled) } }
+                ))
+                .disabled(fallbackApEnabled == nil || apBusy)
+                if apBusy { ProgressView("Updating access point…") }
+                if let apMessage {
+                    Text(apMessage).font(.caption).foregroundStyle(.secondary)
+                }
+                if device.capabilities.contains("secure_wifi_setup") {
+                    Button("Refresh AP Status") { Task { await loadFallbackAP() } }
+                        .disabled(apBusy)
+                } else {
+                    Text("Update firmware to configure the fallback access point.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Wi-Fi Access Point")
+            } footer: {
+                Text("Disables the InputPilot fallback hotspot, including when no saved network is available. Saved Wi-Fi connections and Bluetooth remain available. The preference survives restarts.")
             }
 
             if device.capabilities.contains("secure_wifi_setup") {
@@ -227,7 +245,7 @@ struct DeviceDetailView: View {
             Section("Security") {
                 if hasPairingKey {
                     Label("USB-trusted Secure Protocol v2", systemImage: "checkmark.shield.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(AppColors.success)
                 } else {
                     Label("USB trust is missing", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(AppColors.warning)
@@ -260,6 +278,7 @@ struct DeviceDetailView: View {
             await loadDeviceMetadata()
             await loadUSBIdentity()
             await loadWiFiNetworks()
+            await loadFallbackAP()
         }
         .onAppear {
             displayName = device.displayName
@@ -281,14 +300,6 @@ struct DeviceDetailView: View {
         } message: {
             Text("InputPilot will continue to work over Bluetooth.")
         }
-    }
-
-    private var presence: DevicePresenceStatus {
-        DevicePresenceStatus.resolve(
-            wifi: viewModel.wifiState(for: device.deviceId),
-            bluetooth: bluetooth.state,
-            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).isEmpty
-        )
     }
 
     private let keepAwakeIntervals = [5_000, 10_000, 30_000, 60_000, 300_000, 900_000, 3_600_000]
@@ -410,6 +421,71 @@ struct DeviceDetailView: View {
     }
 
     @MainActor
+    private func apRequest(_ command: String) async throws -> String {
+        guard hasPairingKey else { throw TransportError.unavailable }
+        var lastError: Error = TransportError.unavailable
+        if bluetooth.state == .ready {
+            do { return try await bluetooth.request(command) }
+            catch { lastError = error }
+        }
+        // The detail screen can finish its initial refresh before CoreBluetooth
+        // has authenticated. Give that in-flight connection a chance instead of
+        // reporting a stale Wi-Fi endpoint as an AP-status failure. Bluetooth
+        // also remains connected when an AP-off command takes effect.
+        if bluetooth.radioState == .poweredOn, bluetooth.state != .authenticationFailed {
+            do { return try await bluetooth.request(command) }
+            catch { lastError = error }
+        }
+        if let host = wifiControlHost {
+            do {
+                return try await InputPilotWiFiManager.session(
+                    host: host, deviceId: device.deviceId
+                ).request(command)
+            } catch { lastError = error }
+        }
+        throw lastError
+    }
+
+    @MainActor
+    private func loadFallbackAP() async {
+        guard device.capabilities.contains("secure_wifi_setup"), !apBusy else { return }
+        apBusy = true
+        defer { apBusy = false }
+        do {
+            let reply = try await apRequest("WIFI AP GET")
+            if reply.hasPrefix("error") {
+                fallbackApEnabled = nil
+                apMessage = "Update firmware to configure the fallback access point."
+                return
+            }
+            struct Status: Decodable { let enabled: Bool }
+            fallbackApEnabled = try JSONDecoder().decode(Status.self, from: Data(reply.utf8)).enabled
+            apMessage = nil
+        } catch {
+            fallbackApEnabled = nil
+            apMessage = "Could not read AP status. Reconnect and refresh."
+        }
+    }
+
+    @MainActor
+    private func setFallbackAP(enabled: Bool) async {
+        guard !apBusy else { return }
+        apBusy = true
+        defer { apBusy = false }
+        do {
+            let reply = try await apRequest(enabled ? "WIFI AP ON" : "WIFI AP OFF")
+            guard reply.trimmingCharacters(in: .whitespacesAndNewlines) == "ok" else {
+                throw TransportError.failed("The device could not save the AP preference. Try again after any firmware update finishes.")
+            }
+            fallbackApEnabled = enabled
+            apMessage = enabled ? "Fallback hotspot enabled." : "Fallback hotspot disabled."
+        } catch {
+            fallbackApEnabled = nil
+            apMessage = "Could not confirm the AP change. Reconnect over Bluetooth or your saved Wi-Fi network and refresh AP status."
+        }
+    }
+
+    @MainActor
     private func saveWiFi() async {
         let ssid = newWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ssid.isEmpty else { return }
@@ -519,6 +595,7 @@ struct DeviceDetailView: View {
 
     private func deleteDevice() {
         let deviceId = device.deviceId
+        if selectedDeviceId == deviceId { selectedDeviceId = "" }
         let repository = DeviceRepository(context: modelContext)
         try? repository.delete(device)
         Task { await InputPilotBluetoothManager.removeSession(deviceId: deviceId) }

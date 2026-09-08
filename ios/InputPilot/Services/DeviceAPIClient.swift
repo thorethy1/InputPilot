@@ -25,7 +25,9 @@ struct DeviceAPIClient: DeviceAPIClientProtocol {
     init(session: URLSession = .shared) { self.session = session }
 
     func status(baseURL: URL) async throws -> DeviceStatus {
-        let (data, response) = try await session.data(from: baseURL.appendingPathComponent("api/status"))
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/status"))
+        request.timeoutInterval = 3
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw DeviceAPIError.invalidResponse }
         guard (200 ... 299).contains(http.statusCode) else { throw DeviceAPIError.httpStatus(http.statusCode) }
         do { return try JSONDecoder().decode(DeviceStatus.self, from: data) }

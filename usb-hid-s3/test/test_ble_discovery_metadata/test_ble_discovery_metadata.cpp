@@ -5,7 +5,7 @@
 
 void test_metadata_is_complete_and_below_gatt_limit() {
   const std::string json = BLEDiscoveryMetadata::build(
-      "aabbccddeeff", "InputPilot-EEFF");
+      "aabbccddeeff", "InputPilot-Dupe9");
   TEST_ASSERT_FALSE(json.empty());
   TEST_ASSERT_LESS_THAN(BLEDiscoveryMetadata::MaxGattValueBytes, json.size());
   TEST_ASSERT_NOT_EQUAL(std::string::npos,

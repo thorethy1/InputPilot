@@ -10,7 +10,7 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY))
-from versioning import project_version  # noqa: E402
+from versioning import release_version  # noqa: E402
 
 
 def main() -> None:
@@ -23,7 +23,7 @@ def main() -> None:
     args = parser.parse_args()
     image = args.firmware.read_bytes()
     config = args.config.read_text(encoding="utf-8")
-    version = project_version(args.version_file)
+    version = release_version(args.version_file)
     schema = int(re.search(r"#define\s+OTA_SCHEMA_VERSION\s+(\d+)", config).group(1))
     protocol = int(re.search(r"#define\s+OTA_PROTOCOL_VERSION\s+(\d+)", config).group(1))
     digest = hashlib.sha256(image).hexdigest()

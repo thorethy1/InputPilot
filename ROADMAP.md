@@ -1,5 +1,7 @@
 # InputPilot Roadmap
 
+Current implementation and open release blockers: [0.9 RC audit — 2026-09-07](docs/RC_0.9_AUDIT.md).
+
 ## 🎨 0.9.x — Native iOS Experience, Shortcuts & Automation
 
 ### Goal
@@ -194,13 +196,13 @@ Improve:
 - reliable drag release
 - pinch-to-zoom
 - configurable sensitivity
-- natural scrolling option
+- natural scrolling as the fixed default (the toggle was intentionally removed for a gesture-first trackpad)
 
 Add subtle haptic feedback where appropriate.
 
 Provide lightweight first-use gesture hints without permanently cluttering the trackpad.
 
-Explicit left/middle/right controls may remain as a reliable fallback.
+Explicit left/middle/right controls have been removed now that every action is gesture-reachable (taps, holds and multi-finger taps cover left/right/middle); they may return as an accessibility fallback if hardware testing shows gaps.
 
 ### Gesture architecture
 

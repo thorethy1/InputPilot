@@ -46,6 +46,8 @@ public:
   static bool clear();
 
   static bool isProvisioned();
+  static bool fallbackApEnabled();
+  static bool setFallbackApEnabled(bool enabled);
 };
 
 #endif  // WIFI_CREDENTIALS_H

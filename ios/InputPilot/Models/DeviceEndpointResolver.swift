@@ -1,6 +1,10 @@
 import Foundation
 
 enum DeviceEndpointResolver {
+    /// ESP32 Arduino's default Soft-AP gateway. It is probed only as a final
+    /// candidate and accepted only after the expected device identity matches.
+    static let softAPHost = "192.168.4.1"
+
     /// Strips IPv4/IPv6 zone/interface suffixes (e.g. `192.168.2.161%en0` → `192.168.2.161`).
     static func sanitizeHost(_ host: String) -> String {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -17,6 +21,14 @@ enum DeviceEndpointResolver {
         }
         if let mdnsURL = baseURL(from: mdnsHost), !urls.contains(mdnsURL) {
             urls.append(mdnsURL)
+        }
+        return urls
+    }
+
+    static func probeURLs(mdnsHost: String, staIP: String?) -> [URL] {
+        var urls = endpointURLs(mdnsHost: mdnsHost, staIP: staIP)
+        if let fallback = baseURL(from: softAPHost), !urls.contains(fallback) {
+            urls.append(fallback)
         }
         return urls
     }

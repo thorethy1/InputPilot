@@ -1,28 +1,261 @@
 import SwiftUI
 import SwiftData
+import UIKit
+
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
+
+    var id: Self { self }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+enum AppAccent: String, CaseIterable, Identifiable {
+    case berry = "Berry"
+    case coolBlue = "Cool Blue"
+    case fuchsia = "Fuchsia"
+    case protokolle = "Protokolle"
+    case inputPilot = "Aidoku (InputPilot Red)"
+    case clock = "Clock"
+    case peculiar = "Peculiar"
+    case veryPeculiar = "Very Peculiar"
+    case emily = "Emily"
+    case custom = "Custom"
+
+    var id: Self { self }
+
+    func color(customHex: String = AccentColorCodec.defaultCustomHex) -> Color {
+        switch self {
+        case .berry: Color(red: 1.00, green: 0.48, blue: 0.55)
+        case .coolBlue: Color(red: 0.49, green: 0.58, blue: 0.95)
+        case .fuchsia: Color(red: 0.87, green: 0.43, blue: 0.88)
+        case .protokolle: Color(red: 0.67, green: 0.52, blue: 0.83)
+        case .inputPilot: Color("AccentColor")
+        case .clock: Color(red: 1.00, green: 0.58, blue: 0.15)
+        case .peculiar: Color(red: 0.31, green: 0.39, blue: 0.88)
+        case .veryPeculiar: Color(red: 0.30, green: 0.59, blue: 0.95)
+        case .emily: Color(red: 0.85, green: 0.49, blue: 0.66)
+        case .custom: AccentColorCodec.color(from: customHex)
+        }
+    }
+
+    static func resolve(_ storedValue: String) -> Self {
+        if let accent = Self(rawValue: storedValue) { return accent }
+        switch storedValue {
+        case "Blue": return .coolBlue
+        case "Indigo": return .peculiar
+        case "Teal": return .veryPeculiar
+        case "Orange": return .clock
+        default: return .inputPilot
+        }
+    }
+}
+
+enum AccentColorCodec {
+    static let defaultCustomHex = "#8E8CD8"
+
+    static func color(from value: String) -> Color {
+        let hex = value.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard hex.count == 6, let rgb = UInt64(hex, radix: 16) else {
+            return color(from: defaultCustomHex)
+        }
+        return Color(
+            red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255,
+            blue: Double(rgb & 0xff) / 255
+        )
+    }
+
+    static func hex(from color: Color) -> String {
+        let resolved = UIColor(color)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return defaultCustomHex
+        }
+        return String(
+            format: "#%02X%02X%02X",
+            Int((red * 255).rounded()),
+            Int((green * 255).rounded()),
+            Int((blue * 255).rounded())
+        )
+    }
+}
+
+enum UpdateChannel: String, CaseIterable, Identifiable, Sendable {
+    case stable = "Stable"
+    case beta = "Beta"
+
+    var id: Self { self }
+
+    static var buildDefault: Self {
+        Bundle.main.object(forInfoDictionaryKey: "InputPilotUpdateChannel") as? String == "beta" ? .beta : .stable
+    }
+
+    var detail: String {
+        switch self {
+        case .stable: "Receives tested public app and firmware releases."
+        case .beta: "Receives prerelease app and firmware builds for early testing."
+        }
+    }
+
+    var releaseAPIURL: URL {
+        switch self {
+        case .stable:
+            URL(string: "https://api.github.com/repos/thorethy1/InputPilot/releases/latest")!
+        case .beta:
+            URL(string: "https://api.github.com/repos/thorethy1/InputPilot/releases?per_page=30")!
+        }
+    }
+
+    var altStoreSourceURL: URL {
+        switch self {
+        case .stable:
+            URL(string: "https://github.com/thorethy1/InputPilot/releases/latest/download/altstore-source.json")!
+        case .beta:
+            URL(string: "https://github.com/thorethy1/InputPilot/releases/download/beta/altstore-source.json")!
+        }
+    }
+}
+
+enum AppTheme {
+    enum Spacing {
+        static let compact: CGFloat = 8
+        static let standard: CGFloat = 12
+        static let spacious: CGFloat = 16
+        static let section: CGFloat = 24
+    }
+
+    enum Radius {
+        static let control: CGFloat = 12
+        static let card: CGFloat = 16
+        static let trackpad: CGFloat = 18
+    }
+
+    static let minimumInteractionSize: CGFloat = 44
+}
 
 enum AppColors {
-    static let primary = Color("AccentColor")
+    static let primary = Color.accentColor
     static let primaryForeground = Color.white
     static let success = Color.green
     static let warning = Color.orange
     static let error = Color.red
     static let info = Color.blue
     static let neutral = Color.secondary
+    static let connected = success
+    static let available = info
+    static let offline = neutral
+    static let attention = warning
+    static let destructive = error
+}
+
+// Native menu pickers can retain the tint of their UIKit backing control.
+// Observe the preference here and rebuild only the picker when its accent
+// changes. Selection bindings and the surrounding navigation stay intact.
+private struct LivePickerAccent: ViewModifier {
+    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+
+    private var accent: AppAccent { AppAccent.resolve(accentName) }
+    private var identity: String {
+        accent == .custom ? "\(accent.rawValue):\(customAccentHex)" : accent.rawValue
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .tint(accent.color(customHex: customAccentHex))
+            .id(identity)
+    }
+}
+
+extension View {
+    func livePickerAccent() -> some View { modifier(LivePickerAccent()) }
+}
+
+@MainActor enum AppModelContainer {
+    static let shared: ModelContainer = {
+        let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self, StoredSecret.self])
+        do {
+            let container = try ModelContainer(for: schema)
+            migrateLegacyPresetScripts(in: container)
+            return container
+        } catch {
+            // App Intents launch the app in the background; a hard failure here
+            // would crash on every Shortcuts run. Degrade to an in-memory store
+            // so the app and its intents stay usable and report honest errors.
+            appLog(.errors, "SwiftData store could not be opened: \(error.localizedDescription). Using an in-memory fallback store.")
+            let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: configuration)
+        }
+    }()
+
+    /// Rewrites legacy DuckyScript preset payloads (STRING/REM/unbracketed
+    /// commands) into the current bracket syntax exactly once per store open.
+    static func migrateLegacyPresetScripts(in container: ModelContainer) {
+        let context = ModelContext(container)
+        let presets = (try? context.fetch(FetchDescriptor<HIDPreset>())) ?? []
+        var migrated = 0
+        for preset in presets where preset.script {
+            if let rewritten = PresetScript.migratedLegacyScript(preset.payload) {
+                preset.payload = rewritten
+                migrated += 1
+            }
+        }
+        guard migrated > 0 else { return }
+        try? context.save()
+        appLog(.errors, "Migrated \(migrated) preset script\(migrated == 1 ? "" : "s") to the bracket syntax.")
+    }
 }
 
 @main
 struct InputPilotApp: App {
-    private let container: ModelContainer = {
-        let schema = Schema([StoredDevice.self, HIDPreset.self, HIDMacro.self])
-        return try! ModelContainer(for: schema)
-    }()
+    @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
+    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+
+    private let container: ModelContainer = AppModelContainer.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .tint(AppColors.primary)
+                .tint(accent.color(customHex: customAccentHex))
+                .preferredColorScheme(appearance.colorScheme)
+                .onAppear {
+                    applyUIKitTint()
+                    appLog(.diagnostics, "App launched")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                    AppLog.shared.flush()
+                }
+                .onChange(of: accentName) { _, _ in applyUIKitTint() }
+                .onChange(of: customAccentHex) { _, _ in applyUIKitTint() }
         }
         .modelContainer(container)
+    }
+
+    private var appearance: AppAppearance {
+        AppAppearance(rawValue: appearanceName) ?? .system
+    }
+
+    private var accent: AppAccent {
+        AppAccent.resolve(accentName)
+    }
+
+    @MainActor
+    private func applyUIKitTint() {
+        let tintColor = UIColor(accent.color(customHex: customAccentHex))
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows {
+                window.tintColor = tintColor
+            }
+        }
     }
 }

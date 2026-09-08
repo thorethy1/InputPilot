@@ -173,3 +173,18 @@ bool WifiCredentials::clear() {
   LOG_WIFI("nvs cleared (Soft-AP on next radio wifi)");
   return true;
 }
+
+// Independent of saved networks: clearing credentials preserves this preference.
+bool WifiCredentials::fallbackApEnabled() {
+  if (!openRo()) return true;
+  const bool enabled = s_prefs.getBool("fallback_ap", true);
+  s_prefs.end();
+  return enabled;
+}
+
+bool WifiCredentials::setFallbackApEnabled(bool enabled) {
+  if (!openRw()) return false;
+  const bool ok = s_prefs.putBool("fallback_ap", enabled) == sizeof(bool);
+  s_prefs.end();
+  return ok;
+}

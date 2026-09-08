@@ -46,8 +46,8 @@ cp config.env.example config.env      # set ESP_PORT
 `autoclick on|off|status|interval <ms>` · `pairtest` · `radio wifi|ble|none` ·
 `wifi status|set|clear` · `status` · `version` · `help`
 
-WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts Soft-AP
-`InputPilot-XXXX` (last 4 hex of MAC, uppercase; open by default; set
+WiFi credentials persist in NVS. With no STA creds, `radio wifi` starts a
+full-MAC-derived friendly Soft-AP such as `InputPilot-Halo9` (open by default; set
 `WIFI_AP_PASS` in `wifi_secrets.h` for WPA) with read-only discovery at
 `http://192.168.4.1/api/status`.
 With creds, STA joins and exposes:
@@ -61,6 +61,27 @@ fixed 32-entry HID event queue. A dedicated executor task is the only runtime
 context that calls the USB mouse/keyboard report APIs; adjacent mouse moves are
 coalesced and six queue slots are reserved for release-critical events.
 
+BLE disconnect callbacks only revoke session ownership and signal the firmware
+loop. The loop clears the secure session and OTA queues, releases held inputs,
+logs the disconnect reason and recovers advertising. USB stays initialized.
+
+To check disconnect recovery on hardware, leave BLE enabled, disconnect the
+iPhone, install `bleak`, and run the opt-in regression against the same board:
+
+```sh
+RUN_BLE=1 ESP_PORT=/dev/cu.usbmodem... INPUTPILOT_BLE_ADDRESS=... \
+  python -m pytest tests/e2e/test_ble_disconnect.py -v
+```
+
+Use the Bluetooth address, or the CoreBluetooth peripheral UUID on macOS.
+The test repeats five connect/disconnect cycles and checks advertising, USB
+responsiveness through the original serial handle, and increasing uptime.
+Also check with the iPhone app connected: close the app, then separately turn
+Bluetooth off in iOS Settings. Neither action should cause USB re-enumeration;
+after reconnecting, diagnostics should show continuing uptime. If it resets,
+capture `reset_reason` from the next boot and decode the core dump with
+`scripts/read_coredump.sh` using the ELF from the installed firmware build.
+
 On STA the device also advertises **mDNS** as `inputpilot-xxxx.local` (lowercase
 suffix; HTTP service on port 80 with TXT `path`, `id`, `fw`), so apps can
 discover it without a hard-coded IP. `GET /api/status` returns `mdns` and
@@ -72,17 +93,26 @@ Optional Soft-AP WPA protection (compile-time, via `wifi_secrets.h`):
 #define WIFI_AP_PASS "setup-secret"       // Soft-AP WPA (8+ chars)
 ```
 
-The Soft-AP is a bootstrap network only. Wi-Fi credentials and all other
-sensitive data are accepted exclusively through Secure Protocol v2.
+The Soft-AP is an optional fallback whenever every configured infrastructure
+network is unavailable. It remains active while a phone is attached, and
+periodic station retries never tear down its HTTP/TCP services. When the router
+becomes reachable again, InputPilot returns to station mode. Wi-Fi credentials
+and all other sensitive data are accepted exclusively through Secure Protocol
+v2.
 
 ### Status LED (onboard WS2812, GPIO21)
 
 | Appearance | Meaning |
 |------------|---------|
-| Solid red | WiFi disconnected (radio off / not associated) |
-| Magenta blink | Soft-AP setup mode (`InputPilot-XXXX`) |
-| Dim solid green | STA connected, jiggle **off** |
-| Cyan breathing | STA connected, jiggle **on** |
+| Fast amber blink | OTA firmware update active |
+| Brief violet pulse (180 ms every 4 seconds) | Optional fallback AP active (for example `InputPilot-Halo9`); normal status resumes between pulses |
+| Cyan breathing | Keep Awake movement or clicking enabled |
+| Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
+| Dim solid green | At least one BLE/Wi-Fi control path is ready |
+| Slow red blink | No control radio is currently ready |
+
+The AP pulse briefly overlays the normal status (blue, breathing cyan, or dim
+green). OTA updates take priority: amber blinking continues without AP pulses.
 
 Protocol and hardware validation: [`../docs/SECURE_PROTOCOL_V2.md`](../docs/SECURE_PROTOCOL_V2.md)
 
@@ -108,3 +138,22 @@ pyobjc `CGEventTap` to confirm the cursor actually moves and keystrokes arrive.
 Grant your terminal **Input Monitoring** and **Accessibility** permission.
 
 Cloud CI runs only the native unit tests + firmware compile (no Mac / no board).
+
+### One-time protocol 1 to protocol 2 migration
+
+Devices still running firmware 0.8.8 use OTA protocol 1, and the InputPilot
+0.8.8 app rejects an image whose embedded install metadata already says
+`protocol=2`. Build the dedicated bridge image from the current source with:
+
+```bash
+pio run -e esp32s3-migration-v1-to-v2
+python scripts/package_protocol_migration.py \
+  --firmware .pio/build/esp32s3-migration-v1-to-v2/firmware.bin \
+  --output .pio/build/protocol-migration-v1-to-v2
+```
+
+Select `firmware-migration-v1-to-v2.bin` manually in app 0.8.8. Its embedded
+install metadata is protocol 1 so both the app and the installed 0.8.8 firmware
+accept it. Once booted, the image advertises and enforces Secure Protocol v2;
+upgrade the app before reconnecting or installing later firmware. This image is
+only for the one-time transition and must not replace the normal release image.

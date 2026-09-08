@@ -3,6 +3,106 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    @MainActor func testPresetProtocolIsProbedWhenCachedCapabilityIsStale() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(
+            ble: ble,
+            tcp: MockTransport(kind: .tcp, available: false),
+            capabilities: ["ble_transport", "release_all"]
+        )
+
+        let started = await manager.startPreset(program: Data([0x02, 0, 0, 0, 0]), token: 42)
+        XCTAssertTrue(started)
+        XCTAssertNil(manager.lastError)
+    }
+
+    @MainActor func testRapidReleasesStillReleaseNewHeldInput() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "mouse_button_state"])
+        await manager.releaseAll()
+        _ = await manager.send(.mouseDown(.left))
+        await manager.releaseAll()
+        XCTAssertEqual(ble.events, [.releaseAll, .mouseDown(.left), .releaseAll])
+    }
+
+    @MainActor func testPresetSecretInputIsExcludedFromMacroRecording() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "keyboard_layout", "keyboard_key", "device_presets", "preset_abort"])
+        var captured: [HIDEvent] = []
+        manager.onEvent = { captured.append($0) }
+        let result = await ActionExecutor().run(steps: [.secret("password")], layout: .us, typingDelayMs: 0, transport: manager, secretResolver: { _ in "private" })
+        guard case .success = result else { return XCTFail("Secret action failed") }
+        XCTAssertTrue(ble.events.isEmpty)
+        XCTAssertTrue(captured.isEmpty)
+        _ = await manager.send(.keyCombo("ctrl+a"))
+        XCTAssertEqual(captured, [.keyCombo("ctrl+a")])
+    }
+
+    func testHandshakeRepliesAssembleAtDefaultMTUAndAcceptLegacyPackets() {
+        let replies = ["secure challenge 1 aabbccddeeff " + String(repeating: "A", count: 32),
+                       "secure ready " + String(repeating: "B", count: 64), "secure failed"]
+        for reply in replies {
+            var buffer = BLEHandshakeReplyBuffer()
+            XCTAssertEqual(buffer.append(Data(reply.utf8)), reply)
+            let data = Data(reply.utf8)
+            for offset in stride(from: 0, to: data.count, by: 20) {
+                let end = min(offset + 20, data.count)
+                let result = buffer.append(data.subdata(in: offset..<end))
+                if end == data.count { XCTAssertEqual(result, reply) }
+                else { XCTAssertNil(result) }
+            }
+        }
+    }
+
+    func testHandshakeBufferResetDropsPartialPreviousConnection() {
+        var buffer = BLEHandshakeReplyBuffer()
+        XCTAssertNil(buffer.append(Data("secure challenge 1 ".utf8)))
+        buffer.reset()
+        XCTAssertEqual(buffer.append(Data("secure failed".utf8)), "secure failed")
+        XCTAssertNil(buffer.append(Data(repeating: 65, count: 129)))
+        XCTAssertEqual(buffer.append(Data("secure failed".utf8)), "secure failed")
+    }
+
+    func testBLEMetadataRecoveryRecognizesBothInvalidHandleDomains() {
+        let att = NSError(
+            domain: CBATTErrorDomain,
+            code: CBATTError.Code.invalidHandle.rawValue
+        )
+        let central = NSError(
+            domain: CBErrorDomain,
+            code: CBError.Code.invalidHandle.rawValue
+        )
+        let unrelated = NSError(domain: CBErrorDomain, code: CBError.Code.connectionTimeout.rawValue)
+
+        XCTAssertTrue(BLEMetadataRecovery.isInvalidHandle(att))
+        XCTAssertTrue(BLEMetadataRecovery.isInvalidHandle(central))
+        XCTAssertFalse(BLEMetadataRecovery.isInvalidHandle(unrelated))
+        XCTAssertEqual(
+            BLEMetadataRecovery.userFacingError(att).localizedDescription,
+            BLEMetadataRecovery.invalidHandleMessage
+        )
+    }
+
+    func testReconnectGateRequiresAdvertisementAfterConnectionFailure() {
+        var gate = BLEReconnectGate()
+        XCTAssertTrue(gate.permitsCachedPeripheral)
+
+        gate.connectionAttemptFailed()
+        XCTAssertFalse(gate.permitsCachedPeripheral)
+
+        gate.advertisementObserved()
+        XCTAssertTrue(gate.permitsCachedPeripheral)
+    }
+
+    func testDiagnosticsDecodeActualBLEAdvertisingState() throws {
+        let data = Data(#"{"product":"InputPilot","firmware":"0.9.0-beta.2","board":"esp32-s3-zero-4mb","protocol":2,"otaSchema":1,"deviceId":"aabbccddeeff","ble":{"connected":false,"advertising":true,"advertisingRecoveries":2,"advertisingRecoveryFailures":1}}"#.utf8)
+        let metadata = try JSONDecoder().decode(DiagnosticsMetadata.self, from: data)
+        XCTAssertEqual(metadata.ble?.connected, false)
+        XCTAssertEqual(metadata.ble?.advertising, true)
+        XCTAssertEqual(metadata.ble?.advertisingRecoveries, 2)
+        XCTAssertEqual(metadata.ble?.advertisingRecoveryFailures, 1)
+    }
+
     func testUSBIdentityDecodesSecureProtocolResponse() throws {
         let data = Data(#"{"manufacturer_name":"thorethy","product_name":"InputPilot","vid":51966,"pid":16385,"serial_number":"Desk-01"}"#.utf8)
         let identity = try JSONDecoder().decode(USBIdentity.self, from: data)
@@ -116,6 +216,127 @@ final class HIDRemoteTests: XCTestCase {
 
     func testSemanticVersionsCompareNumerically() {
         XCTAssertLessThan(SemanticVersion("0.8.9")!, SemanticVersion("0.8.11")!)
+        XCTAssertLessThan(SemanticVersion("0.9.0-beta.1")!, SemanticVersion("0.9.0-beta.2")!)
+        XCTAssertLessThan(SemanticVersion("0.9.0-beta.9")!, SemanticVersion("0.9.0")!)
+    }
+
+    func testLaterBetaFirmwareIsAnUpdateAndStableSupersedesBeta() {
+        func manifest(_ version: String) -> FirmwareManifest {
+            FirmwareManifest(
+                product: "InputPilot", version: version, board: "esp32-s3-zero-4mb",
+                protocolVersion: 2, otaSchema: 1, size: 100, sha256: String(repeating: "a", count: 64)
+            )
+        }
+        XCTAssertEqual(
+            FirmwareReleaseEvaluator.evaluate(
+                installed: "0.9.0-beta.1", manifest: manifest("0.9.0-beta.2"),
+                deviceOTASchema: 1, appVersion: "0.9.0"
+            ),
+            .updateAvailable("0.9.0-beta.2")
+        )
+        XCTAssertEqual(
+            FirmwareReleaseEvaluator.evaluate(
+                installed: "0.9.0-beta.2", manifest: manifest("0.9.0"),
+                deviceOTASchema: 1, appVersion: "0.9.0"
+            ),
+            .updateAvailable("0.9.0")
+        )
+    }
+
+    func testInstalledNewerFirmwareOnlyDownloadsWithDowngradeOverride() {
+        let status = FirmwareReleaseStatus.installedNewer(latest: "0.8.20")
+        XCTAssertFalse(status.canDownload())
+        XCTAssertTrue(status.canDownload(allowDowngrade: true))
+    }
+
+    func testFirmwareInstallPolicyBlocksSemanticDowngradeByDefault() {
+        XCTAssertTrue(FirmwareInstallPolicy.downgradeBlocked(
+            installed: "0.9.0", target: "0.9.0-beta.23", allowDowngrade: false
+        ))
+        XCTAssertFalse(FirmwareInstallPolicy.downgradeBlocked(
+            installed: "0.9.0", target: "0.9.0-beta.23", allowDowngrade: true
+        ))
+        XCTAssertFalse(FirmwareInstallPolicy.downgradeBlocked(
+            installed: "0.9.0-beta.23", target: "0.9.0", allowDowngrade: false
+        ))
+    }
+
+    func testPublishedChecksumRequiresExplicitOverride() throws {
+        let image = firmwareImage()
+        let manifest = FirmwareManifest(
+            product: "InputPilot", version: "0.8.11", board: "esp32-s3-zero-4mb",
+            protocolVersion: 2, otaSchema: 1, size: image.count,
+            sha256: String(repeating: "a", count: 64)
+        )
+        XCTAssertThrowsError(try FirmwareManifestValidator.validate(manifest, firmware: image)) { error in
+            XCTAssertEqual(error as? FirmwareValidationError, .checksumMismatch)
+        }
+        XCTAssertNoThrow(try FirmwareManifestValidator.validate(
+            manifest, firmware: image, ignorePublishedChecksum: true
+        ))
+    }
+
+    @MainActor func testBetaReleaseSelectionSkipsRollingFeedAndStableReleases() throws {
+        let data = Data(#"""
+        [
+          {"tag_name":"beta","draft":false,"prerelease":true,"assets":[{"name":"altstore-source.json","browser_download_url":"https://example.com/feed"}]},
+          {"tag_name":"v0.8.19","draft":false,"prerelease":false,"assets":[]},
+          {"tag_name":"v0.9.0-beta.2","draft":false,"prerelease":true,"assets":[
+            {"name":"firmware-manifest.json","browser_download_url":"https://example.com/manifest"},
+            {"name":"firmware.bin","browser_download_url":"https://example.com/firmware"}
+          ]}
+        ]
+        """#.utf8)
+        let release = try GitHubFirmwareSource.selectRelease(from: data, channel: .beta)
+        XCTAssertEqual(release.tagName, "v0.9.0-beta.2")
+    }
+
+    @MainActor func testBetaReleaseSelectionUsesHighestVersionRegardlessOfAPIOrder() throws {
+        let data = Data(#"""
+        [
+          {"tag_name":"v0.9.0-beta.1","draft":false,"prerelease":true,"assets":[
+            {"name":"firmware-manifest.json","browser_download_url":"https://example.com/beta1/manifest"},
+            {"name":"firmware.bin","browser_download_url":"https://example.com/beta1/firmware"}
+          ]},
+          {"tag_name":"v0.9.0-beta.2","draft":false,"prerelease":true,"assets":[
+            {"name":"firmware-manifest.json","browser_download_url":"https://example.com/beta2/manifest"},
+            {"name":"firmware.bin","browser_download_url":"https://example.com/beta2/firmware"}
+          ]}
+        ]
+        """#.utf8)
+        let release = try GitHubFirmwareSource.selectRelease(from: data, channel: .beta)
+        XCTAssertEqual(release.tagName, "v0.9.0-beta.2")
+    }
+
+    @MainActor func testFirmwareReleaseRequestBypassesCaches() {
+        let request = GitHubFirmwareSource.releaseRequest(for: .beta)
+        XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-cache")
+        XCTAssertNotNil(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "cache_bust" })?.value)
+    }
+
+    @MainActor func testLegacyAccentNamesMigrateToPastelPalette() {
+        XCTAssertEqual(AppAccent.resolve("Blue"), .coolBlue)
+        XCTAssertEqual(AppAccent.resolve("Indigo"), .peculiar)
+        XCTAssertEqual(AppAccent.resolve("Orange"), .clock)
+        XCTAssertEqual(AppAccent.resolve("InputPilot Red"), .inputPilot)
+    }
+
+    @MainActor func testCustomAccentHexRoundTrips() {
+        XCTAssertEqual(
+            AccentColorCodec.hex(from: AccentColorCodec.color(from: "#7A91E8")),
+            "#7A91E8"
+        )
+        XCTAssertEqual(
+            AccentColorCodec.hex(from: AccentColorCodec.color(from: "not-a-color")),
+            AccentColorCodec.defaultCustomHex
+        )
+    }
+
+    @MainActor func testStableReleaseSelectionRejectsPrerelease() {
+        let data = Data(#"{"tag_name":"v0.9.0-beta.1","draft":false,"prerelease":true,"assets":[]}"#.utf8)
+        XCTAssertThrowsError(try GitHubFirmwareSource.selectRelease(from: data, channel: .stable))
     }
 }
 
@@ -124,6 +345,9 @@ private final class MockTransport: HIDControlTransport {
     var state: TransportConnectionState
     var isAvailable: Bool { state == .ready }
     var events: [HIDEvent] = []
+    private var presetToken: UInt64 = 0
+    private var presetSize = 0
+    private var presetReceived = 0
     init(kind: TransportKind, available: Bool) {
         self.kind = kind; state = available ? .ready : .offline
     }
@@ -132,5 +356,105 @@ private final class MockTransport: HIDControlTransport {
     }
     func connect() async {}
     func send(_ event: HIDEvent) async throws { events.append(event) }
+    func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        let fields = command.split(separator: " ")
+        if command.hasPrefix("PRESET BEGIN "), fields.count == 5 {
+            presetToken = UInt64(fields[2], radix: 16) ?? 0
+            presetSize = Int(fields[3]) ?? 0
+            presetReceived = 0
+            return "preset ready \(String(format: "%016llx", presetToken)) 0"
+        }
+        if command.hasPrefix("PRESET RUN ") {
+            return "preset running \(String(format: "%016llx", presetToken)) 0 \(presetSize)"
+        }
+        if command == "PRESET STATUS" {
+            return "preset completed \(String(format: "%016llx", presetToken)) \(presetSize) \(presetSize)"
+        }
+        if command.hasPrefix("PRESET ABORT") {
+            return "preset cancelled \(String(format: "%016llx", presetToken)) \(presetReceived) \(presetSize)"
+        }
+        throw TransportError.failed("unexpected command")
+    }
+    func uploadPresetChunk(token: UInt64, offset: UInt32, data: Data) async throws -> String {
+        presetReceived = Int(offset) + data.count
+        return "preset ack \(String(format: "%016llx", token)) \(presetReceived)"
+    }
     func disconnect() async { state = .offline }
+}
+
+final class PresetScriptTests: XCTestCase {
+    func testFormWithLeadingZerosAndDelay() throws {
+        let source = "[TAB]\n[TAB]\nExample user\n[TAB]\nDemo project\n[TAB]\n00001234\n[TAB]\n42\n[DELAY 500]\n[ENTER]"
+        XCTAssertEqual(try PresetScript.parse(source), [
+            .key("tab"), .key("tab"), .text("Example user"), .key("tab"),
+            .text("Demo project"), .key("tab"), .text("00001234"), .key("tab"),
+            .text("42"), .delay(500), .key("enter")
+        ])
+    }
+
+    func testBracketedCommandsAndPlainTextLines() throws {
+        XCTAssertEqual(try PresetScript.parse("[CTRL+A]\n[SHIFT+TAB]\n[F12]"), [.key("ctrl+a"), .key("shift+tab"), .key("f12")])
+        // Without brackets everything is typed literally, including bare key
+        // words and bracket-looking text that is not a full command line.
+        XCTAssertEqual(try PresetScript.parse("F12\nCTRL ALT DELETE"), [.text("F12"), .text("CTRL ALT DELETE")])
+        XCTAssertEqual(try PresetScript.parse("Press [ENTER] now"), [.text("Press [ENTER] now")])
+        XCTAssertEqual(try PresetScript.parse("# form filler\n[ENTER]"), [.key("enter")])
+    }
+
+    func testMalformedCommandsHaveLineNumbers() {
+        for command in ["[DELAY]", "[DELAY -1]", "[DELAY 60001]", "[DELAY 999999999999999999999999999]", "[TBA]", "[TAB", "[CTRL+BOGUS]", "[TAB ENTER]", "[SECRET]", "[]"] {
+            XCTAssertThrowsError(try PresetScript.parse("valid text\n" + command)) { error in
+                XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
+            }
+        }
+    }
+
+    func testBlankLinesDoNotSendEnterAndTextKeepsWhitespace() throws {
+        XCTAssertEqual(try PresetScript.parse("\n  00001234  \n\n[ENTER]\n"), [.text("  00001234  "), .key("enter")])
+        XCTAssertEqual(try PresetScript.parse("TAB\nENTER\nDELAY 500\nSECRET x"), [.text("TAB"), .text("ENTER"), .text("DELAY 500"), .text("SECRET x")])
+    }
+
+    func testSecretLinesParseToSecretSteps() throws {
+        XCTAssertEqual(try PresetScript.parse("[SECRET work-password]\n[secret api-token]\nSECRET literal"), [
+            .secret("work-password"), .secret("api-token"), .text("SECRET literal")
+        ])
+    }
+
+    func testMouseClickLinesParseButtonsAndRejectUnknownOnes() throws {
+        XCTAssertEqual(
+            try PresetScript.parse("[CLICK]\n[CLICK LEFT]\n[click right]\n[CLICK MIDDLE]"),
+            [.click(.left), .click(.left), .click(.right), .click(.middle)]
+        )
+        XCTAssertThrowsError(try PresetScript.parse("[CLICK SIDE]")) { error in
+            XCTAssertEqual((error as? PresetScript.ParseError)?.line, 1)
+        }
+    }
+
+    func testSecretWithEmptyNameThrows() {
+        XCTAssertThrowsError(try PresetScript.parse("valid text\n[SECRET]")) { error in
+            XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
+            XCTAssertEqual((error as? PresetScript.ParseError)?.reason, "SECRET needs a name, e.g. [SECRET work-password].")
+        }
+        for command in ["[SECRET   ]", "[SECRET\t]"] {
+            XCTAssertThrowsError(try PresetScript.parse("valid text\n" + command)) { error in
+                XCTAssertEqual((error as? PresetScript.ParseError)?.line, 2)
+            }
+        }
+    }
+
+    func testMigrationRewritesLegacyDuckyLines() {
+        XCTAssertEqual(
+            PresetScript.migratedLegacyScript("REM form\r\nCTRL ALT DELETE\r\nSTRING hello  \r\nDELAY 0\r\nENTER\r\nSECRET work-password\r\nplain text"),
+            "# form\n[CTRL+ALT+DELETE]\nhello  \n[DELAY 0]\n[ENTER]\n[SECRET work-password]\nplain text"
+        )
+        XCTAssertNil(PresetScript.migratedLegacyScript("hello\n[ENTER]\n[SECRET work-password]"))
+    }
+
+    func testMigratedLegacyScriptParsesToTheSameSteps() throws {
+        let legacy = "REM login\r\nCTRL ALT DELETE\r\nSTRING user@example.com\r\nENTER\r\nSECRET work-password"
+        let migrated = try XCTUnwrap(PresetScript.migratedLegacyScript(legacy))
+        XCTAssertEqual(try PresetScript.parse(migrated), [
+            .key("ctrl+alt+delete"), .text("user@example.com"), .key("enter"), .secret("work-password")
+        ])
+    }
 }

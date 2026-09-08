@@ -4,15 +4,24 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+enum InputPilotTab: Hashable {
+    case devices
+    case control
+    case firmware
+    case settings
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \StoredDevice.displayName) private var storedDevices: [StoredDevice]
     @StateObject private var viewModel = HomeViewModel()
+    @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
 
     @State private var showAddWizard = false
+    @State private var selectedTab = InputPilotTab.devices
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
           NavigationStack {
             Group {
                 if storedDevices.isEmpty {
@@ -35,17 +44,21 @@ struct ContentView: View {
                 AddDeviceWizardView()
             }
           }
-          .tabItem { Label("Devices", systemImage: "computermouse") }
+          .tabItem { Label("Devices", systemImage: "memorychip") }
+          .tag(InputPilotTab.devices)
           NavigationStack { ControlRootView(devices: storedDevices) }
             .tabItem { Label("Control", systemImage: "rectangle.and.hand.point.up.left") }
+            .tag(InputPilotTab.control)
           NavigationStack { FirmwareRootView(devices: storedDevices) }
             .tabItem { Label("Firmware", systemImage: "arrow.triangle.2.circlepath") }
+            .tag(InputPilotTab.firmware)
           NavigationStack { ConnectionSettingsView() }
             .tabItem { Label("Settings", systemImage: "gearshape") }
+            .tag(InputPilotTab.settings)
         }
-        .tint(AppColors.primary)
         .environmentObject(viewModel)
         .task(id: storedDevices.map(\.deviceId)) {
+            reconcileActiveDevice()
             viewModel.monitorBonjour(devices: storedDevices, context: modelContext)
             while !Task.isCancelled {
                 await viewModel.refreshQuietly(devices: storedDevices, context: modelContext)
@@ -56,16 +69,49 @@ struct ContentView: View {
     }
 
     private var deviceList: some View {
-        List(storedDevices) { device in
-            NavigationLink {
-                DeviceDetailView(device: device)
-            } label: {
-                DeviceRowView(
-                    device: device,
-                    wifiState: viewModel.wifiState(for: device.deviceId)
-                )
+        List {
+            ForEach(storedDevices) { device in
+                NavigationLink {
+                    DeviceDetailView(device: device, selectedTab: $selectedTab)
+                } label: {
+                    DeviceRowView(
+                        device: device,
+                        wifiState: viewModel.wifiState(for: device.deviceId),
+                        isActive: selectedDeviceId == device.deviceId
+                    )
+                }
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    if selectedDeviceId != device.deviceId {
+                        Button {
+                            selectedDeviceId = device.deviceId
+                        } label: {
+                            Label("Make Active", systemImage: "checkmark.circle")
+                        }
+                        .tint(.accentColor)
+                    }
+                }
+                .contextMenu {
+                    Button {
+                        selectedDeviceId = device.deviceId
+                    } label: {
+                        Label(
+                            selectedDeviceId == device.deviceId ? "Active Device" : "Make Active",
+                            systemImage: selectedDeviceId == device.deviceId
+                                ? "checkmark.circle.fill" : "checkmark.circle"
+                        )
+                    }
+                    .disabled(selectedDeviceId == device.deviceId)
+                }
             }
         }
+    }
+
+    private func reconcileActiveDevice() {
+        let resolved = ActiveDeviceSelection.reconciled(
+            savedID: selectedDeviceId,
+            availableIDs: storedDevices.map(\.deviceId)
+        )
+        if selectedDeviceId != resolved { selectedDeviceId = resolved }
     }
 
     private var emptyState: some View {
@@ -104,24 +150,36 @@ struct ContentView: View {
 private struct DeviceRowView: View {
     let device: StoredDevice
     let wifiState: WiFiReachabilityState
+    let isActive: Bool
     @ObservedObject private var bluetooth: BLEHIDControlTransport
 
-    init(device: StoredDevice, wifiState: WiFiReachabilityState) {
+    init(device: StoredDevice, wifiState: WiFiReachabilityState, isActive: Bool) {
         self.device = device
         self.wifiState = wifiState
+        self.isActive = isActive
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(presence.color)
-                .frame(width: 10, height: 10)
+            Image(systemName: "memorychip")
+                .foregroundStyle(presence.color)
+                .frame(width: 20)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(device.displayName)
-                    .font(.headline)
+                HStack(spacing: AppTheme.Spacing.compact) {
+                    Text(device.displayName)
+                        .font(.headline)
+                    if isActive {
+                        Text("Active")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                    }
+                }
                 Text(presence.title)
                     .font(.subheadline)
                     .foregroundStyle(presence.color)
@@ -131,7 +189,7 @@ private struct DeviceRowView: View {
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(device.displayName), \(presence.title), \(presence.detail)")
+            .accessibilityLabel("\(device.displayName), \(isActive ? "active device, " : "")\(presence.title), \(presence.detail)")
         }
         .padding(.vertical, 2)
         .task { await bluetooth.connect() }
@@ -146,13 +204,17 @@ private struct DeviceRowView: View {
     }
 }
 
-private struct LiveDeviceStatusView: View {
+struct DeviceConnectionBanner: View {
     let device: StoredDevice
+    var showsRecoveryActions = true
     @EnvironmentObject private var viewModel: HomeViewModel
+    @Environment(\.modelContext) private var modelContext
     @ObservedObject private var bluetooth: BLEHIDControlTransport
+    @State private var isRetrying = false
 
-    init(device: StoredDevice) {
+    init(device: StoredDevice, showsRecoveryActions: Bool = true) {
         self.device = device
+        self.showsRecoveryActions = showsRecoveryActions
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
     }
 
@@ -165,42 +227,128 @@ private struct LiveDeviceStatusView: View {
     }
 
     var body: some View {
-        HStack {
-            Label(presence.title, systemImage: presence.isUsable ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(presence.color)
-            Spacer()
-            Text(presence.detail).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+            HStack(alignment: .firstTextBaseline, spacing: AppTheme.Spacing.compact) {
+                Label(presence.title, systemImage: presence.systemImage)
+                    .font(.headline)
+                    .foregroundStyle(presence.color)
+                Spacer()
+                if isRetrying { ProgressView().controlSize(.small) }
+            }
+            Text(presence.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if showsRecoveryActions {
+                recoveryActions
+            }
         }
+        .accessibilityElement(children: .contain)
         .task { await bluetooth.connect() }
+    }
+
+    @ViewBuilder
+    private var recoveryActions: some View {
+        if bluetooth.radioState == .unauthorized && !presence.isUsable {
+            Label("Bluetooth access is disabled for InputPilot.", systemImage: "bluetooth.slash")
+                .font(.caption)
+                .foregroundStyle(AppColors.attention)
+            Button("Open InputPilot Settings") { openAppSettings() }
+        } else if bluetooth.radioState == .poweredOff && !presence.isUsable {
+            Label("Bluetooth is off. Turn it on in Control Center or Settings.", systemImage: "bluetooth.slash")
+                .font(.caption)
+                .foregroundStyle(AppColors.attention)
+        } else if presence.needsUSBTrustRecovery {
+            NavigationLink("Restore USB Trust") { USBPairingInputTestView() }
+        } else if presence.canRetry {
+            Button("Try Again") { Task { await retry() } }
+                .disabled(isRetrying)
+        }
+    }
+
+    @MainActor
+    private func retry() async {
+        guard !isRetrying else { return }
+        isRetrying = true
+        defer { isRetrying = false }
+        async let bluetoothRetry: Void = bluetooth.connect()
+        await viewModel.refreshDevice(device, context: modelContext)
+        await bluetoothRetry
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+}
+
+struct ActiveDevicePicker: View {
+    let devices: [StoredDevice]
+    @Binding var selection: String
+
+    var body: some View {
+        Picker("Active Device", selection: $selection) {
+            ForEach(devices) { device in
+                Text(device.displayName).tag(device.deviceId)
+            }
+        }
+        .livePickerAccent()
+        .accessibilityHint("Changes the device used by Control, Firmware, and Settings.")
     }
 }
 
 private struct ControlRootView: View {
     let devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
-    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
     var body: some View {
         Group {
             if let selected {
-                List {
-                    Section("Active device") { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
-                    Section("Connection") { LiveDeviceStatusView(device: selected) }
-                    Section { NavigationLink { HIDControlView(device: selected) } label: { Label("Open Trackpad, Keyboard, Presets & Macros", systemImage: "computermouse") } }
-                }
+                HIDControlView(device: selected, devices: devices)
+                    .id(selected.deviceId)
             } else { ContentUnavailableView("Select an InputPilot device", systemImage: "computermouse", description: Text("Add a device in the Devices tab first.")) }
-        }.navigationTitle("Control").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+        }
+        .task(id: devices.map(\.deviceId)) { reconcileSelection() }
+    }
+
+    private func reconcileSelection() {
+        selectedDeviceId = ActiveDeviceSelection.reconciled(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        )
     }
 }
 
 private struct FirmwareRootView: View {
     let devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
-    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
     var body: some View {
         Group {
             if let selected { FirmwareDeviceView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) }
             else { ContentUnavailableView("Select an InputPilot device", systemImage: "arrow.triangle.2.circlepath", description: Text("Select an InputPilot device to view firmware information and updates.")) }
-        }.navigationTitle("Firmware").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+        }
+        .navigationTitle("Firmware")
+        .task(id: devices.map(\.deviceId)) { reconcileSelection() }
+    }
+
+    private func reconcileSelection() {
+        selectedDeviceId = ActiveDeviceSelection.reconciled(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        )
     }
 }
 
@@ -215,9 +363,15 @@ private struct FirmwareDeviceView: View {
     @State private var selectedData: Data?
     @State private var selectedName = ""
     @State private var targetVersion = ""
+    @State private var selectedExpectedSHA256: String?
     @State private var manualValidationError: String?
+    @State private var showOverrideConfirmation = false
     private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
+    @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
+    @AppStorage("developerMode") private var developerMode = false
+    @AppStorage("firmwareAllowDowngrade") private var allowDowngrade = false
+    @AppStorage("firmwareIgnorePublishedChecksum") private var ignorePublishedChecksum = false
     init(device: StoredDevice, devices: [StoredDevice], selection: Binding<String>) {
         self.device = device; self.devices = devices; _selection = selection
         let transport = InputPilotBluetoothManager.session(deviceId: device.deviceId)
@@ -230,10 +384,18 @@ private struct FirmwareDeviceView: View {
     var body: some View {
         Form {
             Section("Firmware") {
-                Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } }
-                LiveDeviceStatusView(device: device)
-                LabeledContent("Installed firmware", value: device.firmwareVersion ?? "Unknown")
-                LabeledContent("Latest firmware", value: releaseSource.manifest?.version ?? "Not checked")
+                ActiveDevicePicker(devices: devices, selection: $selection)
+                LabeledContent("Update channel", value: updateChannel.rawValue)
+                DeviceConnectionBanner(device: device)
+                HStack(spacing: AppTheme.Spacing.compact) {
+                    firmwareVersionBadge(device.firmwareVersion ?? "Unknown", label: "Installed")
+                    Image(systemName: "arrow.right")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    firmwareVersionBadge(releaseSource.manifest?.version ?? "Not checked", label: "Available")
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .combine)
                 LabeledContent("Update status", value: releaseSource.status.title)
                 if let detail = releaseSource.status.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
             }
@@ -245,14 +407,86 @@ private struct FirmwareDeviceView: View {
                 } else if !device.capabilities.contains("secure_ota") {
                     Label("The installed firmware does not provide a supported update transport.", systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning)
                 } else {
-                    Button("Check for Updates") { Task { await releaseSource.check(installed: device.firmwareVersion, deviceOTASchema: device.otaSchema, appVersion: appVersion) } }
-                    if releaseSource.status.canDownload { Button("Download Firmware \(releaseSource.manifest?.version ?? "")") { Task { if let result = await releaseSource.downloadFirmware() { selectedData = result; selectedName = "firmware.bin"; targetVersion = releaseSource.manifest?.version ?? ""; manualValidationError = nil } } }.buttonStyle(.borderedProminent) }
+                    Button {
+                        Task {
+                            await releaseSource.check(
+                                installed: device.firmwareVersion,
+                                deviceOTASchema: device.otaSchema,
+                                appVersion: appVersion,
+                                channel: updateChannel
+                            )
+                        }
+                    } label: {
+                        Label(
+                            releaseSource.status == .checking ? "Checking…" : "Check for Updates",
+                            systemImage: releaseSource.status == .checking ? "arrow.triangle.2.circlepath" : "arrow.clockwise"
+                        )
+                    }
+                    .disabled(releaseSource.status == .checking)
+                    if releaseSource.status.canDownload(allowDowngrade: activeOptions.allowDowngrade) {
+                        Button {
+                            Task {
+                                if let result = await releaseSource.downloadFirmware(
+                                    allowDowngrade: activeOptions.allowDowngrade,
+                                    ignorePublishedChecksum: activeOptions.ignorePublishedChecksum
+                                ) {
+                                    selectedData = result
+                                    selectedName = "firmware.bin"
+                                    targetVersion = releaseSource.manifest?.version ?? ""
+                                    selectedExpectedSHA256 = releaseSource.manifest?.sha256
+                                    manualValidationError = nil
+                                }
+                            }
+                        } label: {
+                            Label(
+                                releaseSource.isDownloading ? "Downloading & Validating…" : "Download Firmware \(releaseSource.manifest?.version ?? "")",
+                                systemImage: releaseSource.isDownloading ? "hourglass" : "arrow.down.circle"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(releaseSource.isDownloading)
+                    }
                     if let error = releaseSource.errorMessage { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
-                    if let selectedData { LabeledContent("File", value: selectedName); LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file)) }
+                    if let selectedData {
+                        LabeledContent("File", value: selectedName)
+                        LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(selectedData.count), countStyle: .file))
+                        if selectedExpectedSHA256 != nil {
+                            Label(
+                                activeOptions.ignorePublishedChecksum ? "Published SHA-256 check overridden" : "Published SHA-256 verified",
+                                systemImage: activeOptions.ignorePublishedChecksum ? "exclamationmark.shield" : "checkmark.shield"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(activeOptions.ignorePublishedChecksum ? AppColors.warning : AppColors.success)
+                        }
+                    }
                     if let manualValidationError { Label(manualValidationError, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.warning) }
-                    Button("Choose Firmware File") { importing = true }
+                    Button { importing = true } label: { Label("Choose Firmware File", systemImage: "doc.badge.plus") }
                     if selectedData != nil { TextField("Firmware version", text: $targetVersion).textInputAutocapitalization(.never).autocorrectionDisabled() }
-                    if let selectedData { Button("Update Firmware") { updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic); Task { await updater.install(selectedData, version: targetVersion, expectedSHA256: releaseSource.manifest?.version == targetVersion ? releaseSource.manifest?.sha256 : nil) } }.buttonStyle(.borderedProminent).disabled(targetVersion.isEmpty) }
+                    if let selectedData {
+                        Button {
+                            if activeOptions == .init() { install(selectedData) }
+                            else { showOverrideConfirmation = true }
+                        } label: {
+                            Label(activeOptions.allowDowngrade ? "Install Older Firmware" : "Update Firmware", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(targetVersion.isEmpty || updater.blocksControl)
+                    }
+                }
+            }
+            if developerMode {
+                Section("Developer Overrides") {
+                    Toggle("Allow firmware downgrade", isOn: $allowDowngrade)
+                    Toggle("Ignore published SHA-256", isOn: $ignorePublishedChecksum)
+                        .disabled(selectedExpectedSHA256 == nil && selectedData != nil)
+                    Label("Overrides require confirmation. Firmware image compatibility and transfer integrity are still checked on the device.", systemImage: "wrench.and.screwdriver")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.warning)
+                }
+            }
+            if let notes = releaseSource.releaseNotes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Section("Release Notes") {
+                    Text(.init(notes)).font(.callout).textSelection(.enabled)
                 }
             }
             if updater.state != .idle {
@@ -261,7 +495,7 @@ private struct FirmwareDeviceView: View {
                     Text(statusText).accessibilityLabel("Firmware update status: \(statusText)")
                     if let transport = updater.activeTransport { LabeledContent("Transport", value: transport.rawValue) }
                     if updater.totalBytes > 0 { Text("\(Int(updater.progress * 100))% · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesSent), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(updater.totalBytes), countStyle: .file)) · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesPerSecond), countStyle: .file))/s").font(.caption).foregroundStyle(.secondary) }
-                    if case .transferring = updater.state { Button("Cancel", role: .cancel) { updater.cancel() }.tint(AppColors.primary) }
+                    if case .transferring = updater.state { Button("Cancel", role: .cancel) { updater.cancel() } }
                 }
             }
         }
@@ -271,14 +505,68 @@ private struct FirmwareDeviceView: View {
             device.firmwareVersion = installed
             releaseSource.reconcile(installed: installed, deviceOTASchema: device.otaSchema, appVersion: appVersion)
         }
+        .onChange(of: updateChannelName) { _, _ in releaseSource.reset() }
+        .onChange(of: developerMode) { _, enabled in
+            if !enabled { allowDowngrade = false; ignorePublishedChecksum = false }
+        }
+        .confirmationDialog("Install with Developer Overrides?", isPresented: $showOverrideConfirmation, titleVisibility: .visible) {
+            if let selectedData {
+                Button("Install Firmware", role: .destructive) { install(selectedData) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(overrideConfirmationMessage)
+        }
+        .sensoryFeedback(.success, trigger: updater.state == .completed)
+        .sensoryFeedback(.error, trigger: updateFailed)
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data]) { result in
             guard case let .success(url) = result, url.pathExtension.lowercased() == "bin", url.startAccessingSecurityScopedResource() else { return }
             defer { url.stopAccessingSecurityScopedResource() }
             guard let data = try? Data(contentsOf: url) else { return }
-            selectedData = data; selectedName = url.lastPathComponent
+            selectedData = data; selectedName = url.lastPathComponent; selectedExpectedSHA256 = nil
             do { targetVersion = try FirmwareImageMetadata.parseAndValidate(data).version; manualValidationError = nil }
             catch { targetVersion = ""; manualValidationError = error.localizedDescription }
         }
+    }
+    private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
+    private var updateFailed: Bool {
+        if case .failed = updater.state { return true }
+        return false
+    }
+    private var activeOptions: FirmwareInstallOptions {
+        guard developerMode else { return .init() }
+        return FirmwareInstallOptions(
+            allowDowngrade: allowDowngrade,
+            ignorePublishedChecksum: ignorePublishedChecksum
+        )
+    }
+    private var overrideConfirmationMessage: String {
+        var enabled: [String] = []
+        if activeOptions.allowDowngrade { enabled.append("downgrade protection") }
+        if activeOptions.ignorePublishedChecksum { enabled.append("the published SHA-256 check") }
+        return "This installation overrides \(enabled.joined(separator: " and ")). Continue only with firmware you trust."
+    }
+    private func install(_ data: Data) {
+        let options = activeOptions
+        let version = targetVersion
+        let expectedSHA256 = selectedExpectedSHA256
+        updater.configure(device: device, mode: ConnectionMode(rawValue: connectionModeRaw) ?? .automatic)
+        Task {
+            await updater.install(
+                data,
+                version: version,
+                expectedSHA256: expectedSHA256,
+                options: options
+            )
+        }
+    }
+    private func firmwareVersionBadge(_ value: String, label: String) -> some View {
+        VStack(spacing: 3) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.subheadline.monospaced().weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
     }
     private var statusText: String { switch updater.state { case .idle: "Ready"; case .checking: "Checking…"; case .connecting: "Connecting…"; case .authenticating: "Authenticating…"; case .preparing: "Preparing…"; case .transferring: "Updating firmware…"; case .waitingForFinalAck: "Waiting for final acknowledgement…"; case .verifying: "Verifying firmware…"; case .installing: "Installing firmware…"; case .rebooting: "Restarting InputPilot…"; case .reconnecting: "Reconnecting…"; case .verifyingInstalledVersion: "Verifying installed firmware…"; case .completed: "Firmware updated successfully"; case .cancelled: "Update cancelled. Existing firmware remains installed."; case let .failed(message): message } }
 }
@@ -289,29 +577,32 @@ private struct FirmwareDeviceView: View {
     @Published var manifest: FirmwareManifest?
     @Published var status = FirmwareReleaseStatus.notChecked
     @Published var errorMessage: String?
+    @Published var releaseNotes: String?
+    @Published var isDownloading = false
     private var firmwareURL: URL?
     func reconcile(installed: String?, deviceOTASchema: Int, appVersion: String) {
         guard let manifest else { return }
         status = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: manifest, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
     }
-    func check(installed: String?, deviceOTASchema: Int, appVersion: String) async {
-        errorMessage = nil; manifest = nil; firmwareURL = nil; status = .checking
+    func reset() {
+        manifest = nil; status = .notChecked; errorMessage = nil; releaseNotes = nil; firmwareURL = nil
+    }
+    func check(installed: String?, deviceOTASchema: Int, appVersion: String,
+               channel: UpdateChannel = .stable) async {
+        errorMessage = nil; manifest = nil; releaseNotes = nil; firmwareURL = nil; status = .checking
         do {
-            let url = URL(string: "https://api.github.com/repos/thorethy1/InputPilot/releases/latest")!
-            var request = URLRequest(url: url); request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            let request = Self.releaseRequest(for: channel)
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let assets = json["assets"] as? [[String: Any]],
-                  let manifestString = assets.first(where: { $0["name"] as? String == Self.manifestAssetName })?["browser_download_url"] as? String,
-                  let firmwareString = assets.first(where: { $0["name"] as? String == Self.firmwareAssetName })?["browser_download_url"] as? String,
-                  let manifestURL = URL(string: manifestString), let imageURL = URL(string: firmwareString) else { throw URLError(.badServerResponse) }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            let release = try Self.selectRelease(from: data, channel: channel)
+            guard let manifestURL = release.assetURL(named: Self.manifestAssetName),
+                  let imageURL = release.assetURL(named: Self.firmwareAssetName) else { throw URLError(.badServerResponse) }
             let (manifestData, manifestResponse) = try await URLSession.shared.data(from: manifestURL)
             guard (manifestResponse as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
             let decoded = try JSONDecoder().decode(FirmwareManifest.self, from: manifestData)
             let evaluated = FirmwareReleaseEvaluator.evaluate(installed: installed, manifest: decoded, deviceOTASchema: deviceOTASchema, appVersion: appVersion)
-            manifest = decoded; status = evaluated
-            if evaluated.canDownload {
+            manifest = decoded; releaseNotes = release.body; status = evaluated
+            if evaluated.canDownload(allowDowngrade: true) {
                 try FirmwareManifestValidator.validate(decoded)
                 firmwareURL = imageURL
             }
@@ -320,14 +611,96 @@ private struct FirmwareDeviceView: View {
             errorMessage = message; status = .unavailable(message)
         }
     }
-    func downloadFirmware() async -> Data? {
-        guard status.canDownload, let firmwareURL, let manifest else { return nil }
+    func downloadFirmware(allowDowngrade: Bool = false,
+                          ignorePublishedChecksum: Bool = false) async -> Data? {
+        guard status.canDownload(allowDowngrade: allowDowngrade),
+              let firmwareURL, let manifest else { return nil }
+        isDownloading = true
+        errorMessage = nil
+        defer { isDownloading = false }
         do {
             let (data, response) = try await URLSession.shared.data(from: firmwareURL)
             guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) == true else { throw URLError(.badServerResponse) }
-            try FirmwareManifestValidator.validate(manifest, firmware: data)
+            try FirmwareManifestValidator.validate(
+                manifest,
+                firmware: data,
+                ignorePublishedChecksum: ignorePublishedChecksum
+            )
             return data
-        } catch { errorMessage = "Could not download the firmware image."; return nil }
+        } catch { errorMessage = error.localizedDescription; return nil }
+    }
+}
+
+struct GitHubReleaseDescriptor: Codable, Equatable, Sendable {
+    struct Asset: Codable, Equatable, Sendable {
+        let name: String
+        let browserDownloadURL: URL
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
+    }
+
+    let tagName: String
+    let draft: Bool
+    let prerelease: Bool
+    let body: String?
+    let assets: [Asset]
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case draft, prerelease, body, assets
+    }
+
+    func assetURL(named name: String) -> URL? {
+        assets.first { $0.name == name }?.browserDownloadURL
+    }
+
+    var isVersionedBeta: Bool {
+        let parts = tagName.components(separatedBy: "-beta.")
+        guard parts.count == 2, parts[0].hasPrefix("v"), Int(parts[1]) != nil else { return false }
+        return SemanticVersion(String(parts[0].dropFirst())) != nil
+    }
+}
+
+extension GitHubFirmwareSource {
+    static func releaseRequest(for channel: UpdateChannel) -> URLRequest {
+        var components = URLComponents(url: channel.releaseAPIURL, resolvingAgainstBaseURL: false)
+        var queryItems = components?.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "cache_bust", value: UUID().uuidString))
+        components?.queryItems = queryItems
+        var request = URLRequest(
+            url: components?.url ?? channel.releaseAPIURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 15
+        )
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
+    static func selectRelease(from data: Data, channel: UpdateChannel) throws -> GitHubReleaseDescriptor {
+        let decoder = JSONDecoder()
+        switch channel {
+        case .stable:
+            let release = try decoder.decode(GitHubReleaseDescriptor.self, from: data)
+            guard !release.draft, !release.prerelease else { throw URLError(.badServerResponse) }
+            return release
+        case .beta:
+            let releases = try decoder.decode([GitHubReleaseDescriptor].self, from: data)
+            let eligible = releases.filter {
+                !$0.draft && $0.prerelease && $0.isVersionedBeta &&
+                $0.assetURL(named: manifestAssetName) != nil &&
+                $0.assetURL(named: firmwareAssetName) != nil
+            }
+            guard let release = eligible.max(by: {
+                guard let lhs = SemanticVersion(String($0.tagName.dropFirst())),
+                      let rhs = SemanticVersion(String($1.tagName.dropFirst())) else { return false }
+                return lhs < rhs
+            }) else { throw URLError(.resourceUnavailable) }
+            return release
+        }
     }
 }
 
@@ -335,46 +708,333 @@ private struct ConnectionSettingsView: View {
     @Query(sort: \StoredDevice.displayName) private var devices: [StoredDevice]
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
-    private var selected: StoredDevice? { devices.first { $0.deviceId == selectedDeviceId } ?? devices.first }
+    @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selectedDeviceId,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
     private let appVersion = AppVersionInfo.read()
     var body: some View {
         Form {
+            if let selected {
+                Section("Active Device") {
+                    ActiveDevicePicker(devices: devices, selection: $selectedDeviceId)
+                    DeviceConnectionBanner(device: selected)
+                }
+            }
             Section("Connection") {
-                if let selected { LiveDeviceStatusView(device: selected) }
                 Picker("Default transport", selection: $mode) { ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0.rawValue) } }
+                    .livePickerAccent()
                 Text(explanation).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Personalization") {
+                NavigationLink { AppearanceSettingsView() } label: {
+                    Label("Appearance", systemImage: "paintpalette")
+                }
+            }
+            Section("Updates") {
+                Picker("Channel", selection: $updateChannelName) {
+                    ForEach(UpdateChannel.allCases) { channel in
+                        Text(channel.rawValue).tag(channel.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(updateChannel.detail)
+                    .font(.caption)
+                    .foregroundStyle(updateChannel == .beta ? AppColors.warning : .secondary)
+                ShareLink(item: updateChannel.altStoreSourceURL) {
+                    Label("Share AltStore \(updateChannel.rawValue) Source", systemImage: "square.and.arrow.up")
+                }
+                Text("The channel controls firmware OTA checks. Add the matching source in AltStore to receive app updates from the same channel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             if let selected, PairingKeyStore.load(deviceId: selected.deviceId) == nil {
                 Section("Security") {
                     Label("\(selected.displayName) cannot be used until USB trust is restored.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(AppColors.warning)
-                    NavigationLink("Secure lifecycle") { SecureLifecycleGuideView() }
+                    NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
                 }
             }
-            Section("Diagnostics") {
+            Section("Secrets") {
+                NavigationLink {
+                    SecretsView()
+                } label: {
+                    Label("Manage Secrets", systemImage: "key")
+                }
+            }
+            Section("Support") {
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
-                NavigationLink("Secure Lifecycle Guide") { SecureLifecycleGuideView() }
-                if let selected { NavigationLink("Firmware Logs") { FirmwareLogsView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) } }
-                else { LabeledContent("Firmware Logs", value: "Add a device first") }
-                NavigationLink("App Logs") { AppLogsView() }
-                if let selected { NavigationLink("Export Diagnostics") { DiagnosticsExportView(device: selected) } }
+                NavigationLink("Status LED Matrix") { StatusLEDMatrixView() }
+                NavigationLink("Diagnostics & Advanced") {
+                    DiagnosticsSettingsView(devices: devices, selection: $selectedDeviceId)
+                }
             }
             Section("About") {
                 LabeledContent("App Version", value: appVersion.version)
                 LabeledContent("Build", value: appVersion.build)
-                LabeledContent("App Commit", value: appVersion.commit)
-                if let selected {
-                    if devices.count > 1 { Picker("Device", selection: $selectedDeviceId) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
+            }
+        }
+        .navigationTitle("Settings")
+        .task(id: devices.map(\.deviceId)) {
+            selectedDeviceId = ActiveDeviceSelection.reconciled(
+                savedID: selectedDeviceId,
+                availableIDs: devices.map(\.deviceId)
+            )
+        }
+    }
+    private var updateChannel: UpdateChannel { UpdateChannel(rawValue: updateChannelName) ?? .stable }
+    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
+}
+
+private struct AppearanceSettingsView: View {
+    @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
+    @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
+    @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
+    var body: some View {
+        Form {
+            Section("Appearance") {
+                Picker("Interface", selection: $appearanceName) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Text(appearance.rawValue).tag(appearance.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 10)], spacing: 10) {
+                    ForEach(AppAccent.allCases) { accent in
+                        accentButton(accent)
+                    }
+                }
+                if selectedAccent == .custom {
+                    ColorPicker("Custom accent color", selection: customAccentBinding, supportsOpacity: false)
+                    Text(customAccentHex)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                Label("Status and destructive colors keep their meaning when the accent changes.", systemImage: "paintpalette")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Appearance")
+    }
+    private var selectedAccent: AppAccent { AppAccent.resolve(accentName) }
+    private var customAccentBinding: Binding<Color> {
+        Binding(
+            get: { AccentColorCodec.color(from: customAccentHex) },
+            set: {
+                customAccentHex = AccentColorCodec.hex(from: $0)
+                accentName = AppAccent.custom.rawValue
+            }
+        )
+    }
+    private func accentButton(_ accent: AppAccent) -> some View {
+        let color = accent.color(customHex: customAccentHex)
+        let selected = selectedAccent == accent
+        return Button {
+            accentName = accent.rawValue
+        } label: {
+            VStack(spacing: 7) {
+                Circle()
+                    .fill(color)
+                    .shadow(color: color.opacity(0.45), radius: 3)
+                    .frame(width: 28, height: 28)
+                    .overlay {
+                        if selected {
+                            Image(systemName: "checkmark")
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                        }
+                    }
+                Text(accent.rawValue)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity, minHeight: 76)
+            .padding(.horizontal, 4)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(selected ? color : .clear, lineWidth: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accent.rawValue)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+    }
+}
+
+private struct StatusLEDMatrixView: View {
+    private enum LEDPattern {
+        case solid(opacity: Double)
+        case blinking(period: TimeInterval)
+        case pulse(period: TimeInterval, duration: TimeInterval)
+        case breathing(period: TimeInterval)
+    }
+
+    private struct LEDState: Identifiable {
+        let id: String
+        let color: Color
+        let pattern: LEDPattern
+        let patternDescription: String
+        let meaning: String
+    }
+
+    private let states = [
+        LEDState(id: "Firmware Update", color: .orange, pattern: .blinking(period: 0.36), patternDescription: "Amber · fast blinking", meaning: "An OTA firmware update is active."),
+        LEDState(id: "Fallback AP", color: .purple, pattern: .pulse(period: 4.0, duration: 0.18), patternDescription: "Violet · brief pulse every 4 seconds", meaning: "The optional fallback network is active. A 180 ms violet pulse briefly interrupts the normal status color, then the LED returns to blue, breathing cyan, or dim green."),
+        LEDState(id: "Keep Awake", color: .cyan, pattern: .breathing(period: 1.2), patternDescription: "Cyan · breathing", meaning: "Automatic pointer movement or clicking is enabled, independent of the active transport."),
+        LEDState(id: "Controller Connected", color: .blue, pattern: .solid(opacity: 1), patternDescription: "Blue · solid", meaning: "An authenticated iOS control session is connected over Bluetooth or Wi-Fi."),
+        LEDState(id: "Ready", color: .green, pattern: .solid(opacity: 0.45), patternDescription: "Green · dim solid", meaning: "At least one control transport is ready, including Bluetooth-only operation."),
+        LEDState(id: "Unavailable", color: .red, pattern: .blinking(period: 1.5), patternDescription: "Red · slow blinking", meaning: "No Bluetooth or Wi-Fi control path is currently ready.")
+    ]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(states) { state in
+                    HStack(alignment: .top, spacing: 12) {
+                        AnimatedLED(color: state.color, pattern: state.pattern)
+                            .padding(.top, 3)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(state.id).font(.headline)
+                            Text(state.patternDescription).font(.subheadline).foregroundStyle(.secondary)
+                            Text(state.meaning).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            } footer: {
+                Text("During OTA updates, amber blinking takes priority and suppresses the AP pulse. The fallback AP stays active while an iPhone is connected. Bluetooth advertising recovery is automatic and uses no separate LED pattern.")
+            }
+        }
+        .navigationTitle("Status LED Matrix")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private struct AnimatedLED: View {
+        let color: Color
+        let pattern: LEDPattern
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                Circle()
+                    .fill(color)
+                    .opacity(opacity(at: context.date.timeIntervalSinceReferenceDate))
+                    .shadow(color: color.opacity(0.55), radius: 4)
+                    .frame(width: 18, height: 18)
+            }
+        }
+
+        private func opacity(at time: TimeInterval) -> Double {
+            if reduceMotion, case let .solid(opacity) = pattern { return opacity }
+            if reduceMotion { return 1 }
+            switch pattern {
+            case let .solid(opacity): return opacity
+            case let .blinking(period):
+                return time.truncatingRemainder(dividingBy: period) < period / 2 ? 1 : 0.08
+            case let .pulse(period, duration):
+                return time.truncatingRemainder(dividingBy: period) < duration ? 1 : 0.08
+            case let .breathing(period):
+                return 0.2 + 0.8 * ((sin((time / period) * 2 * Double.pi) + 1) / 2)
+            }
+        }
+    }
+}
+
+private struct DiagnosticsSettingsView: View {
+    let devices: [StoredDevice]
+    @Binding var selection: String
+    @AppStorage("connectionMode") private var connectionMode = ConnectionMode.automatic.rawValue
+    @AppStorage("developerMode") private var developerMode = false
+    @AppStorage("firmwareAllowDowngrade") private var allowDowngrade = false
+    @AppStorage("firmwareIgnorePublishedChecksum") private var ignorePublishedChecksum = false
+    private let appVersion = AppVersionInfo.read()
+
+    private var selected: StoredDevice? {
+        guard let selectedID = ActiveDeviceSelection.resolve(
+            savedID: selection,
+            availableIDs: devices.map(\.deviceId)
+        ) else { return nil }
+        return devices.first { $0.deviceId == selectedID }
+    }
+
+    var body: some View {
+        Form {
+            if let selected {
+                Section("Device") {
+                    ActiveDevicePicker(devices: devices, selection: $selection)
+                    DeviceConnectionBanner(device: selected)
+                    LabeledContent("Device ID", value: selected.deviceId)
                     LabeledContent("Firmware", value: selected.firmwareVersion ?? "Unknown")
                     LabeledContent("Secure Protocol", value: "v\(selected.protocolVersion)")
                     LabeledContent("OTA Schema", value: String(selected.otaSchema))
-                    if let lastSeen = selected.lastSeen { LabeledContent("Last seen", value: lastSeen.formatted(date: .abbreviated, time: .shortened)) }
+                    LabeledContent("Connection Mode", value: connectionMode)
+                    if let lastSeen = selected.lastSeen {
+                        LabeledContent(
+                            "Last Seen",
+                            value: lastSeen.formatted(date: .abbreviated, time: .shortened)
+                        )
+                    }
+                }
+
+                Section("Device Diagnostics") {
+                    NavigationLink("Firmware Logs") {
+                        FirmwareLogsView(
+                            device: selected,
+                            devices: devices,
+                            selection: $selection
+                        )
+                        .id(selected.deviceId)
+                    }
+                    NavigationLink("Export Diagnostics") {
+                        DiagnosticsExportView(device: selected)
+                    }
+                }
+            } else {
+                Section {
+                    ContentUnavailableView(
+                        "No Device Selected",
+                        systemImage: "wrench.and.screwdriver",
+                        description: Text("Add a device to inspect connection and firmware diagnostics.")
+                    )
                 }
             }
-            Section("Appearance") { Label("InputPilot uses the native iOS interface with a red brand accent. Status colors remain semantic.", systemImage: "paintpalette") }
-        }.navigationTitle("Settings").onAppear { if selectedDeviceId.isEmpty { selectedDeviceId = devices.first?.deviceId ?? "" } }
+
+            Section("App Diagnostics") {
+                NavigationLink("App Logs") { AppLogsView() }
+            }
+
+            Section("Developer Mode") {
+                Toggle("Enable Developer Mode", isOn: $developerMode)
+                Text("Shows explicit firmware downgrade and published checksum overrides in the Firmware tab.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("App Build") {
+                LabeledContent("Version", value: appVersion.version)
+                LabeledContent("Build", value: appVersion.build)
+                LabeledContent("Commit", value: appVersion.commit)
+            }
+        }
+        .navigationTitle("Diagnostics")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: developerMode) { _, enabled in
+            if !enabled {
+                allowDowngrade = false
+                ignorePublishedChecksum = false
+            }
+        }
     }
-    private var explanation: String { switch ConnectionMode(rawValue: mode) ?? .automatic { case .automatic: "Uses authenticated Bluetooth for interactive controls and authenticated Wi-Fi for bulk work."; case .preferBluetooth: "Prefers the authenticated Bluetooth session when both transports are ready."; case .preferWiFi: "Prefers the authenticated Wi-Fi session when both transports are ready."; case .bluetoothOnly: "Uses only an authenticated Bluetooth session."; case .wifiOnly: "Uses only an authenticated Secure Protocol session over Wi-Fi." } }
 }
 
 struct USBPairingInputTestView: View {
@@ -403,11 +1063,11 @@ struct USBPairingInputTestView: View {
                 case .waiting:
                     Text("Waiting for InputPilot…").foregroundStyle(.secondary)
                 case .valid:
-                    Label("Paired securely with \(pairedDeviceId)", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
+                    Label("Paired securely with \(pairedDeviceId)", systemImage: "checkmark.shield.fill").foregroundStyle(AppColors.success)
                 case .invalid:
-                    Label("Input was received, but it was not a valid InputPilot pairing frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Label("Input was received, but it was not a valid InputPilot pairing frame", systemImage: "exclamationmark.triangle.fill").foregroundStyle(AppColors.warning)
                 case .storageFailed:
-                    Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(.red)
+                    Label("The credential could not be saved in Keychain", systemImage: "exclamationmark.shield.fill").foregroundStyle(AppColors.error)
                 }
                 Button("Pair another device") { captured = ""; pairedDeviceId = ""; result = .waiting }
                     .disabled(embedded && result == .valid)
@@ -458,35 +1118,6 @@ struct USBPairingInputTestView: View {
     }
 }
 
-struct SecureLifecycleGuideView: View {
-    var body: some View {
-        List {
-            Section("Requirements") {
-                Label("Install current Secure Protocol v2 firmware by USB flash.", systemImage: "1.circle")
-                Label("Older firmware is intentionally not compatible with this app.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(AppColors.warning)
-            }
-            Section("Trust") {
-                Label("Connect InputPilot directly to the iPhone by USB.", systemImage: "2.circle")
-                Label("Focus Secure Pairing, then hold BOOT for two seconds.", systemImage: "3.circle")
-                Label("The 128-bit secret is stored in Keychain. A new code invalidates every previous session.", systemImage: "4.circle")
-            }
-            Section("After pairing") {
-                Label("Bluetooth and Wi-Fi carry the same authenticated encrypted protocol.", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
-                Label("Setup, controls, diagnostics, management, and OTA never use plaintext endpoints.", systemImage: "checkmark.shield.fill")
-                    .foregroundStyle(.green)
-                Text("If the key is lost, create a new pairing code over USB. Pair every iPhone again because the old code becomes invalid.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
-                NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
-            }
-        }
-        .navigationTitle("Secure Lifecycle")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
 private struct AppLogsView: View {
     @ObservedObject private var log = AppLog.shared
     @State private var filter = AppLogCategory.all
@@ -514,7 +1145,7 @@ private struct DiagnosticsExportView: View {
     private var text: String {
         let metadata = diagnostics.metadata
         let hid = metadata?.hid
-        return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
+        return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "BLE connected/advertising: \(metadata?.ble?.connected ?? false)/\(metadata?.ble?.advertising ?? false)", "BLE advertising recoveries/failures: \(metadata?.ble?.advertisingRecoveries ?? 0)/\(metadata?.ble?.advertisingRecoveryFailures ?? 0)", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
     }
     var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
 }
@@ -538,14 +1169,14 @@ private struct FirmwareLogsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                if devices.count > 1 { Picker("Device", selection: $selection) { ForEach(devices) { Text($0.displayName).tag($0.deviceId) } } }
+                if devices.count > 1 { ActiveDevicePicker(devices: devices, selection: $selection) }
                 LabeledContent("Connection", value: manager.status)
                 if let metadata = manager.metadata { LabeledContent("Firmware Commit", value: metadata.firmwareCommit ?? "Unknown"); LabeledContent("Reset Reason", value: metadata.resetReason ?? "Unknown") }
                 Picker("Filter", selection: $filter) { ForEach(FirmwareLogFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu)
             }.frame(maxHeight: devices.count > 1 ? 170 : 125)
             ScrollViewReader { proxy in
                 ScrollView { LazyVStack(alignment: .leading, spacing: 4) { ForEach(visible) { line in Text(line.raw).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(line.level == "ERROR" ? .red : line.level == "WARN" ? .orange : .primary).frame(maxWidth: .infinity, alignment: .leading).id(line.id) } }.padding() }
-                    .background(.black.opacity(0.04))
+                    .background(Color(uiColor: .secondarySystemBackground))
                     .onChange(of: visible.count) { _, _ in if !manager.paused, let last = visible.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } }
             }
         }

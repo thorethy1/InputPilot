@@ -73,6 +73,13 @@ Firmware bytes therefore never pass through an HTTP upload endpoint. BLE uses
 the same OTA engine, metadata validation, SHA-256 verification and exclusive
 transport ownership.
 
+`START` rejects a semantic version lower than the running firmware by default.
+An authenticated developer client may append `allow_downgrade=1`; normal app
+flows never send it. The image's embedded product, board, protocol, OTA schema
+and version metadata remain mandatory. The receiving device always hashes the
+complete transferred image before changing the boot partition, including when
+the app's developer option ignores a mismatch with a published manifest hash.
+
 Starting with 0.8.13, `START ... flow=windowed` negotiates cumulative ACK flow
 control. A supporting device replies `ota ready 0 window=4096 chunk=128`; the
 sender may then keep at most `window` unacknowledged bytes in flight. The
@@ -101,6 +108,29 @@ Protocol binary record (`0xA1`, counter, ciphertext, authentication tag), which
 the app decrypts before matching the response to the pending request. `USB GET2`
 always uses this compact form over BLE and returns the full manufacturer-aware
 identity; `USB GET` retains the legacy response for older apps.
+
+## Device-side presets
+
+Firmware advertising `device_presets` accepts a transactional, authenticated
+preset upload. The bytecode contains layout-resolved keyboard reports, mouse
+clicks and non-blocking delays (maximum 60000 ms per delay; delays may be chained):
+
+- `PRESET BEGIN <token-hex> <size> <fnv1a32-hex>` allocates a program and
+  returns `preset ready <token> <received>`.
+- `PRESET DATA <token> <offset> <hex>` writes a Wi-Fi chunk and returns the
+  cumulative `preset ack <token> <received>`.
+- BLE binary management operation `0x06` carries an eight-byte big-endian
+  token, four-byte big-endian offset and raw program bytes after the existing
+  encrypted `0xFE` management marker.
+- `PRESET RUN <token>` starts only after exact size, bytecode and checksum
+  validation. Repeating BEGIN, DATA or RUN after a lost reply is idempotent.
+- `PRESET STATUS` reports `preset <state> <token> <position> <size>`.
+- `PRESET ABORT [token]` stops upload/playback immediately and queues a
+  release-all report.
+
+Only one preset may upload or run at once. Execution is owned by the ESP32 and
+does not depend on either transport remaining connected. OTA start is rejected
+while a preset is active, and preset start/upload is rejected during OTA.
 
 ## Session ownership and recovery
 
@@ -134,8 +164,10 @@ Secure Protocol v2 session as its automatic fallback.
 Firmware stores up to five networks. Saving a network through the encrypted BLE
 management frame adds or updates it and moves it to the front of the connection
 order. On startup (or after a credentials change), station mode tries each saved
-network before exposing the setup Soft-AP. Passwords are never returned to the
-app.
+network before exposing the fallback Soft-AP. While a phone is attached to that
+AP, automatic station retries are deferred so the local no-router control path
+stays connected. Without AP clients, retries preserve fallback HTTP/TCP until a
+station connection succeeds. Passwords are never returned to the app.
 
 Authenticated text command `WIFI LIST` returns `{"count":2}`. The app then
 requests each bounded entry with `WIFI GET 0`, `WIFI GET 1`, and so on; the

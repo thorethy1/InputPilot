@@ -173,6 +173,7 @@ enum DeviceMerge {
     static func wifi(_ status: DeviceStatus, fallbackHost: String, into stored: StoredDevice) {
         if let discoveredId = status.deviceId,
            stored.deviceId.caseInsensitiveCompare(discoveredId) != .orderedSame { return }
+        migrateLegacyAutomaticName(status.name, into: stored)
         if let mdns = status.mdns?.trimmingCharacters(in: .whitespacesAndNewlines), !mdns.isEmpty {
             stored.mdnsHost = mdns
         } else if stored.mdnsHost.isEmpty {
@@ -195,6 +196,7 @@ enum DeviceMerge {
 
     static func bluetooth(_ metadata: BLEDeviceMetadata, into stored: StoredDevice) {
         guard stored.deviceId.caseInsensitiveCompare(metadata.deviceId) == .orderedSame else { return }
+        migrateLegacyAutomaticName(metadata.deviceName, into: stored)
         stored.lastSeen = Date()
         stored.firmwareVersion = metadata.firmware
         stored.protocolVersion = metadata.protocolVersion
@@ -202,5 +204,18 @@ enum DeviceMerge {
         stored.capabilities = Array(Set(stored.capabilities).union(metadata.capabilities)).sorted()
         stored.lastCapabilitiesUpdate = Date()
         stored.bluetoothDiscovered = true
+    }
+
+    private static func migrateLegacyAutomaticName(_ discoveredName: String, into stored: StoredDevice) {
+        let prefix = "InputPilot-"
+        guard stored.displayName.hasPrefix(prefix), !discoveredName.isEmpty else { return }
+        let suffix = String(stored.displayName.dropFirst(prefix.count))
+        let isLegacyHexName = suffix.count == 4 && suffix.allSatisfy(\.isHexDigit)
+        let legacyWords = ["Aero", "Bolt", "Cove", "Dupe", "Echo", "Flux"]
+        let isLegacyFriendlyName = legacyWords.contains { word in
+            suffix.count == word.count + 1 && suffix.hasPrefix(word) && suffix.last?.isNumber == true
+        }
+        guard isLegacyHexName || isLegacyFriendlyName else { return }
+        stored.displayName = discoveredName
     }
 }

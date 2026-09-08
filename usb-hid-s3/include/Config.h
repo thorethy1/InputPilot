@@ -19,6 +19,15 @@
 #endif
 #define OTA_SCHEMA_VERSION 1
 #define OTA_PROTOCOL_VERSION 2
+// Protocol recorded inside this application image. Normal builds use the
+// runtime OTA protocol. The one-time v1-to-v2 migration build overrides only
+// this value so firmware 0.8.8 can validate and install the image; after boot,
+// discovery, secure transports, and all subsequent OTA requests remain v2.
+#ifndef FW_IMAGE_PROTOCOL_VERSION
+#define FW_IMAGE_PROTOCOL_VERSION OTA_PROTOCOL_VERSION
+#endif
+#define INPUTPILOT_STRINGIFY_INNER(value) #value
+#define INPUTPILOT_STRINGIFY(value) INPUTPILOT_STRINGIFY_INNER(value)
 #define FW_PRODUCT      "InputPilot"
 #define FW_BOARD        "esp32-s3-zero-4mb"
 #define FW_METADATA_PREFIX "INPUTPILOT-META:"
@@ -78,8 +87,8 @@
 #define WIFI_CONNECT_TIMEOUT_MS 15000UL
 #define WIFI_RETRY_INTERVAL_MS 30000UL
 
-// Soft-AP / mDNS prefixes. Runtime SSIDs/hostnames append a MAC suffix via
-// DeviceIdentity (e.g. InputPilot-EEFF, inputpilot-eeff.local).
+// Soft-AP/BLE use a friendly deterministic full-MAC-derived name; mDNS keeps
+// the hex suffix (e.g. InputPilot-Halo9, inputpilot-de94.local).
 #define WIFI_AP_SSID_PREFIX  "InputPilot-"
 #define MDNS_HOSTNAME_PREFIX "inputpilot-"
 #define WIFI_AP_CHANNEL  1
@@ -95,6 +104,7 @@
 #define BLE_HID_CONTROL_UUID  "7d9f0002-4f4d-4f56-4552-484944000001"
 #define BLE_HID_STATUS_UUID   "7d9f0005-4f4d-4f56-4552-484944000001"
 #define BLE_SECURE_AUTH_TIMEOUT_MS 15000UL
+#define BLE_ADVERTISING_CHECK_INTERVAL_MS 5000UL
 
 // InputPilot Secure Protocol v2 BLE OTA flow-control characteristics. OTA
 // writes are AES-GCM records from the active control session.

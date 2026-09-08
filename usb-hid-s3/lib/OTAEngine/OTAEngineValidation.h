@@ -6,12 +6,16 @@
 #include "OTAProtocol.h"
 class OTAEngineValidation {
  public:
-  static bool start(bool active, const OTAStartRequest &request, uint32_t maximum, std::string &error) {
+  static bool start(bool active, const OTAStartRequest &request, uint32_t maximum,
+                    const std::string &currentVersion, std::string &error) {
     if (active) error = "update_in_progress";
     else if (request.protocol != OTA_PROTOCOL_VERSION) error = "unsupported_protocol";
     else if (!request.size) error = "invalid_size";
     else if (request.size > maximum) error = "firmware_too_large";
     else if (request.version.empty() || !OTAProtocol::validSha256(request.sha256)) error = "invalid_metadata";
+    else if (!request.allowDowngrade &&
+             OTAProtocol::isDowngrade(currentVersion, request.version))
+      error = "downgrade_rejected";
     else return true;
     return false;
   }

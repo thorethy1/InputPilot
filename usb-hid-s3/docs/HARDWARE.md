@@ -83,7 +83,12 @@ Do not decode against a different build: addresses and stacks will not match.
 
 | Appearance | Meaning |
 |------------|---------|
-| Solid red | WiFi down / not associated |
-| Magenta blink | Soft-AP setup (`InputPilot-XXXX`; suffix from device MAC) |
-| Dim solid green | STA up, jiggle off |
-| Cyan breathing | STA up, jiggle on |
+| Fast amber blink | OTA firmware update active |
+| Brief violet pulse (180 ms every 4 seconds) | Optional fallback AP active (for example `InputPilot-Halo9`); normal status resumes between pulses |
+| Cyan breathing | Keep Awake movement or clicking enabled |
+| Solid blue | Authenticated iOS controller connected over BLE or Wi-Fi |
+| Dim solid green | At least one BLE/Wi-Fi control path is ready |
+| Slow red blink | No control radio is currently ready |
+
+The AP pulse briefly overlays the normal status (blue, breathing cyan, or dim
+green). OTA updates take priority: amber blinking continues without AP pulses.

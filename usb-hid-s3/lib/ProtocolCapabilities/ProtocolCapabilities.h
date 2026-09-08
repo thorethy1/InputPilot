@@ -6,6 +6,7 @@
 // that a transport is enabled in the current radio mode.
 namespace ProtocolCapabilities {
 const char *jsonArray();
+const char *bleJsonArray();
 const char *radioModeJson(bool bleEnabled, bool wifiEnabled);
 }
 

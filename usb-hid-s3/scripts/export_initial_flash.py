@@ -10,7 +10,7 @@ from pathlib import Path
 
 REPOSITORY = Path(env.subst("$PROJECT_DIR")).resolve().parent
 sys.path.insert(0, str(REPOSITORY))
-from versioning import project_version  # noqa: E402
+from versioning import release_version  # noqa: E402
 
 
 PRODUCT = "InputPilot"
@@ -49,7 +49,7 @@ def export_initial_flash(source, target, env):
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f"required full-flash image is missing or empty: {path}")
 
-    version = project_version(REPOSITORY / "Version.xcconfig")
+    version = release_version(REPOSITORY / "Version.xcconfig")
     manifest = {
         "product": PRODUCT,
         "version": version,

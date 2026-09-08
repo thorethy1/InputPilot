@@ -35,8 +35,16 @@ public:
   // Short human-readable status, e.g. "none", "ble:adv", "wifi:1.2.3.4", "wifi:ap".
   const char *statusStr();
 
-  // Called by the NimBLE disconnect callback after re-advertising is checked.
+  // Updated by advertising recovery in the firmware loop.
   void setBleAdvertisingStatus(bool active);
+
+  // Live BLE state for diagnostics. Advertising is queried from NimBLE and is
+  // never inferred from the absence of a connection.
+  bool isBleAdvertising() const;
+  bool isBleConnected() const;
+  bool isControlSessionConnected() const;
+  uint32_t bleAdvertisingRecoveryCount() const { return bleAdvertisingRecoveryCount_; }
+  uint32_t bleAdvertisingRecoveryFailureCount() const { return bleAdvertisingRecoveryFailureCount_; }
 
   // Apply newly saved STA credentials from an authenticated secure session.
   // If currently in Wifi mode, restarts WiFi to Soft-AP or STA as appropriate.
@@ -45,6 +53,7 @@ public:
   // Authenticated, transport-independent Wi-Fi status payload used by both
   // BLE and TCP Secure Protocol sessions.
   std::string wifiStatusJson() const;
+  void applyFallbackApPreference();
 
   // Invalidate authenticated sessions immediately after BOOT rotates pairing.
   void pairingCredentialRotated();
@@ -57,24 +66,34 @@ private:
   void stopWifi();
   void startBle();
   void stopBle();
+  bool serviceBleDisconnect();
+  void serviceBleAdvertising(bool immediate = false);
   void startSoftAp();
-  void startSta(const String &ssid, const String &pass, size_t credentialIndex);
+  void startSta(const String &ssid, const String &pass, size_t credentialIndex,
+                bool preserveSoftAp = false);
   void finishStaConnection();
   void serviceStaConnection();
   void stopWifiServices();
+  bool softApInterfaceReady() const;
 
   RadioMode mode_ = RadioMode::None;
   bool softAp_ = false;
+  bool fallbackWaiting_ = false;
   bool staConnecting_ = false;
   uint32_t staConnectStartedMs_ = 0;
   size_t staCredentialIndex_ = 0;
   size_t staAttempts_ = 0;
   uint32_t staDisconnectedSinceMs_ = 0;
   uint32_t softApStartedMs_ = 0;
+  bool staRetryPreservesSoftAp_ = false;
+  uint32_t lastSoftApHealthCheckMs_ = 0;
   String provisioningSsid_;
   String provisioningState_ = "idle";
   String provisioningError_;
   char status_[64] = "none";
+  uint32_t lastBleAdvertisingCheckMs_ = 0;
+  uint32_t bleAdvertisingRecoveryCount_ = 0;
+  uint32_t bleAdvertisingRecoveryFailureCount_ = 0;
 };
 
 extern RadioManager g_radio;
