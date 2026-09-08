@@ -3,7 +3,7 @@
   "subtitle": "InputPilot beta releases for early testing.",
   "description": "Install and update InputPilot beta builds.",
   "website": "https://github.com/thorethy1/InputPilot",
-  "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.26/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
   "tintColor": "#007AFF",
   "apps": [
     {
@@ -12,23 +12,23 @@
       "developerName": "thorethy",
       "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
       "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
-      "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.26/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "#007AFF",
       "category": "utilities",
       "screenshots": [
-        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.26/docs/images/ios-device-list.jpg",
-        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.26/docs/images/ios-device-detail.jpg"
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/docs/images/ios-device-list.jpg",
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.0-beta.30/docs/images/ios-device-detail.jpg"
       ],
       "versions": [
         {
           "version": "0.9.0",
-          "buildVersion": "114",
-          "marketingVersion": "0.9.0-beta.26",
+          "buildVersion": "123",
+          "marketingVersion": "0.9.0-beta.30",
           "date": "2026-09-08",
-          "localizedDescription": "InputPilot 0.9.0-beta.26 beta release.",
-          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.9.0-beta.26/InputPilot-v0.9.0-beta.26-ios-unsigned.ipa",
-          "size": 3015292,
-          "sha256": "e5a7316156b901d78796edea7d486256b726ba5293d8790b6005530a1af77d07",
+          "localizedDescription": "InputPilot 0.9.0-beta.30 beta release.",
+          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.9.0-beta.30/InputPilot-v0.9.0-beta.30-ios-unsigned.ipa",
+          "size": 3106167,
+          "sha256": "336445f20d9ee433491e95a1d7e9d7134c1cdf34d5991a1882e61691fe75468b",
           "minOSVersion": "17.0"
         },
         {
