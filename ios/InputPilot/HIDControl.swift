@@ -2735,7 +2735,7 @@ enum InputPilotWiFiManager {
 
     private func presetProtocolError(_ reply: String) -> String {
         let code = reply.hasPrefix("error ") ? String(reply.dropFirst(6)) : reply
-        switch code {
+        return switch code {
         case "preset_busy": "Another preset is already running on the device."
         case "preset_too_large": "The compiled preset is too large for the device."
         case "preset_checksum_mismatch": "Preset upload verification failed. Nothing was executed."
