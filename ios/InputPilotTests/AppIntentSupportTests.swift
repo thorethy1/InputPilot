@@ -45,6 +45,7 @@ private final class IntentMockTransport: HIDControlTransport {
     var beginResult = true
     var failSends = false
     private(set) var sendTextCount = 0
+    private(set) var startPresetCount = 0
 
     func send(_ event: HIDEvent) async -> Bool { true }
     func sendText(_ text: String, layout: KeyboardLayout, delayMilliseconds: Int) async -> Bool {
@@ -54,7 +55,10 @@ private final class IntentMockTransport: HIDControlTransport {
     func beginOrderedSession(lowLatency: Bool) -> Bool { beginResult }
     func endOrderedSession() {}
     func releaseAllPreservingError() async {}
-    func startPreset(program: Data, token: UInt64) async -> Bool { !failSends }
+    func startPreset(program: Data, token: UInt64) async -> Bool {
+        startPresetCount += 1
+        return !failSends
+    }
     func abortPreset(token: UInt64) async -> Bool { true }
 }
 
@@ -165,7 +169,8 @@ private final class IntentMockTransport: HIDControlTransport {
             context: context
         )
         XCTAssertTrue(outcome.success, outcome.message)
-        XCTAssertEqual(transport.sendTextCount, 1)
+        XCTAssertEqual(transport.startPresetCount, 1)
+        XCTAssertEqual(transport.sendTextCount, 0)
     }
 
     func testOfflineDeviceProducesHonestFailureText() async throws {
@@ -234,7 +239,11 @@ private final class IntentMockTransport: HIDControlTransport {
     func testWiFiColdStartSucceedsWhenBluetoothUnavailable() async throws {
         let ble = UnavailableHIDControlTransport(kind: .bluetooth)
         let tcp = IntentMockTransport(kind: .tcp, state: .offline)
-        let manager = HIDConnectionManager(ble: ble, tcp: tcp, capabilities: ["wifi_transport", "keyboard_layout", "release_all"])
+        let manager = HIDConnectionManager(
+            ble: ble,
+            tcp: tcp,
+            capabilities: ["wifi_transport", "keyboard_layout", "release_all", "device_presets", "preset_abort"]
+        )
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(100))
             tcp.state = .ready
