@@ -69,6 +69,9 @@ bool PresetEngine::validProgram() const {
       // preset hours long without risking millis() wrap comparisons.
       if (readU32(program_.data() + cursor) > 60000) return false;
       cursor += 4;
+    } else if (opcode == MouseClickOpcode) {
+      if (program_.size() - cursor < 1 || program_[cursor] > 2) return false;
+      cursor += 1;
     } else {
       return false;
     }
@@ -121,6 +124,12 @@ bool PresetEngine::poll(uint32_t nowMs, Instruction &instruction) {
       delayUntilMs_ = nowMs + duration;
       delayActive_ = true;
       return false;
+    }
+    if (opcode == MouseClickOpcode) {
+      instruction.type = InstructionType::MouseClick;
+      instruction.mouseButton = program_[position_++];
+      instructionPending_ = true;
+      return true;
     }
     instruction.type = InstructionType::KeyboardReport;
     instruction.modifier = program_[position_++];

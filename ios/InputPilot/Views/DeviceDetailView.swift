@@ -422,9 +422,28 @@ struct DeviceDetailView: View {
 
     @MainActor
     private func apRequest(_ command: String) async throws -> String {
-        if bluetooth.state == .ready { return try await bluetooth.request(command) }
-        guard hasPairingKey, let host = wifiControlHost else { throw TransportError.unavailable }
-        return try await InputPilotWiFiManager.session(host: host, deviceId: device.deviceId).request(command)
+        guard hasPairingKey else { throw TransportError.unavailable }
+        var lastError: Error = TransportError.unavailable
+        if bluetooth.state == .ready {
+            do { return try await bluetooth.request(command) }
+            catch { lastError = error }
+        }
+        // The detail screen can finish its initial refresh before CoreBluetooth
+        // has authenticated. Give that in-flight connection a chance instead of
+        // reporting a stale Wi-Fi endpoint as an AP-status failure. Bluetooth
+        // also remains connected when an AP-off command takes effect.
+        if bluetooth.radioState == .poweredOn, bluetooth.state != .authenticationFailed {
+            do { return try await bluetooth.request(command) }
+            catch { lastError = error }
+        }
+        if let host = wifiControlHost {
+            do {
+                return try await InputPilotWiFiManager.session(
+                    host: host, deviceId: device.deviceId
+                ).request(command)
+            } catch { lastError = error }
+        }
+        throw lastError
     }
 
     @MainActor

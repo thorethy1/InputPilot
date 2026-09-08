@@ -2,12 +2,14 @@ import SwiftData
 import SwiftUI
 
 enum PresetIcon {
-    static let curated = ["keyboard", "doc.text", "person.crop.circle", "envelope", "globe", "lock",
+    static let curated = ["keyboard", "computermouse", "hand.tap", "doc.text", "person.crop.circle", "envelope", "globe", "lock",
                           "key", "bolt", "flag", "star", "folder", "tray.full",
                           "terminal", "gamecontroller", "music.note", "clock"]
 
     static let labels: [String: String] = [
         "keyboard": "Keyboard",
+        "computermouse": "Mouse",
+        "hand.tap": "Click",
         "doc.text": "Document",
         "person.crop.circle": "Person",
         "envelope": "Mail",
@@ -29,13 +31,16 @@ enum PresetIcon {
 
     static func tint(for name: String) -> Color {
         let hash = name.unicodeScalars.reduce(UInt64(0)) { ($0 &* 31) &+ UInt64($1.value) }
-        return Color(hue: Double(hash % 360) / 360.0, saturation: 0.42, brightness: 0.92)
+        return Color(hue: Double(hash % 360) / 360.0, saturation: 0.78, brightness: 0.96)
     }
 
     static func badge(for preset: HIDPreset) -> (symbol: String, label: String) {
         if preset.shortcut { return ("keyboard", "Key Combo") }
         if preset.script {
-            if let first = try? PresetScript.parse(preset.payload).first {
+            if let steps = try? PresetScript.parse(preset.payload), let first = steps.first {
+                if steps.count == 1, case .click = first {
+                    return (first.typeBadgeSymbol, "Mouse Click")
+                }
                 return (first.typeBadgeSymbol, "Script")
             }
             return ("terminal", "Script")
@@ -49,6 +54,7 @@ extension PresetScript.Step {
         switch self {
         case .text: "textformat"
         case .key: "keyboard"
+        case .click: "computermouse"
         case .delay: "clock"
         case .secret: "key"
         }
@@ -186,7 +192,7 @@ extension PresetScript.Step {
     }
 
     func refreshRemoteState(presets: [HIDPreset]) async {
-        guard execution == nil, let manager, manager.supports("device_presets") else { return }
+        guard execution == nil, let manager else { return }
         var status: DevicePresetStatus?
         for _ in 0 ..< 20 where execution == nil {
             status = await manager.presetStatus()
@@ -517,22 +523,28 @@ private struct PresetTileContent: View {
             .overlay {
                 ZStack {
                     shape
-                        .fill(tint.opacity(0.14))
+                        .fill(
+                            LinearGradient(
+                                colors: [tint.opacity(0.25), tint.opacity(0.11)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                     if #available(iOS 26.0, *) {
                         shape
                             .fill(.clear)
                             .glassEffect(.regular.tint(tint.opacity(0.16)).interactive(), in: shape)
                     } else {
                         shape
-                            .strokeBorder(tint.opacity(0.22), lineWidth: 1)
+                            .strokeBorder(tint.opacity(0.36), lineWidth: 1)
                     }
                     VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
                         HStack(alignment: .top) {
                             Image(systemName: preset.icon)
                                 .font(.title2)
-                                .foregroundStyle(tint)
+                                .foregroundStyle(.white)
                                 .frame(width: 42, height: 42)
-                                .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                                .background(tint, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                             Spacer(minLength: 0)
                             Image(systemName: "play.circle.fill")
                                 .font(.title2)
@@ -619,6 +631,7 @@ private struct PresetEditorSheet: View {
     @State private var name = ""
     @State private var icon = "keyboard"
     @State private var type: PresetType = .text
+    @State private var mouseButton = MouseButton.left
     @State private var payload = ""
     @State private var favorite = false
     @State private var enterAfter = false
@@ -629,6 +642,7 @@ private struct PresetEditorSheet: View {
     enum PresetType: String, CaseIterable, Identifiable {
         case text = "Text"
         case shortcut = "Key Combo"
+        case click = "Mouse Click"
         case script = "Script"
         var id: String { rawValue }
     }
@@ -664,21 +678,29 @@ private struct PresetEditorSheet: View {
                     Text("Type")
                 }
                 Section {
-                    TextField(payloadPrompt, text: $payload, axis: .vertical)
-                        .font(type == .script ? .body.monospaced() : .body)
-                        .lineLimit(4...10)
-                        .textInputAutocapitalization(type == .script ? .never : nil)
-                        .autocorrectionDisabled(type == .script)
-                    if let parseIssue {
-                        Text(parseIssue.line > 0 ? "Line \(parseIssue.line): \(parseIssue.reason)" : parseIssue.reason)
-                            .font(.caption)
-                            .foregroundStyle(AppColors.error)
+                    if type == .click {
+                        Picker("Mouse button", selection: $mouseButton) {
+                            ForEach(MouseButton.allCases, id: \.rawValue) { button in
+                                Text(button.displayName).tag(button)
+                            }
+                        }
+                    } else {
+                        TextField(payloadPrompt, text: $payload, axis: .vertical)
+                            .font(type == .script ? .body.monospaced() : .body)
+                            .lineLimit(4...10)
+                            .textInputAutocapitalization(type == .script ? .never : nil)
+                            .autocorrectionDisabled(type == .script)
+                        if let parseIssue {
+                            Text(parseIssue.line > 0 ? "Line \(parseIssue.line): \(parseIssue.reason)" : parseIssue.reason)
+                                .font(.caption)
+                                .foregroundStyle(AppColors.error)
+                        }
                     }
                 } header: {
                     Text(payloadHeader)
                 } footer: {
                     if type == .script {
-                        Text("One action per line. Bracketed lines are commands: [TAB], [ENTER], [CTRL+A], [SECRET name], [DELAY 500]. Everything else is typed as text; # starts a comment.")
+                        Text("One action per line. Bracketed lines are commands: [TAB], [ENTER], [CTRL+A], [CLICK LEFT], [SECRET name], [DELAY 500]. Everything else is typed as text; # starts a comment.")
                     }
                 }
                 if type == .script {
@@ -689,11 +711,11 @@ private struct PresetEditorSheet: View {
                 Section {
                     Toggle("Favorite", isOn: $favorite)
                     Toggle("Enter after", isOn: $enterAfter)
-                        .disabled(type == .shortcut)
+                        .disabled(type == .shortcut || type == .click)
                     Picker("Typing speed", selection: $typingDelayMs) {
                         ForEach([0, 10, 25, 50, 100], id: \.self) { Text($0 == 0 ? "Fast" : "\($0) ms").tag($0) }
                     }
-                    .disabled(type == .shortcut)
+                    .disabled(type == .shortcut || type == .click)
                 } header: {
                     Text("Options")
                 }
@@ -744,6 +766,7 @@ private struct PresetEditorSheet: View {
         switch type {
         case .text: "Text"
         case .shortcut: "Key Combo (e.g. ctrl+alt+t)"
+        case .click: "Click"
         case .script: "Script"
         }
     }
@@ -752,6 +775,7 @@ private struct PresetEditorSheet: View {
         switch type {
         case .text: "Text to type"
         case .shortcut: "enter"
+        case .click: ""
         case .script: "[ENTER]\n[SECRET work-password]\n[DELAY 500]\nplain text"
         }
     }
@@ -764,7 +788,17 @@ private struct PresetEditorSheet: View {
         favorite = preset.favorite
         enterAfter = preset.enterAfter
         typingDelayMs = preset.typingDelayMs
-        type = preset.shortcut ? .shortcut : (preset.script ? .script : .text)
+        if preset.shortcut {
+            type = .shortcut
+        } else if preset.script,
+                  let steps = try? PresetScript.parse(preset.payload),
+                  steps.count == 1,
+                  case let .click(button) = steps[0] {
+            type = .click
+            mouseButton = button
+        } else {
+            type = preset.script ? .script : .text
+        }
         validate(payload)
     }
 
@@ -781,32 +815,33 @@ private struct PresetEditorSheet: View {
             } else {
                 parseIssue = nil
             }
-        case .text:
+        case .text, .click:
             parseIssue = nil
         }
     }
 
     private func save() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let storedPayload = type == .click ? "[CLICK \(mouseButton.displayName.uppercased())]" : payload
         if let preset = editingPreset {
             preset.name = trimmedName
             preset.icon = icon
-            preset.payload = payload
+            preset.payload = storedPayload
             preset.shortcut = type == .shortcut
-            preset.script = type == .script
+            preset.script = type == .script || type == .click
             preset.favorite = favorite
-            preset.enterAfter = enterAfter && type != .shortcut
-            preset.typingDelayMs = type == .shortcut ? 0 : typingDelayMs
+            preset.enterAfter = enterAfter && type != .shortcut && type != .click
+            preset.typingDelayMs = type == .shortcut || type == .click ? 0 : typingDelayMs
         } else {
             let preset = HIDPreset(
                 name: trimmedName,
-                payload: payload,
+                payload: storedPayload,
                 shortcut: type == .shortcut,
                 favorite: favorite,
                 order: nextOrder,
-                enterAfter: enterAfter && type != .shortcut,
-                typingDelayMs: type == .shortcut ? 0 : typingDelayMs,
-                script: type == .script,
+                enterAfter: enterAfter && type != .shortcut && type != .click,
+                typingDelayMs: type == .shortcut || type == .click ? 0 : typingDelayMs,
+                script: type == .script || type == .click,
                 icon: icon
             )
             context.insert(preset)

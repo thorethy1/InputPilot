@@ -74,6 +74,7 @@ private:
   void finishStaConnection();
   void serviceStaConnection();
   void stopWifiServices();
+  bool softApInterfaceReady() const;
 
   RadioMode mode_ = RadioMode::None;
   bool softAp_ = false;
@@ -85,6 +86,7 @@ private:
   uint32_t staDisconnectedSinceMs_ = 0;
   uint32_t softApStartedMs_ = 0;
   bool staRetryPreservesSoftAp_ = false;
+  uint32_t lastSoftApHealthCheckMs_ = 0;
   String provisioningSsid_;
   String provisioningState_ = "idle";
   String provisioningError_;

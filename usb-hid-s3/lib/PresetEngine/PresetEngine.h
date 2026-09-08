@@ -14,15 +14,17 @@ class PresetEngine {
   static constexpr size_t MaxProgramBytes = 64 * 1024;
   static constexpr uint8_t ReportOpcode = 0x01;
   static constexpr uint8_t DelayOpcode = 0x02;
+  static constexpr uint8_t MouseClickOpcode = 0x03;
 
   enum class State { Idle, Uploading, Running, Completing, Completed, Cancelled, Failed };
   enum class Result { Ok, Busy, Invalid, WrongToken, WrongOffset, TooLarge, ChecksumMismatch };
-  enum class InstructionType { KeyboardReport, ReleaseAll };
+  enum class InstructionType { KeyboardReport, MouseClick, ReleaseAll };
 
   struct Instruction {
     InstructionType type = InstructionType::ReleaseAll;
     uint8_t modifier = 0;
     uint8_t keycode = 0;
+    uint8_t mouseButton = 0;
   };
 
   Result begin(uint64_t token, size_t size, uint32_t checksum);

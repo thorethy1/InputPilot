@@ -534,6 +534,9 @@ static void servicePresetEngine() {
     event.type = HIDEventType::KeyboardReport;
     event.modifier = instruction.modifier;
     event.keycode = instruction.keycode;
+  } else if (instruction.type == PresetEngine::InstructionType::MouseClick) {
+    event.type = HIDEventType::Click;
+    event.button = instruction.mouseButton;
   } else {
     event = HIDEvent::releaseAll();
   }

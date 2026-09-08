@@ -1,7 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Arbitrates two-finger scrolling, pinch-to-zoom and two-/three-finger taps
+/// Arbitrates two-finger scrolling, horizontal section swipes, pinch-to-zoom
+/// and two-/three-finger taps
 /// from raw touch geometry. UIKit pan and pinch recognizers start on
 /// different signals, so a pinch could be mistaken for a scroll and vice
 /// versa. This recognizer instead watches both the centroid translation and
@@ -14,6 +15,7 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
     var onZoomEnded: ((_ cancelled: Bool) -> Void)?
     var onTwoFingerTap: (() -> Void)?
     var onThreeFingerTap: (() -> Void)?
+    var onSectionSwipe: ((_ translationX: CGFloat) -> Void)?
 
     private struct TrackedTouch {
         let touch: UITouch
@@ -32,6 +34,7 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
         case idle
         case scroll
         case zoom
+        case sectionSwipe
     }
 
     private var tracked: [TrackedTouch] = []
@@ -41,6 +44,8 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
     private var arbiter: TwoFingerArbiter?
     private var scrollBaselineY: Double = 0
     private var zoomBaselineDistance: Double = 0
+    private var sectionSwipeBaselineX: Double = 0
+    private var sectionSwipeCurrentX: Double = 0
     private var velocitySamples: [VelocitySample] = []
 
     private static let tapMaxDuration: TimeInterval = 0.35
@@ -95,6 +100,8 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
             arbiter = TwoFingerArbiter(centroidX: Double(center.x),
                                        centroidY: Double(center.y),
                                        distance: distance(in: view))
+            sectionSwipeBaselineX = Double(center.x)
+            sectionSwipeCurrentX = sectionSwipeBaselineX
         } else if tracked.count > 2 {
             arbiter = nil
         }
@@ -121,6 +128,9 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
             let ratio = min(4, max(0.25, d / zoomBaselineDistance))
             onZoom?(CGFloat(ratio))
             state = .changed
+        case .sectionSwipe:
+            sectionSwipeCurrentX = Double(centroid(in: view).x)
+            state = .changed
         case .idle:
             let center = centroid(in: view)
             let d = distance(in: view)
@@ -135,6 +145,10 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
                 mode = .scroll
                 scrollBaselineY = Double(center.y)
                 velocitySamples = [VelocitySample(time: event.timestamp, y: scrollBaselineY)]
+                state = .began
+            } else if locked == .sectionSwipe {
+                mode = .sectionSwipe
+                sectionSwipeCurrentX = Double(center.x)
                 state = .began
             }
         }
@@ -181,6 +195,8 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
         arbiter = nil
         scrollBaselineY = 0
         zoomBaselineDistance = 0
+        sectionSwipeBaselineX = 0
+        sectionSwipeCurrentX = 0
         velocitySamples = []
     }
 
@@ -199,6 +215,10 @@ final class TwoFingerGestureRecognizer: UIGestureRecognizer {
             onScrollEnded?(cancelled ? 0 : scrollVelocity())
         case .zoom:
             onZoomEnded?(cancelled)
+        case .sectionSwipe:
+            if !cancelled {
+                onSectionSwipe?(CGFloat(sectionSwipeCurrentX - sectionSwipeBaselineX))
+            }
         case .idle:
             break
         }
@@ -252,6 +272,7 @@ struct TrackpadInputBridge: UIViewRepresentable {
     let middleClick: () -> Void
     let zoom: (CGFloat) -> Void
     let zoomEnded: (_ cancelled: Bool) -> Void
+    let sectionSwipe: (_ translationX: CGFloat) -> Void
     let cancel: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(owner: self) }
@@ -295,6 +316,7 @@ struct TrackpadInputBridge: UIViewRepresentable {
             recognizer.onZoomEnded = { [weak self] cancelled in self?.handleZoomEnded(cancelled) }
             recognizer.onTwoFingerTap = { [weak self] in self?.handleTwoFingerTap() }
             recognizer.onThreeFingerTap = { [weak self] in self?.handleThreeFingerTap() }
+            recognizer.onSectionSwipe = { [weak self] translation in self?.owner.sectionSwipe(translation) }
         }
 
         @objc func moved(_ recognizer: UIPanGestureRecognizer) {

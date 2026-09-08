@@ -112,8 +112,8 @@ identity; `USB GET` retains the legacy response for older apps.
 ## Device-side presets
 
 Firmware advertising `device_presets` accepts a transactional, authenticated
-preset upload. The bytecode contains only layout-resolved keyboard reports and
-non-blocking delays (maximum 60000 ms per delay; delays may be chained):
+preset upload. The bytecode contains layout-resolved keyboard reports, mouse
+clicks and non-blocking delays (maximum 60000 ms per delay; delays may be chained):
 
 - `PRESET BEGIN <token-hex> <size> <fnv1a32-hex>` allocates a program and
   returns `preset ready <token> <received>`.

@@ -40,6 +40,16 @@ final class ActionExecutorTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(bytes.filter { $0 == 0x02 }.count, 5)
     }
 
+    @MainActor func testMouseClicksAreCompiledIntoDeviceProgram() async {
+        let transport = MockActionTransport()
+        let result = await ActionExecutor().run(
+            steps: [.click(.right)], layout: .us, typingDelayMs: 0,
+            token: 9, transport: transport, secretResolver: { _ in "" }
+        )
+        guard case .success = result else { return XCTFail("Expected success, got \(result)") }
+        XCTAssertEqual(Array(try! XCTUnwrap(transport.programs.first).prefix(2)), [0x03, 0x01])
+    }
+
     @MainActor func testLayoutValidationFailureUploadsNothing() async {
         let transport = MockActionTransport()
         let result = await ActionExecutor().run(

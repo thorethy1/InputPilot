@@ -3,6 +3,19 @@ import XCTest
 @testable import InputPilot
 
 final class HIDRemoteTests: XCTestCase {
+    @MainActor func testPresetProtocolIsProbedWhenCachedCapabilityIsStale() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(
+            ble: ble,
+            tcp: MockTransport(kind: .tcp, available: false),
+            capabilities: ["ble_transport", "release_all"]
+        )
+
+        let started = await manager.startPreset(program: Data([0x02, 0, 0, 0, 0]), token: 42)
+        XCTAssertTrue(started)
+        XCTAssertNil(manager.lastError)
+    }
+
     @MainActor func testRapidReleasesStillReleaseNewHeldInput() async {
         let ble = MockTransport(kind: .bluetooth, available: true)
         let manager = HIDConnectionManager(ble: ble, tcp: MockTransport(kind: .tcp, available: false), capabilities: ["ble_transport", "release_all", "mouse_button_state"])
@@ -405,6 +418,16 @@ final class PresetScriptTests: XCTestCase {
         XCTAssertEqual(try PresetScript.parse("[SECRET work-password]\n[secret api-token]\nSECRET literal"), [
             .secret("work-password"), .secret("api-token"), .text("SECRET literal")
         ])
+    }
+
+    func testMouseClickLinesParseButtonsAndRejectUnknownOnes() throws {
+        XCTAssertEqual(
+            try PresetScript.parse("[CLICK]\n[CLICK LEFT]\n[click right]\n[CLICK MIDDLE]"),
+            [.click(.left), .click(.left), .click(.right), .click(.middle)]
+        )
+        XCTAssertThrowsError(try PresetScript.parse("[CLICK SIDE]")) { error in
+            XCTAssertEqual((error as? PresetScript.ParseError)?.line, 1)
+        }
     }
 
     func testSecretWithEmptyNameThrows() {

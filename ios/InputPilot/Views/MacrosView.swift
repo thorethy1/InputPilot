@@ -342,7 +342,7 @@ private struct MacroEditorView: View {
             case .mouseDown, .mouseUp, .click:
                 Picker("Mouse button", selection: draft.button) {
                     ForEach(MouseButton.allCases, id: \.rawValue) { button in
-                        Text(String(describing: button).capitalized).tag(button)
+                        Text(button.displayName).tag(button)
                     }
                 }
             case let .typeText(text):

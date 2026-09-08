@@ -99,6 +99,16 @@ enum AppLogContext { @TaskLocal static var eventID: UInt64? }
 func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
 
 enum MouseButton: UInt8, Codable, CaseIterable { case left = 0, right = 1, middle = 2 }
+
+extension MouseButton {
+    var displayName: String {
+        switch self {
+        case .left: "Left"
+        case .right: "Right"
+        case .middle: "Middle"
+        }
+    }
+}
 enum HIDEvent: Codable, Equatable {
     case mouseMove(Int16, Int16), scroll(Int16), mouseDown(MouseButton), mouseUp(MouseButton)
     case click(MouseButton), typeText(String), key(String), keyCombo(String)
@@ -2465,7 +2475,8 @@ enum InputPilotWiFiManager {
     @Published var lastError: String?
     @Published private(set) var isConnecting = false
     @Published private(set) var transportStates: [TransportKind: TransportConnectionState] = [:]
-    let capabilities: Set<String>
+    private let initialCapabilities: Set<String>
+    private weak var device: StoredDevice?
     let protocolVersion: Int
     var onEvent: ((HIDEvent) -> Void)?
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport
@@ -2473,6 +2484,7 @@ enum InputPilotWiFiManager {
     private var nextEventID: UInt64 = 0
     private var transportMonitor: Task<Void, Never>?
     init(device: StoredDevice) {
+        self.device = device
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
         let hosts = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).compactMap(\.host)
         let host = hosts.first ?? ""
@@ -2484,13 +2496,13 @@ enum InputPilotWiFiManager {
         ble = bluetooth
         tcp = host.isEmpty ? UnavailableHIDControlTransport(kind: .tcp) :
             InputPilotWiFiManager.session(host: host, deviceId: device.deviceId, fallbackHosts: Array(hosts.dropFirst()))
-        capabilities = Set(device.capabilities)
+        initialCapabilities = Set(device.capabilities)
         protocolVersion = device.protocolVersion
         refreshTransportStates()
     }
     init(ble: HIDControlTransport, tcp: HIDControlTransport, capabilities: Set<String> = [], protocolVersion: Int = 2) {
         mode = .automatic
-        self.ble = ble; self.tcp = tcp; self.capabilities = capabilities; self.protocolVersion = protocolVersion
+        self.ble = ble; self.tcp = tcp; self.initialCapabilities = capabilities; self.protocolVersion = protocolVersion
         refreshTransportStates()
     }
     func connect() async {
@@ -2610,10 +2622,6 @@ enum InputPilotWiFiManager {
     }
 
     @discardableResult func startPreset(program: Data, token: UInt64) async -> Bool {
-        guard supports("device_presets") else {
-            lastError = "Device-side presets require a firmware update."
-            return false
-        }
         guard !program.isEmpty, program.count <= 64 * 1024 else {
             lastError = "The compiled preset is too large for the device."
             return false
@@ -2682,8 +2690,7 @@ enum InputPilotWiFiManager {
     }
 
     func presetStatus() async -> DevicePresetStatus? {
-        guard supports("device_presets"),
-              let reply = await presetRequest({ transport in
+        guard let reply = await presetRequest({ transport in
                   try await transport.managementRequest("PRESET STATUS", timeout: 5)
               }), let status = DevicePresetStatus(reply: reply) else { return nil }
         lastError = nil
@@ -2691,10 +2698,6 @@ enum InputPilotWiFiManager {
     }
 
     @discardableResult func abortPreset(token: UInt64 = 0) async -> Bool {
-        guard supports("device_presets") else {
-            lastError = "Stopping presets requires a firmware update."
-            return false
-        }
         let command = token == 0 ? "PRESET ABORT" :
             "PRESET ABORT \(String(format: "%016llx", token))"
         guard let reply = await presetRequest({ transport in
@@ -2739,11 +2742,14 @@ enum InputPilotWiFiManager {
         case "preset_busy": "Another preset is already running on the device."
         case "preset_too_large": "The compiled preset is too large for the device."
         case "preset_checksum_mismatch": "Preset upload verification failed. Nothing was executed."
+        case "preset_invalid": "This firmware does not support this preset action."
         case "ota_busy": "A firmware update is currently using the device."
         default: "The device rejected the preset (\(code.replacingOccurrences(of: "_", with: " ")))."
         }
     }
-    func supports(_ capability: String) -> Bool { capabilities.contains(capability) }
+    func supports(_ capability: String) -> Bool {
+        initialCapabilities.contains(capability) || device?.capabilities.contains(capability) == true
+    }
     func supports(_ event: HIDEvent) -> Bool { requiredCapability(for: event).map { supports($0) } ?? true }
     var unsupportedControlMessages: [String] {
         var messages: [String] = []
@@ -2839,7 +2845,7 @@ enum InputPilotWiFiManager {
 /// unbracketed `DELAY`/`SECRET`/keys) are rewritten once by
 /// `migratedLegacyScript` so existing presets keep working.
 enum PresetScript {
-    enum Step: Equatable { case text(String), key(String), delay(Int), secret(String) }
+    enum Step: Equatable { case text(String), key(String), click(MouseButton), delay(Int), secret(String) }
     struct ParseError: LocalizedError {
         let line: Int
         let reason: String
@@ -2891,9 +2897,21 @@ enum PresetScript {
                 }
                 steps.append(.secret(secretName)); continue
             }
+            if name == "CLICK" {
+                let buttonName = argument.trimmingCharacters(in: .whitespaces).lowercased()
+                let button: MouseButton
+                switch buttonName {
+                case "", "left": button = .left
+                case "right": button = .right
+                case "middle": button = .middle
+                default:
+                    throw ParseError(line: index + 1, reason: "CLICK uses LEFT, RIGHT or MIDDLE, e.g. [CLICK LEFT].")
+                }
+                steps.append(.click(button)); continue
+            }
             if name == "REM" { continue }
             guard let combo = parseKeyCombo(command) else {
-                throw ParseError(line: index + 1, reason: "Unknown command. Use [ENTER], [CTRL+A], [SECRET name] or [DELAY 500], or plain text without brackets.")
+                throw ParseError(line: index + 1, reason: "Unknown command. Use [ENTER], [CTRL+A], [CLICK LEFT], [SECRET name] or [DELAY 500], or plain text without brackets.")
             }
             steps.append(combo)
         }
@@ -2987,21 +3005,24 @@ struct HIDControlView: View {
                     controlPicker.pickerStyle(.segmented)
                 }
             }
-            .padding(.horizontal)
+            .padding(.horizontal, AppTheme.Spacing.spacious)
+            .padding(.top, AppTheme.Spacing.compact)
+            .padding(.bottom, AppTheme.Spacing.standard)
             if macros.isRecording {
                 Label("Recording · use Trackpad or Keyboard, then stop in Macros", systemImage: "record.circle")
                     .font(.caption).foregroundStyle(AppColors.error).padding(.horizontal)
             }
             Group {
                 switch section {
-                case .trackpad: TrackpadView(manager: manager)
-                case .keyboard: LiveKeyboardView(manager: manager)
+                case .trackpad:
+                    TrackpadView(manager: manager) { switchSection(to: .keyboard) }
+                case .keyboard:
+                    LiveKeyboardView(manager: manager) { switchSection(to: .trackpad) }
                 case .presets: PresetsView(manager: manager).disabled(macros.isRecording)
                 case .macros: MacrosView(manager: manager, controller: macros)
                 }
             }
-            .id(section)
-            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
+            .transition(.opacity)
             .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: section)
         }
         .navigationTitle(device.displayName).navigationBarTitleDisplayMode(.inline)
@@ -3102,6 +3123,7 @@ private struct ControlTransportStatus: View {
 
 struct TrackpadView: View {
     @ObservedObject var manager: HIDConnectionManager
+    let onKeyboardRequested: () -> Void
     @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
     @AppStorage("trackpadHintsSeen") private var hintsSeen = false
     @State private var gestureState: TrackpadGestureState = .idle
@@ -3117,8 +3139,9 @@ struct TrackpadView: View {
     private let scrollCoalescer: ScrollEventCoalescer
     private var canZoom: Bool { manager.supports("mouse_scroll") && manager.supports("keyboard_layout") }
 
-    init(manager: HIDConnectionManager) {
+    init(manager: HIDConnectionManager, onKeyboardRequested: @escaping () -> Void = {}) {
         self.manager = manager
+        self.onKeyboardRequested = onKeyboardRequested
         coalescer = MouseEventCoalescer { [weak manager] x, y in await manager?.send(.mouseMove(x, y)) }
         scrollCoalescer = ScrollEventCoalescer { [weak manager] value in await manager?.send(.scroll(value)) }
     }
@@ -3300,6 +3323,11 @@ struct TrackpadView: View {
                     if cancelled { await manager.releaseAll() }
                 }
             },
+            sectionSwipe: { translationX in
+                guard translationX <= -CGFloat(TwoFingerArbiter.sectionSwipeLockDistance) else { return }
+                stopMomentum()
+                onKeyboardRequested()
+            },
             cancel: {
                 stopMomentum()
                 let wasZooming = zoomActive
@@ -3322,6 +3350,7 @@ struct TrackpadView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Remote trackpad")
         .accessibilityValue(gestureState.overlayTitle)
+        .accessibilityHint("Swipe left with two fingers to open Keyboard.")
         .overlay {
             Text(gestureState.overlayTitle)
                 .foregroundStyle(.secondary)
@@ -3356,6 +3385,7 @@ struct TrackpadView: View {
             Label("One finger moves the pointer.", systemImage: "hand.point.up.left")
             Label("Tap or double-tap to click.", systemImage: "hand.tap")
             Label("Two fingers scroll.", systemImage: "arrow.up.arrow.down")
+            Label("Swipe left with two fingers to open Keyboard.", systemImage: "arrow.left")
             Label("Pinch with two fingers to zoom.", systemImage: "arrow.up.left.and.arrow.down.right")
             Label("Hold, then move to drag.", systemImage: "hand.press")
             Label("Hold and release without moving to right-click.", systemImage: "cursorarrow.rays")

@@ -1027,6 +1027,9 @@ void RadioManager::startSoftAp() {
                 ? WiFi.softAP(apSsid, nullptr, WIFI_AP_CHANNEL)
                 : WiFi.softAP(apSsid, WIFI_AP_PASS, WIFI_AP_CHANNEL);
   if (!ok) {
+    softAp_ = false;
+    fallbackWaiting_ = false;
+    staDisconnectedSinceMs_ = millis();
     snprintf(status_, sizeof(status_), "wifi:ap-fail");
     LOG_WIFI("Soft-AP start failed");
     return;
@@ -1034,11 +1037,20 @@ void RadioManager::startSoftAp() {
   delay(100);
   IPAddress ip = WiFi.softAPIP();
   snprintf(status_, sizeof(status_), "wifi:ap");
+  staDisconnectedSinceMs_ = 0;
+  lastSoftApHealthCheckMs_ = millis();
   LOG_WIFI("soft-ap ssid=\"%s\" ip=%s discovery=:%d secure=:%d",
            apSsid, ip.toString().c_str(), WIFI_HTTP_PORT, WIFI_CONTROL_PORT);
   g_wifiConfig.begin();
   s_tcpServer.begin();
   s_tcpServer.setNoDelay(true);
+}
+
+bool RadioManager::softApInterfaceReady() const {
+  const wifi_mode_t wifiMode = WiFi.getMode();
+  if (wifiMode != WIFI_AP && wifiMode != WIFI_AP_STA) return false;
+  const IPAddress ip = WiFi.softAPIP();
+  return ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0;
 }
 
 void RadioManager::startSta(const String &ssid, const String &pass,
@@ -1101,6 +1113,19 @@ void RadioManager::finishStaConnection() {
 }
 
 void RadioManager::serviceStaConnection() {
+  if (softAp_ && millis() - lastSoftApHealthCheckMs_ >= 1000) {
+    lastSoftApHealthCheckMs_ = millis();
+    if (!softApInterfaceReady()) {
+      softAp_ = false;
+      if (staConnecting_) {
+        LOG_WIFI("Soft-AP state lost during station retry; fallback will be restarted after the retry");
+      } else {
+        LOG_WIFI("Soft-AP state lost; restarting fallback AP");
+        startSoftAp();
+        return;
+      }
+    }
+  }
   if (!staConnecting_) {
     if (softAp_ || fallbackWaiting_) {
       const size_t count = WifiCredentials::count();
@@ -1176,10 +1201,8 @@ void RadioManager::serviceStaConnection() {
   if (staRetryPreservesSoftAp_) {
     staRetryPreservesSoftAp_ = false;
     staConnecting_ = false;
-    softAp_ = true;
-    softApStartedMs_ = millis();
-    snprintf(status_, sizeof(status_), "wifi:ap");
-    LOG_WIFI("all configured networks unavailable; preserved Soft-AP remains active");
+    LOG_WIFI("all configured networks unavailable; reinitializing fallback Soft-AP");
+    startSoftAp();
     return;
   }
   LOG_WIFI("all configured networks unavailable; starting Soft-AP fallback");

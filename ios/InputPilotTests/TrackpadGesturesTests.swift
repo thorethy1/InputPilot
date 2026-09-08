@@ -73,15 +73,33 @@ final class TrackpadGesturesTests: XCTestCase {
         XCTAssertTrue(TrackpadGestures.isDragEngagement(dx: 0, dy: -12))
     }
 
-    func testTwoFingerArbiterLocksScrollOnPurePan() {
+    func testTwoFingerArbiterLocksScrollOnVerticalPan() {
         var arbiter = TwoFingerArbiter(centroidX: 0, centroidY: 0, distance: 100)
         XCTAssertNil(arbiter.update(centroidX: 5, centroidY: 5, distance: 102))
-        XCTAssertNil(arbiter.update(centroidX: 11, centroidY: 0, distance: 101))
-        XCTAssertEqual(arbiter.update(centroidX: 13, centroidY: 0, distance: 100), .scroll)
+        XCTAssertNil(arbiter.update(centroidX: 0, centroidY: 11, distance: 101))
+        XCTAssertEqual(arbiter.update(centroidX: 0, centroidY: 13, distance: 100), .scroll)
         XCTAssertEqual(arbiter.mode, .scroll)
         // Once locked, later geometry can never switch the mode to zoom.
         XCTAssertNil(arbiter.update(centroidX: 40, centroidY: 0, distance: 60))
         XCTAssertEqual(arbiter.mode, .scroll)
+    }
+
+    func testTwoFingerArbiterSeparatesHorizontalSectionSwipeFromScroll() {
+        var swipe = TwoFingerArbiter(centroidX: 0, centroidY: 0, distance: 100)
+        XCTAssertNil(swipe.update(centroidX: 20, centroidY: 3, distance: 100))
+        XCTAssertEqual(swipe.update(centroidX: 36, centroidY: 4, distance: 100), .sectionSwipe)
+        XCTAssertEqual(swipe.mode, .sectionSwipe)
+
+        var diagonalScroll = TwoFingerArbiter(centroidX: 0, centroidY: 0, distance: 100)
+        XCTAssertEqual(diagonalScroll.update(centroidX: 10, centroidY: 10, distance: 100), .scroll)
+        XCTAssertEqual(diagonalScroll.mode, .scroll)
+    }
+
+    func testSectionSwipeRequiresDistanceAndHorizontalDominance() {
+        XCTAssertNil(TrackpadGestures.sectionSwipeOffset(dx: 63, dy: 0))
+        XCTAssertNil(TrackpadGestures.sectionSwipeOffset(dx: 80, dy: 60))
+        XCTAssertEqual(TrackpadGestures.sectionSwipeOffset(dx: -80, dy: 10), 1)
+        XCTAssertEqual(TrackpadGestures.sectionSwipeOffset(dx: 80, dy: 10), -1)
     }
 
     func testTwoFingerArbiterLocksZoomOnPinch() {

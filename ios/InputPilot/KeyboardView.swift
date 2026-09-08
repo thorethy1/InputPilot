@@ -465,6 +465,7 @@ struct KeyboardComposerBridge: UIViewRepresentable {
 
 struct LiveKeyboardView: View {
     @ObservedObject var manager: HIDConnectionManager
+    var onTrackpadRequested: () -> Void = {}
     @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
     @State private var latches = ModifierLatches()
     @State private var composerText = ""
@@ -518,6 +519,17 @@ struct LiveKeyboardView: View {
             .padding(.bottom, AppTheme.Spacing.section)
         }
         .scrollDismissesKeyboard(.immediately)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    guard TrackpadGestures.sectionSwipeOffset(
+                        dx: value.translation.width,
+                        dy: value.translation.height
+                    ) == -1 else { return }
+                    onTrackpadRequested()
+                }
+        )
+        .accessibilityHint("Swipe right to return to Trackpad.")
         .onDisappear {
             drainTask?.cancel()
             drainTask = nil

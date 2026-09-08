@@ -129,6 +129,14 @@ enum TrackpadGestures {
         return distance >= dragEngageDistance * dragEngageDistance
     }
 
+    /// Returns the neighboring control-section offset for a deliberate
+    /// horizontal swipe. Vertical scrolling and short drags never qualify.
+    static func sectionSwipeOffset(dx: CGFloat, dy: CGFloat, minimumDistance: CGFloat = 64) -> Int? {
+        guard abs(dx) >= minimumDistance,
+              abs(dx) > abs(dy) * CGFloat(TwoFingerArbiter.sectionSwipeDominance) else { return nil }
+        return dx < 0 ? 1 : -1
+    }
+
     static let pixelsPerScrollLine: Double = 5
     static let zoomLinesPerFullScale: Double = 18
     static let dragEngageDistance: Double = 10
@@ -143,10 +151,13 @@ struct TwoFingerArbiter: Equatable, Sendable {
         case undetermined
         case scroll
         case zoom
+        case sectionSwipe
     }
 
     static let panLockDistance: Double = 12
     static let pinchLockDistance: Double = 10
+    static let sectionSwipeLockDistance: Double = 36
+    static let sectionSwipeDominance: Double = 1.5
 
     private(set) var mode: Mode = .undetermined
     private let startCentroidX: Double
@@ -171,6 +182,12 @@ struct TwoFingerArbiter: Equatable, Sendable {
         }
         let dx = centroidX - startCentroidX
         let dy = centroidY - startCentroidY
+        let horizontalIntent = abs(dx) > abs(dy) * Self.sectionSwipeDominance
+        if horizontalIntent {
+            guard abs(dx) >= Self.sectionSwipeLockDistance else { return nil }
+            mode = .sectionSwipe
+            return .sectionSwipe
+        }
         if dx * dx + dy * dy >= Self.panLockDistance * Self.panLockDistance {
             mode = .scroll
             return .scroll

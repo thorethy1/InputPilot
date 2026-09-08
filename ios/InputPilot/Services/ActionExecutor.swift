@@ -70,6 +70,9 @@ enum MacroRecordingContext {
                     Self.append(stroke: stroke, to: &program)
                     sentKeystrokes = true
                     Self.appendDelay(50, to: &program)
+                case let .click(button):
+                    Self.append(click: button, to: &program)
+                    Self.appendDelay(50, to: &program)
                 case let .secret(name):
                     let value: String
                     do {
@@ -129,6 +132,10 @@ enum MacroRecordingContext {
 
     private static func append(stroke: HIDStroke, to program: inout Data) {
         program.append(contentsOf: [0x01, stroke.modifiers, stroke.usage])
+    }
+
+    private static func append(click button: MouseButton, to program: inout Data) {
+        program.append(contentsOf: [0x03, button.rawValue])
     }
 
     private static func appendDelay(_ milliseconds: Int, to program: inout Data) {
