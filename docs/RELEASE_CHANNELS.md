@@ -51,12 +51,17 @@ that branch. This bootstrap changes release infrastructure only; 0.9 product
 development remains on `beta`.
 
 1. Develop and review 0.9 changes on `beta`.
-2. Push `beta` and wait for CI.
-3. Run **Actions → Create beta release** from the `beta` branch.
-4. Enter the next immutable version, such as `0.9.0-beta.2`.
-5. The workflow updates the shared version file if needed, validates the exact
-   commit in CI, advances `beta`, publishes a GitHub prerelease, attaches the
-   iOS/firmware assets, and refreshes the rolling AltStore beta feed.
+2. Set the next immutable version before the release push, for example
+   `python3 versioning.py set-release 0.9.0-beta.2`, and commit it with the
+   changes being released.
+3. Push `beta` and wait for CI.
+4. Run **Actions → Create beta release** from the `beta` branch and enter the
+   same version.
+5. The workflow verifies that the latest push CI is green, that its exact
+   commit declares the requested version, and that both release artifacts are
+   retained. It then tags and publishes that commit without creating another
+   commit or CI run, attaches the iOS/firmware assets, and refreshes the rolling
+   AltStore beta feed.
 
 Never reuse a beta number or move a versioned beta tag.
 
@@ -67,8 +72,8 @@ Never reuse a beta number or move a versioned beta tag.
 3. Run **Actions → Create release** on `main` with bump `none`. This changes
    `INPUTPILOT_RELEASE` from the beta identity to stable `0.9.0`, runs CI,
    publishes `v0.9.0`, and attaches stable OTA and AltStore assets.
-4. Keep `beta` for the next development cycle and set its next prerelease
-   identity through **Create beta release**.
+4. Keep `beta` for the next development cycle and commit its next prerelease
+   identity before the next beta release push.
 
 Use a normal patch/minor/major bump in **Create release** only when `main` still
 needs its numeric version advanced.
