@@ -259,6 +259,37 @@ private extension View {
                 )
         }
     }
+
+    @ViewBuilder
+    func keyboardPanelSurface() -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+            )
+        } else {
+            self
+                .background(
+                    .thinMaterial,
+                    in: RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+        }
+    }
+
+    @ViewBuilder
+    func transmissionChipSurface() -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(.regular.tint(Color.accentColor.opacity(0.25)), in: Capsule())
+        } else {
+            self
+                .background(.thinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1))
+        }
+    }
 }
 
 // MARK: - Composer text view
@@ -411,7 +442,6 @@ struct LiveKeyboardView: View {
     private var layout: KeyboardLayout { KeyboardLayout(rawValue: layoutName) ?? .german }
     private var layoutSupported: Bool { manager.supports("keyboard_layout") }
     private var keysSupported: Bool { manager.supports("keyboard_key") }
-    private var isSending: Bool { isTransmitting || liveSendTask != nil }
     private var activeModifierPrefix: String {
         KeyModifier.all.filter { latches.contains($0.bit) }.map(\.comboSymbol).joined()
     }
@@ -463,7 +493,6 @@ struct LiveKeyboardView: View {
         VStack(spacing: AppTheme.Spacing.compact) {
             HStack(spacing: AppTheme.Spacing.compact) {
                 layoutMenu
-                transmissionIndicator
                 Spacer()
                 releaseAllButton
                 dismissKeyboardButton
@@ -488,20 +517,6 @@ struct LiveKeyboardView: View {
         .buttonStyle(.bordered)
         .disabled(!layoutSupported)
         .accessibilityLabel("Host keyboard layout: \(layout.rawValue)")
-    }
-
-    private var transmissionIndicator: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "circle.fill")
-                .font(.system(size: 7))
-                .foregroundStyle(Color.accentColor)
-                .symbolEffect(.pulse, options: .repeating, isActive: isSending)
-            Text("TX")
-                .font(.caption2.monospaced().weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .opacity(isSending ? 1 : 0)
-        .accessibilityHidden(true)
     }
 
     private var releaseAllButton: some View {
@@ -532,8 +547,8 @@ struct LiveKeyboardView: View {
 
     private var fieldCard: some View {
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+            Color.clear
+                .keyboardPanelSurface()
             KeyboardComposerBridge(
                 box: fieldBox,
                 onInsert: handleInsert,
@@ -1074,21 +1089,21 @@ private struct TransmissionChipView: View {
             .font(.caption.monospaced().weight(.semibold))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.4), lineWidth: 1))
-            .offset(x: chip.jitterX, y: flying ? -84 : 4)
+            .transmissionChipSurface()
+            .offset(x: flying ? chip.jitterX * 0.35 : chip.jitterX, y: flying ? -76 : 6)
             .opacity(flying ? 0 : 1)
-            .scaleEffect(flying ? 0.85 : 1)
+            .scaleEffect(flying ? 0.9 : 1)
+            .blur(radius: flying && !reduceMotion ? 1.5 : 0)
             .task {
                 if reduceMotion {
                     try? await Task.sleep(for: .milliseconds(350))
                     onFinished()
                 } else {
                     try? await Task.sleep(for: .milliseconds(40))
-                    withAnimation(.easeIn(duration: 0.6)) {
+                    withAnimation(.smooth(duration: 0.52)) {
                         flying = true
                     }
-                    try? await Task.sleep(for: .milliseconds(660))
+                    try? await Task.sleep(for: .milliseconds(580))
                     onFinished()
                 }
             }

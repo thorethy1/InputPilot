@@ -38,7 +38,7 @@ struct ContentView: View {
           }
           .tabItem { Label("Devices", systemImage: "memorychip") }
           NavigationStack { ControlRootView(devices: storedDevices) }
-            .tabItem { Label("Control", systemImage: "rectangle.and.hand.point.up.left") }
+            .tabItem { Label("Control", systemImage: "computermouse") }
           NavigationStack { FirmwareRootView(devices: storedDevices) }
             .tabItem { Label("Firmware", systemImage: "arrow.triangle.2.circlepath") }
           NavigationStack { ConnectionSettingsView() }
@@ -150,7 +150,7 @@ private struct DeviceRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "memorychip")
+            Image(systemName: "computermouse.fill")
                 .foregroundStyle(presence.color)
                 .frame(width: 20)
                 .accessibilityHidden(true)

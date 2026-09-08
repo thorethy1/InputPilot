@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Finalize 0.9.0 with a single Control connection summary plus live Bluetooth/Wi-Fi badges, an isolated Device Details control destination, Settings-only transport selection, a clearer persisted pointer-sensitivity control and updated mouse iconography.
+- Persist app diagnostics across relaunches and crashes and retain the firmware log tail in checksum-protected RTC memory across software, panic and watchdog resets.
+- Refine Keyboard with calmer word-flight feedback, no TX indicator and more consistent Liquid Glass surfaces; switch Presets to a two-column Apple Shortcuts-style layout and move Macro search directly above recording.
+- Add Apple Shortcuts actions for saved macros (with speed/repeat/start-delay), mouse clicks, scrolling and emergency release-all, and expose status, send-text, click and release-all as suggested app shortcut tiles.
 - Reject firmware downgrades in both the iOS preflight and the authenticated firmware OTA receiver. Developer Mode exposes confirmed downgrade and published SHA-256 overrides while the device continues to verify the complete transfer hash and embedded image compatibility metadata.
 - Polish Firmware with an installed-to-available version summary, release notes, clearer download/validation state and actionable checksum errors. Add animated, haptic Control section changes with a swipe gesture on the native picker, guaranteed input release when leaving Trackpad or Keyboard, and a smoothed speed-sensitive pointer acceleration curve.
 - Add Apple Shortcuts actions to switch the active device and start or stop the firmware-persisted periodic mouse movement schedule through the shared authenticated device services.

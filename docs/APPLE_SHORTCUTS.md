@@ -10,7 +10,8 @@ scheme.
 
 | Intent | Parameter | Behaviour |
 | --- | --- | --- |
-| Run Preset | Preset (required), Device (optional, defaults to the active device) | Parses the preset, connects, executes it through the shared `ActionExecutor`, disconnects. Reports Done or a failure reason. |
+| Run Preset | Preset (required), Device (optional, defaults to the active device) | Parses the preset, connects and executes it through the shared `ActionExecutor`. Reports Done or a failure reason. |
+| Run Macro | Macro, Device (optional), Speed, Repeats, Start Delay | Plays a saved macro through the shared connection manager and waits for held-input cleanup before reporting completion. |
 | Connect Device | Device | Connects BLE/Wi-Fi and reports the high-level connection summary ("Active Wi-Fi", "Ready Bluetooth", "Offline", …). |
 | Check Device Status | Device (optional, defaults to active) | Same summary without changing preset state. |
 | Switch Device | Device | Changes the active device shared by the app and later automations. |
@@ -18,9 +19,14 @@ scheme.
 | Stop Mouse Move | Device (optional, defaults to active) | Connects and disables periodic pointer movement while preserving the interval and click schedule. |
 | Send Keyboard Shortcut | Key combo string (e.g. `ENTER`, `CTRL+A`) | Validated with the same single-key rules as preset scripts; rejects anything else with a helpful message. |
 | Send Text | Text (required), Typing Delay in ms (optional) | Types text through `sendText` with the selected host keyboard layout. |
+| Click Mouse | Button (left/right/middle), Device (optional) | Sends one mouse click through the active authenticated transport. |
+| Scroll | Amount (-100…100), Device (optional) | Sends a bounded vertical scroll action. |
+| Release All Input | Device (optional) | Releases every held key, modifier and mouse button as an emergency safety action. |
 
-Siri phrases registered via `AppShortcutsProvider` cover presets, connecting,
-keyboard shortcuts, switching devices and starting/stopping mouse movement.
+Suggested actions registered via `AppShortcutsProvider` cover presets,
+connecting, status, text, keyboard shortcuts, mouse clicks, release-all,
+switching devices and starting/stopping mouse movement. Run Macro and Scroll
+remain available as configurable actions in the Shortcuts app.
 
 Unavailable cases never throw at the user: a missing active device answers "No
 InputPilot device is saved yet", an unreachable device answers with the honest

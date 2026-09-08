@@ -313,7 +313,7 @@ Prioritize:
 
 - [ ] Run InputPilot Shortcut.
 - [x] Run Preset.
-- [ ] Run Macro. (deferred: `MacroController.play` can run standalone, but macro entity plumbing and speed/repeat parameters are not wired into intents yet)
+- [x] Run Macro with device, speed, repeat and start-delay parameters.
 - [x] Send Keyboard Shortcut.
 - [x] Send Text.
 - [x] Connect Device.
@@ -321,6 +321,9 @@ Prioritize:
 - [x] Start Mouse Move.
 - [x] Stop Mouse Move.
 - [x] Check Device Status using high-level product state.
+- [x] Click Mouse.
+- [x] Scroll.
+- [x] Release All Input.
 
 Expose device/action parameters only where useful and avoid leaking protocol internals.
 

@@ -39,6 +39,30 @@ struct InputPilotAppShortcuts: AppShortcutsProvider {
             shortTitle: "Stop Mouse Move",
             systemImageName: "stop.circle"
         )
+        AppShortcut(
+            intent: CheckDeviceStatusIntent(),
+            phrases: ["Check \(.applicationName) status"],
+            shortTitle: "Check Status",
+            systemImageName: "checkmark.circle"
+        )
+        AppShortcut(
+            intent: SendTextIntent(),
+            phrases: ["Type text with \(.applicationName)"],
+            shortTitle: "Send Text",
+            systemImageName: "text.cursor"
+        )
+        AppShortcut(
+            intent: ClickMouseIntent(),
+            phrases: ["Click with \(.applicationName)"],
+            shortTitle: "Click Mouse",
+            systemImageName: "computermouse"
+        )
+        AppShortcut(
+            intent: ReleaseAllInputIntent(),
+            phrases: ["Release all with \(.applicationName)"],
+            shortTitle: "Release All",
+            systemImageName: "arrow.uturn.backward.circle"
+        )
     }
 
     static var shortcutTileColor: ShortcutTileColor { .red }

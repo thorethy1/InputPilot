@@ -51,6 +51,19 @@ struct PresetRunOutcome: Equatable, Sendable {
         }
     }
 
+    static func send(_ event: HIDEvent, to device: StoredDevice,
+                     timeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
+        let manager = manager(for: device)
+        await manager.connect()
+        guard await manager.waitUntilReady(timeout: timeout) else {
+            return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
+        }
+        guard await manager.send(event) else {
+            return PresetRunOutcome(success: false, message: manager.lastError ?? "The action could not be delivered.")
+        }
+        return PresetRunOutcome(success: true, message: "Done on \(device.displayName).")
+    }
+
     /// Returns one long-lived connection manager per device so back-to-back
     /// Shortcuts reuse an established session instead of reconnecting from
     /// scratch. A changed Wi-Fi endpoint replaces the cached manager.
@@ -105,6 +118,63 @@ struct PresetRunOutcome: Equatable, Sendable {
         // Keep the shared connection warm; follow-up Shortcuts then start on an
         // established session instead of paying the reconnect cost again.
         return outcome
+    }
+
+    static func run(macro: HIDMacro,
+                    speed: Double,
+                    repeats: Int,
+                    delay: Double,
+                    device: StoredDevice,
+                    context: ModelContext,
+                    readinessTimeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
+        let manager = manager(for: device)
+        await manager.connect()
+        return await run(
+            macro: macro,
+            speed: speed,
+            repeats: repeats,
+            delay: delay,
+            manager: manager,
+            context: context,
+            readinessTimeout: readinessTimeout
+        )
+    }
+
+    static func run(macro: HIDMacro,
+                    speed: Double,
+                    repeats: Int,
+                    delay: Double,
+                    manager: HIDConnectionManager,
+                    context: ModelContext,
+                    readinessTimeout: TimeInterval = AppIntentSupport.readinessTimeout) async -> PresetRunOutcome {
+        guard await manager.waitUntilReady(timeout: readinessTimeout) else {
+            return PresetRunOutcome(success: false, message: "The device did not finish connecting in time (\(manager.connectionSummary)).")
+        }
+        let controller = MacroController()
+        controller.play(
+            macro,
+            speed: speed,
+            repeats: repeats,
+            delay: delay,
+            manager: manager,
+            layout: KeyboardLayout(rawValue: UserDefaults.standard.string(forKey: "keyboardLayout") ?? "") ?? .german,
+            secretResolver: { try SecretStore(context: context).value(forID: $0) }
+        )
+        await withTaskCancellationHandler {
+            await controller.waitForPlayback()
+        } onCancel: {
+            Task { @MainActor in controller.cancel() }
+        }
+        switch controller.state {
+        case .completed:
+            return PresetRunOutcome(success: true, message: "\(macro.name) completed.")
+        case .cancelled, .cancelling:
+            return PresetRunOutcome(success: false, message: "\(macro.name) was cancelled.")
+        case .failed:
+            return PresetRunOutcome(success: false, message: controller.errorMessage ?? "The macro could not run.")
+        case .ready, .waiting, .running:
+            return PresetRunOutcome(success: false, message: "The macro did not finish.")
+        }
     }
 
     static func run(steps: [PresetScript.Step],

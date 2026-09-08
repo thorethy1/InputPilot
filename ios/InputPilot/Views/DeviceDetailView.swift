@@ -63,7 +63,7 @@ struct DeviceDetailView: View {
 
             Section("Control") {
                 NavigationLink {
-                    HIDControlView(device: device)
+                    StandaloneDeviceControlView(device: device)
                 } label: {
                     Label("Open Trackpad & Keyboard", systemImage: "computermouse")
                 }

@@ -51,6 +51,44 @@ struct PresetEntityQuery: EntityQuery {
     }
 }
 
+struct InputPilotMacroEntity: AppEntity {
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = TypeDisplayRepresentation(name: "Macro")
+    static let defaultQuery = MacroEntityQuery()
+
+    var id: String
+    var name: String
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(name)", image: .init(systemName: "recordingtape"))
+    }
+
+    static func identifier(for macro: HIDMacro) -> String {
+        String(macro.createdAt.timeIntervalSinceReferenceDate.bitPattern, radix: 16)
+    }
+}
+
+struct MacroEntityQuery: EntityQuery {
+    func entities(for identifiers: [String]) async throws -> [InputPilotMacroEntity] {
+        await MainActor.run {
+            allMacros().filter { identifiers.contains($0.id) }
+        }
+    }
+
+    func suggestedEntities() async throws -> [InputPilotMacroEntity] {
+        await MainActor.run { allMacros() }
+    }
+
+    func defaultResult() async throws -> InputPilotMacroEntity? {
+        await MainActor.run { allMacros().first }
+    }
+
+    @MainActor private func allMacros() -> [InputPilotMacroEntity] {
+        let context = AppIntentSupport.container.mainContext
+        let macros = (try? context.fetch(FetchDescriptor<HIDMacro>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)]))) ?? []
+        return macros.map { InputPilotMacroEntity(id: InputPilotMacroEntity.identifier(for: $0), name: $0.name) }
+    }
+}
+
 struct InputPilotDeviceEntity: AppEntity {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = TypeDisplayRepresentation(name: "Device")
     static let defaultQuery = DeviceEntityQuery()
@@ -93,6 +131,27 @@ struct DeviceEntityQuery: EntityQuery {
     }
 }
 
+enum InputPilotMouseButton: String, AppEnum {
+    case left
+    case right
+    case middle
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Mouse Button")
+    static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+        .left: "Left",
+        .right: "Right",
+        .middle: "Middle"
+    ]
+
+    var hidButton: MouseButton {
+        switch self {
+        case .left: .left
+        case .right: .right
+        case .middle: .middle
+        }
+    }
+}
+
 struct RunPresetIntent: AppIntent {
     static let title: LocalizedStringResource = "Run Preset"
     static let description = IntentDescription("Runs an InputPilot preset on the active device, connecting first when needed.")
@@ -123,6 +182,45 @@ struct RunPresetIntent: AppIntent {
                 return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
             }
             return await AppIntentSupport.run(preset: model, device: storedDevice, context: context)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}
+
+struct RunMacroIntent: AppIntent {
+    static let title: LocalizedStringResource = "Run Macro"
+    static let description = IntentDescription("Runs a recorded InputPilot mouse and keyboard macro.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Macro") var macro: InputPilotMacroEntity
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity?
+    @Parameter(title: "Speed", default: 1, inclusiveRange: (0.25, 4)) var speed: Double
+    @Parameter(title: "Repeats", default: 1, inclusiveRange: (1, 100)) var repeats: Int
+    @Parameter(title: "Start Delay", default: 0, inclusiveRange: (0, 60)) var startDelay: Int
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Run \(\.$macro) on \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [macro, device, speed, repeats, startDelay] in
+            let context = AppIntentSupport.container.mainContext
+            let macros = (try? context.fetch(FetchDescriptor<HIDMacro>())) ?? []
+            guard let model = macros.first(where: { InputPilotMacroEntity.identifier(for: $0) == macro.id }) else {
+                return PresetRunOutcome(success: false, message: "This macro is no longer available.")
+            }
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.run(
+                macro: model,
+                speed: speed,
+                repeats: repeats,
+                delay: Double(startDelay),
+                device: storedDevice,
+                context: context
+            )
         }
         guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))
@@ -302,6 +400,80 @@ struct StopMouseMoveIntent: AppIntent {
                 return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
             }
             return await AppIntentSupport.setMouseMove(false, for: storedDevice, context: context)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}
+
+struct ClickMouseIntent: AppIntent {
+    static let title: LocalizedStringResource = "Click Mouse"
+    static let description = IntentDescription("Clicks a mouse button on the computer connected to InputPilot.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Button", default: .left) var button: InputPilotMouseButton
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Click \(\.$button) on \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [button, device] in
+            let context = AppIntentSupport.container.mainContext
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.send(.click(button.hidButton), to: storedDevice)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}
+
+struct ScrollMouseIntent: AppIntent {
+    static let title: LocalizedStringResource = "Scroll"
+    static let description = IntentDescription("Scrolls on the computer connected to InputPilot. Positive values scroll up and negative values scroll down.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Amount", default: 3, inclusiveRange: (-100, 100)) var amount: Int
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Scroll \(\.$amount) on \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [amount, device] in
+            let context = AppIntentSupport.container.mainContext
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.send(.scroll(Int16(clamping: amount)), to: storedDevice)
+        }
+        guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
+        return .result(dialog: IntentDialog(stringLiteral: outcome.message))
+    }
+}
+
+struct ReleaseAllInputIntent: AppIntent {
+    static let title: LocalizedStringResource = "Release All Input"
+    static let description = IntentDescription("Releases every keyboard key, modifier and mouse button held by InputPilot.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Device") var device: InputPilotDeviceEntity?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Release all input on \(\.$device)")
+    }
+
+    @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
+        let outcome = await AppIntentSupport.serialized { [device] in
+            let context = AppIntentSupport.container.mainContext
+            guard let storedDevice = AppIntentSupport.device(matching: device, context: context) else {
+                return PresetRunOutcome(success: false, message: "No InputPilot device is saved yet. Add one in the app first.")
+            }
+            return await AppIntentSupport.send(.releaseAll, to: storedDevice)
         }
         guard outcome.success else { throw InputPilotIntentError(message: outcome.message) }
         return .result(dialog: IntentDialog(stringLiteral: outcome.message))

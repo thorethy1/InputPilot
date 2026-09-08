@@ -50,6 +50,25 @@ struct MacrosView: View {
                 }
             }
             Section {
+                HStack(spacing: AppTheme.Spacing.compact) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search macros", text: $search)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if !search.isEmpty {
+                        Button {
+                            search = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear macro search")
+                    }
+                }
+            }
+            Section {
                 Button {
                     if controller.isRecording {
                         controller.stopRecording()
@@ -109,7 +128,6 @@ struct MacrosView: View {
                 }
             }
         }
-        .searchable(text: $search, prompt: "Find a macro")
         .sheet(item: $editTarget) { MacroEditorView(macro: $0) }
         .confirmationDialog("Delete Macro?", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }), titleVisibility: .visible) {
             Button("Delete", role: .destructive) {

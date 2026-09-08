@@ -228,7 +228,13 @@ struct InputPilotApp: App {
             ContentView()
                 .tint(accent.color(customHex: customAccentHex))
                 .preferredColorScheme(appearance.colorScheme)
-                .onAppear { applyUIKitTint() }
+                .onAppear {
+                    applyUIKitTint()
+                    appLog(.diagnostics, "App launched")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+                    AppLog.shared.flush()
+                }
                 .onChange(of: accentName) { _, _ in applyUIKitTint() }
                 .onChange(of: customAccentHex) { _, _ in applyUIKitTint() }
         }

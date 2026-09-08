@@ -7,22 +7,93 @@ import SwiftData
 import SwiftUI
 import UIKit
 
-enum AppLogCategory: String, CaseIterable, Identifiable { case all = "All", input = "Input", control = "Control", bluetooth = "Bluetooth", tcp = "TCP", diagnostics = "Diagnostics", errors = "Errors"; var id: String { rawValue } }
-struct AppLogRecord: Identifiable, Equatable {
-    let id = UUID(); let date: Date; let category: AppLogCategory; let message: String
+enum AppLogCategory: String, CaseIterable, Codable, Identifiable, Sendable { case all = "All", input = "Input", control = "Control", bluetooth = "Bluetooth", tcp = "TCP", diagnostics = "Diagnostics", errors = "Errors"; var id: String { rawValue } }
+struct AppLogRecord: Identifiable, Equatable, Codable, Sendable {
+    let id: UUID; let date: Date; let category: AppLogCategory; let message: String
+    init(id: UUID = UUID(), date: Date, category: AppLogCategory, message: String) {
+        self.id = id; self.date = date; self.category = category; self.message = message
+    }
     var line: String { "\(date.formatted(.dateTime.hour().minute().second().secondFraction(.fractional(3)))) \(category.rawValue.uppercased()) \(message)" }
     func matches(_ filter: AppLogCategory) -> Bool { filter == .all || filter == category || (filter == .errors && message.localizedCaseInsensitiveContains("error")) }
 }
 @MainActor final class AppLog: ObservableObject {
     static let shared = AppLog(); static let capacity = 1000
-    @Published private(set) var records: [AppLogRecord] = []
+    nonisolated private static let persistenceQueue = DispatchQueue(
+        label: "app.inputpilot.diagnostics.persistence",
+        qos: .utility
+    )
+    @Published private(set) var records: [AppLogRecord]
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "InputPilot", category: "diagnostics")
+    private let storeURL: URL?
+    private var persistenceTask: Task<Void, Never>?
+
+    private init() {
+        storeURL = Self.makeStoreURL()
+        records = storeURL.flatMap(Self.load(from:)) ?? []
+    }
+
     func write(_ category: AppLogCategory, _ message: String) {
         logger.log("[\(category.rawValue, privacy: .public)] \(message, privacy: .public)")
         records.append(AppLogRecord(date: Date(), category: category, message: message))
         if records.count > Self.capacity { records.removeFirst(records.count - Self.capacity) }
+        schedulePersistence(immediate: category == .errors)
     }
-    func clear() { records.removeAll(keepingCapacity: true) }
+    func flush() {
+        persistenceTask?.cancel(); persistenceTask = nil
+        persist(records)
+    }
+    func clear() {
+        persistenceTask?.cancel(); persistenceTask = nil
+        records.removeAll(keepingCapacity: true)
+        let url = storeURL
+        Self.persistenceQueue.sync {
+            if let url { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    private func schedulePersistence(immediate: Bool) {
+        if immediate {
+            persistenceTask?.cancel(); persistenceTask = nil
+            persist(records)
+        } else {
+            guard persistenceTask == nil else { return }
+            persistenceTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                let snapshot = self.records
+                let url = self.storeURL
+                Self.persistenceQueue.async {
+                    Self.persist(snapshot, to: url)
+                }
+                self.persistenceTask = nil
+            }
+        }
+    }
+
+    private func persist(_ snapshot: [AppLogRecord]) {
+        let url = storeURL
+        Self.persistenceQueue.sync {
+            Self.persist(snapshot, to: url)
+        }
+    }
+
+    nonisolated private static func persist(_ snapshot: [AppLogRecord], to url: URL?) {
+        guard let url, let data = try? JSONEncoder().encode(snapshot) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    private static func makeStoreURL() -> URL? {
+        guard let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("app-diagnostics.json", isDirectory: false)
+    }
+
+    private static func load(from url: URL) -> [AppLogRecord]? {
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([AppLogRecord].self, from: data) else { return nil }
+        return Array(decoded.suffix(capacity))
+    }
 }
 enum AppLogContext { @TaskLocal static var eventID: UInt64? }
 func appLog(_ category: AppLogCategory, _ message: String) { Task { @MainActor in AppLog.shared.write(category, message) } }
@@ -81,7 +152,15 @@ enum ConnectionMode: String, CaseIterable, Codable, Identifiable {
     case bluetoothOnly = "Bluetooth Only", wifiOnly = "Wi-Fi Only"
     var id: String { rawValue }
 }
-enum TransportKind: String { case bluetooth = "Bluetooth", tcp = "Wi-Fi" }
+enum TransportKind: String, CaseIterable, Hashable, Identifiable {
+    case bluetooth = "Bluetooth", tcp = "Wi-Fi"
+    var id: Self { self }
+}
+struct TransportStatusSnapshot: Identifiable, Equatable {
+    let kind: TransportKind
+    let state: TransportConnectionState
+    var id: TransportKind { kind }
+}
 enum TransportConnectionState: String, Equatable {
     case unavailable, offline, discovering, discovered, connecting, connected, reconnecting, authenticating, ready, authenticationFailed
 
@@ -2323,12 +2402,14 @@ enum InputPilotWiFiManager {
     @Published var activeTransport: TransportKind?
     @Published var lastError: String?
     @Published private(set) var isConnecting = false
+    @Published private(set) var transportStates: [TransportKind: TransportConnectionState] = [:]
     let capabilities: Set<String>
     let protocolVersion: Int
     var onEvent: ((HIDEvent) -> Void)?
     private let ble: HIDControlTransport; private let tcp: HIDControlTransport
     private var leasedTransport: HIDControlTransport?
     private var nextEventID: UInt64 = 0
+    private var transportMonitor: Task<Void, Never>?
     init(device: StoredDevice) {
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
         let hosts = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).compactMap(\.host)
@@ -2343,12 +2424,20 @@ enum InputPilotWiFiManager {
             InputPilotWiFiManager.session(host: host, deviceId: device.deviceId, fallbackHosts: Array(hosts.dropFirst()))
         capabilities = Set(device.capabilities)
         protocolVersion = device.protocolVersion
+        refreshTransportStates()
     }
     init(ble: HIDControlTransport, tcp: HIDControlTransport, capabilities: Set<String> = [], protocolVersion: Int = 2) {
         mode = .automatic
         self.ble = ble; self.tcp = tcp; self.capabilities = capabilities; self.protocolVersion = protocolVersion
+        refreshTransportStates()
     }
-    func connect() async { isConnecting = true; async let b: Void = ble.connect(); async let t: Void = tcp.connect(); _ = await (b, t); isConnecting = false }
+    func connect() async {
+        isConnecting = true
+        async let b: Void = ble.connect(); async let t: Void = tcp.connect()
+        _ = await (b, t)
+        refreshTransportStates()
+        isConnecting = false
+    }
     // connect() only starts the transports; BLE scan/auth and the Wi-Fi handshake
     // finish asynchronously. Callers that need a ready session immediately after
     // connecting (App Intents, automations) must wait for readiness first.
@@ -2467,6 +2556,13 @@ enum InputPilotWiFiManager {
         return messages
     }
     var transportReadiness: [(TransportKind, Bool)] { [(.bluetooth, ble.isAvailable), (.tcp, tcp.isAvailable)] }
+    var visibleTransportStates: [TransportStatusSnapshot] {
+        TransportKind.allCases.compactMap { kind in
+            let capability = kind == .bluetooth ? "ble_transport" : "wifi_transport"
+            guard supports(capability) else { return nil }
+            return TransportStatusSnapshot(kind: kind, state: transportStates[kind] ?? .offline)
+        }
+    }
     var connectionSummary: String {
         if protocolVersion != 2 { return "Firmware must be reflashed" }
         if let activeTransport, transport(for: activeTransport).state == .ready { return "Active \(activeTransport.rawValue)" }
@@ -2479,6 +2575,28 @@ enum InputPilotWiFiManager {
         return "Offline"
     }
     private var allTransports: [HIDControlTransport] { [ble, tcp] }
+    private func refreshTransportStates() {
+        let latest: [TransportKind: TransportConnectionState] = [
+            .bluetooth: ble.state,
+            .tcp: tcp.state
+        ]
+        if transportStates != latest { transportStates = latest }
+    }
+    func startTransportStatusUpdates() {
+        guard transportMonitor == nil else { return }
+        transportMonitor = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard self != nil else { return }
+                self?.refreshTransportStates()
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+    func stopTransportStatusUpdates() {
+        transportMonitor?.cancel()
+        transportMonitor = nil
+        refreshTransportStates()
+    }
     private func transport(for kind: TransportKind) -> HIDControlTransport {
         switch kind { case .bluetooth: ble; case .tcp: tcp }
     }
@@ -2659,23 +2777,12 @@ struct HIDControlView: View {
     init(device: StoredDevice, devices: [StoredDevice] = []) { self.device = device; self.devices = devices; _manager = StateObject(wrappedValue: HIDConnectionManager(device: device)) }
     var body: some View {
         VStack(spacing: 0) {
-            DeviceConnectionBanner(device: device)
-                .padding(.horizontal)
-                .padding(.bottom, AppTheme.Spacing.compact)
-            HStack {
-                Label(manager.connectionSummary, systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                Picker("Connection", selection: $manager.mode) {
-                    ForEach(ConnectionMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .livePickerAccent()
-                .labelsHidden()
-                .disabled(macros.isPlaying)
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
+                DeviceConnectionBanner(device: device)
+                ControlTransportStatus(manager: manager)
             }
             .padding(.horizontal)
+            .padding(.bottom, AppTheme.Spacing.compact)
             Group {
                 if dynamicTypeSize.isAccessibilitySize {
                     controlPicker.pickerStyle(.menu)
@@ -2714,12 +2821,17 @@ struct HIDControlView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { if !manager.unsupportedControlMessages.isEmpty { Text(manager.unsupportedControlMessages.joined(separator: " ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal).accessibilityIdentifier("capability-limitations") } }
-        .task { manager.onEvent = { macros.capture($0) }; await manager.connect() }
+        .task {
+            manager.startTransportStatusUpdates()
+            manager.onEvent = { macros.capture($0) }
+            await manager.connect()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             macros.stopRecording(); macros.cancel()
             Task { await macros.waitForPlayback(); await manager.releaseAll() }
         }
         .onDisappear {
+            manager.stopTransportStatusUpdates()
             macros.stopRecording(); macros.cancel()
             Task { await macros.waitForPlayback(); await manager.disconnect() }
         }
@@ -2762,6 +2874,46 @@ struct HIDControlView: View {
     }
 }
 
+/// Device Details owns this navigation destination. It deliberately does not
+/// inherit the tab-level device picker or mutate the globally selected device.
+struct StandaloneDeviceControlView: View {
+    @Bindable var device: StoredDevice
+
+    var body: some View {
+        HIDControlView(device: device, devices: [])
+            .id("device-control-\(device.deviceId)")
+    }
+}
+
+private struct ControlTransportStatus: View {
+    @ObservedObject var manager: HIDConnectionManager
+
+    var body: some View {
+        HStack(spacing: AppTheme.Spacing.compact) {
+            ForEach(manager.visibleTransportStates) { status in
+                Label(status.state.title, systemImage: status.kind == .bluetooth ? "bluetooth" : "wifi")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(color(for: status.state))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(color(for: status.state).opacity(0.1), in: Capsule())
+                    .accessibilityLabel("\(status.kind.rawValue): \(status.state.title)")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func color(for state: TransportConnectionState) -> Color {
+        switch state {
+        case .ready: AppColors.connected
+        case .authenticationFailed: AppColors.error
+        case .discovering, .discovered, .connecting, .connected, .reconnecting, .authenticating:
+            AppColors.available
+        case .offline, .unavailable: AppColors.offline
+        }
+    }
+}
+
 struct TrackpadView: View {
     @ObservedObject var manager: HIDConnectionManager
     @AppStorage("trackpadSensitivity") private var sensitivity = 1.0
@@ -2788,9 +2940,25 @@ struct TrackpadView: View {
     var body: some View {
         VStack(spacing: AppTheme.Spacing.compact) {
             trackpad
-            HStack {
-                Text("Sensitivity")
-                Slider(value: $sensitivity, in: 0.4...2.5)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Pointer Sensitivity")
+                    Spacer()
+                    Text("\(Int((sensitivity * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: AppTheme.Spacing.compact) {
+                    Image(systemName: "tortoise")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Slider(value: $sensitivity, in: 0.4...2.5, step: 0.1)
+                        .accessibilityLabel("Pointer sensitivity")
+                        .accessibilityValue("\(Int((sensitivity * 100).rounded())) percent")
+                    Image(systemName: "hare")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal)
             if !hintsSeen {

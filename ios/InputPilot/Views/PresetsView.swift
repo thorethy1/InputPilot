@@ -195,7 +195,6 @@ struct PresetsView: View {
 
     private var columns: [GridItem] {
         [GridItem(.flexible(), spacing: AppTheme.Spacing.standard),
-         GridItem(.flexible(), spacing: AppTheme.Spacing.standard),
          GridItem(.flexible(), spacing: AppTheme.Spacing.standard)]
     }
 
@@ -410,40 +409,49 @@ private struct PresetTileContent: View {
             .overlay {
                 ZStack {
                     shape
-                        .fill(LinearGradient(colors: [tint.opacity(0.85), tint.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .fill(tint.opacity(0.14))
                     if #available(iOS 26.0, *) {
                         shape
                             .fill(.clear)
-                            .glassEffect(.regular.tint(tint.opacity(0.35)), in: shape)
+                            .glassEffect(.regular.tint(tint.opacity(0.16)).interactive(), in: shape)
                     } else {
                         shape
-                            .strokeBorder(.white.opacity(0.35), lineWidth: 1)
+                            .strokeBorder(tint.opacity(0.22), lineWidth: 1)
                     }
                     VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
                         HStack(alignment: .top) {
                             Image(systemName: preset.icon)
                                 .font(.title2)
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            if preset.favorite {
-                                Image(systemName: "star.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.9))
-                            }
+                                .foregroundStyle(tint)
+                                .frame(width: 42, height: 42)
+                                .background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            Spacer(minLength: 0)
+                            Image(systemName: "play.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(tint)
+                                .accessibilityHidden(true)
                         }
                         Spacer(minLength: 0)
-                        Text(preset.name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(2, reservesSpace: true)
-                            .multilineTextAlignment(.leading)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(preset.name)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2, reservesSpace: true)
+                                .multilineTextAlignment(.leading)
+                            if preset.favorite {
+                                Image(systemName: "star.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(tint)
+                                    .accessibilityLabel("Favorite")
+                            }
+                        }
                         HStack(spacing: 4) {
                             Image(systemName: badgeSymbol)
                                 .font(.caption2)
                             Text(badgeLabel)
                                 .font(.caption2)
                         }
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(.secondary)
                     }
                     .padding(AppTheme.Spacing.standard)
                     stateOverlay

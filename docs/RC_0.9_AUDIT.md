@@ -5,6 +5,11 @@ source audit of `ROADMAP.md`, `IMPLEMENTATION_0.9.md` and the current code, not 
 claim of physical-device verification. Release identity remains managed by the
 existing beta/release workflows.
 
+Post-audit 2026-09-08 delta: the final source pass added persistent app/firmware
+logs, consolidated Control transport status, the two-column Presets and revised
+Keyboard/Macro UI, plus Run Macro, Click Mouse, Scroll and Release All Input App
+Intents. The physical-device and iOS build gates below remain required.
+
 ## Implemented in this change
 
 - Control opens Trackpad/Keyboard/Presets/Macros directly for the active device.
@@ -58,7 +63,7 @@ No app/firmware version equality requirement was introduced.
 | Area | Evidence and remaining work |
 | --- | --- |
 | Quick Shortcuts | `KeyboardView.swift` still uses `QuickShortcut.defaults`. Create/edit/rename/duplicate/delete/reorder/favorite management and reusable Secret-backed shortcut actions remain open. Presets already cover several reusable-action needs, but do not complete this separate roadmap item. |
-| App Intents | Present: Run Preset, Connect Device, Check Device Status, Send Keyboard Shortcut, Send Text, Switch Device, Start Mouse Move and Stop Mouse Move. Missing: Run InputPilot Shortcut and Run Macro. Macro playback exposes completion but is not yet wired into an AppEntity/intent. |
+| App Intents | Present: Run Preset, Run Macro, Connect Device, Check Device Status, Send Keyboard Shortcut, Send Text, Switch Device, Start/Stop Mouse Move, Click Mouse, Scroll and Release All Input. Missing: the separately managed Run InputPilot Shortcut model; presets currently fill the reusable-action role. |
 | Downgrade protection | App preflight and current firmware reject semantic downgrades. An authenticated, confirmed Developer Mode override covers release and manual images; unit tests cover stable/beta ordering and both policy branches. |
 | OTA presentation | Installed → available versions, release notes, download/validation feedback, checksum errors and confirmed developer overrides are present. The complete physical compatibility/manual-update UX audit remains open. |
 | UI polish | Control sections now switch with a picker swipe, haptics and Reduce Motion-aware animation; Firmware uses native status presentation. The changed screens still need real rendered review, plus an app-wide pass over empty/loading/error states, Dynamic Type, VoiceOver, contrast and safe areas. |
@@ -79,6 +84,10 @@ No app/firmware version equality requirement was introduced.
 
 ## Focused manual verification
 
+- [ ] Generate App Logs, background/terminate/relaunch the app and verify the
+      previous tail remains. Trigger a firmware software reset and a controlled
+      watchdog/panic reset, then verify the previous firmware tail precedes the
+      new reset-reason/boot records.
 - [ ] Open Control with zero, one and multiple devices. Switch active device;
       confirm input goes only to that device and old playback stops.
 - [ ] Record mouse/keyboard input; save, relaunch, rename, duplicate, edit pauses,

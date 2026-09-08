@@ -107,6 +107,27 @@ private final class IntentMockTransport: HIDControlTransport {
         XCTAssertTrue(outcome.message.contains("line 1"))
     }
 
+    func testMacroIntentExecutionUsesSharedManagerAndCompletes() async throws {
+        let context = try makeContext()
+        let manager = makeManager(ready: true)
+        let macro = HIDMacro(
+            name: "Return",
+            events: [RecordedEvent(offset: 0, event: .key("enter"))]
+        )
+
+        let outcome = await AppIntentSupport.run(
+            macro: macro,
+            speed: 1,
+            repeats: 1,
+            delay: 0,
+            manager: manager,
+            context: context
+        )
+
+        XCTAssertTrue(outcome.success, outcome.message)
+        XCTAssertEqual(outcome.message, "Return completed.")
+    }
+
     func testExecutionAgainstMockActionTransportSucceeds() async throws {
         let context = try makeContext()
         let transport = IntentActionTransport()
