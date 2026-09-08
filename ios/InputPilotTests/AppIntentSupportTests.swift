@@ -7,6 +7,7 @@ private final class IntentMockTransport: HIDControlTransport {
     var state: TransportConnectionState
     var isAvailable: Bool { state == .ready }
     var events: [HIDEvent] = []
+    var managementCommands: [String] = []
     private var presetToken: UInt64 = 0
     private var presetSize = 0
 
@@ -18,6 +19,7 @@ private final class IntentMockTransport: HIDControlTransport {
     func connect() async {}
     func send(_ event: HIDEvent) async throws { events.append(event) }
     func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
+        managementCommands.append(command)
         let fields = command.split(separator: " ")
         if command.hasPrefix("PRESET BEGIN "), fields.count == 5 {
             presetToken = UInt64(fields[2], radix: 16) ?? 0
@@ -251,7 +253,8 @@ private final class IntentMockTransport: HIDControlTransport {
         let outcome = await AppIntentSupport.run(preset: HIDPreset(name: "Wi-Fi", payload: "hi"),
                                                  manager: manager, context: try makeContext(), readinessTimeout: 2)
         XCTAssertTrue(outcome.success, outcome.message)
-        XCTAssertFalse(tcp.events.isEmpty)
+        XCTAssertTrue(tcp.events.isEmpty)
+        XCTAssertTrue(tcp.managementCommands.contains { $0.hasPrefix("PRESET RUN ") })
         XCTAssertEqual(manager.activeTransport, .tcp)
     }
 
