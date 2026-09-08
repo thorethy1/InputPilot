@@ -401,11 +401,11 @@ private struct PresetTileContent: View {
     let state: PresetsViewModel.RunState
 
     var body: some View {
-        // Anchor the square tile on a content-independent view. Sizing the
+        // Anchor the rectangular tile on a content-independent view. Sizing the
         // ZStack directly lets LazyVGrid estimate unstable row heights, which
         // made tiles overlap and rows at the end of the grid drop out.
         Color.clear
-            .aspectRatio(1, contentMode: .fit)
+            .aspectRatio(1.45, contentMode: .fit)
             .overlay {
                 ZStack {
                     shape

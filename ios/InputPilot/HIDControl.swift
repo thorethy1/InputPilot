@@ -2874,17 +2874,6 @@ struct HIDControlView: View {
     }
 }
 
-/// Device Details owns this navigation destination. It deliberately does not
-/// inherit the tab-level device picker or mutate the globally selected device.
-struct StandaloneDeviceControlView: View {
-    @Bindable var device: StoredDevice
-
-    var body: some View {
-        HIDControlView(device: device, devices: [])
-            .id("device-control-\(device.deviceId)")
-    }
-}
-
 private struct ControlTransportStatus: View {
     @ObservedObject var manager: HIDConnectionManager
 
@@ -2939,28 +2928,8 @@ struct TrackpadView: View {
 
     var body: some View {
         VStack(spacing: AppTheme.Spacing.compact) {
+            sensitivityControl
             trackpad
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Pointer Sensitivity")
-                    Spacer()
-                    Text("\(Int((sensitivity * 100).rounded()))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: AppTheme.Spacing.compact) {
-                    Image(systemName: "tortoise")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Slider(value: $sensitivity, in: 0.4...2.5, step: 0.1)
-                        .accessibilityLabel("Pointer sensitivity")
-                        .accessibilityValue("\(Int((sensitivity * 100).rounded())) percent")
-                    Image(systemName: "hare")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
-            }
-            .padding(.horizontal)
             if !hintsSeen {
                 Label("Tap the ? on the trackpad for gesture help.", systemImage: "hand.tap")
                     .font(.caption)
@@ -2972,6 +2941,30 @@ struct TrackpadView: View {
             recoverFromError()
         }
         .onChange(of: manager.lastError) { _, error in if error != nil { recoverFromError() } }
+    }
+
+    private var sensitivityControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Pointer Sensitivity")
+                Spacer()
+                Text("\(Int((sensitivity * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: AppTheme.Spacing.compact) {
+                Image(systemName: "tortoise")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Slider(value: $sensitivity, in: 0.4...2.5, step: 0.1)
+                    .accessibilityLabel("Pointer sensitivity")
+                    .accessibilityValue("\(Int((sensitivity * 100).rounded())) percent")
+                Image(systemName: "hare")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal)
     }
 
     private var trackpad: some View {

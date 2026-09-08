@@ -290,6 +290,50 @@ private extension View {
                 .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1))
         }
     }
+
+    @ViewBuilder
+    func keyboardActionSurface(tint: Color? = nil, prominent: Bool = false, pressed: Bool = false) -> some View {
+        if #available(iOS 26.0, *) {
+            let activeTint: Color? = prominent ? Color.accentColor : tint
+            self.glassEffect(
+                activeTint.map {
+                    .regular
+                        .tint($0.opacity(prominent ? (pressed ? 0.85 : 0.7) : (pressed ? 0.34 : 0.18)))
+                        .interactive()
+                } ?? .regular.interactive(),
+                in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+            )
+        } else {
+            self
+                .background(
+                    prominent
+                        ? Color.accentColor.opacity(pressed ? 0.78 : 1)
+                        : (tint?.opacity(pressed ? 0.2 : 0.1) ?? Color.primary.opacity(pressed ? 0.1 : 0.06)),
+                    in: RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+        }
+    }
+}
+
+private struct KeyboardGlassButtonStyle: ButtonStyle {
+    var tint: Color? = nil
+    var prominent = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .padding(.horizontal, 10)
+            .keyboardActionSurface(tint: tint, prominent: prominent, pressed: configuration.isPressed)
+            .contentShape(RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(isEnabled ? 1 : 0.45)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
 }
 
 // MARK: - Composer text view
@@ -513,8 +557,9 @@ struct LiveKeyboardView: View {
             Label(layout.compactName, systemImage: "globe")
                 .font(.footnote.weight(.semibold))
                 .frame(minHeight: AppTheme.minimumInteractionSize)
+                .padding(.horizontal, 10)
+                .keyboardActionSurface()
         }
-        .buttonStyle(.bordered)
         .disabled(!layoutSupported)
         .accessibilityLabel("Host keyboard layout: \(layout.rawValue)")
     }
@@ -527,8 +572,7 @@ struct LiveKeyboardView: View {
                 .font(.footnote.weight(.semibold))
                 .frame(minHeight: AppTheme.minimumInteractionSize)
         }
-        .buttonStyle(.bordered)
-        .tint(AppColors.warning)
+        .buttonStyle(KeyboardGlassButtonStyle(tint: AppColors.warning))
         .accessibilityLabel("Release all keys")
         .accessibilityHint("Releases every latched modifier and any key the device still holds.")
     }
@@ -541,7 +585,7 @@ struct LiveKeyboardView: View {
                 .font(.body.weight(.medium))
                 .frame(minWidth: AppTheme.minimumInteractionSize, minHeight: AppTheme.minimumInteractionSize)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(KeyboardGlassButtonStyle())
         .accessibilityLabel("Dismiss keyboard")
     }
 
@@ -588,7 +632,7 @@ struct LiveKeyboardView: View {
                     .font(.footnote.weight(.semibold))
                     .frame(minHeight: AppTheme.minimumInteractionSize)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(KeyboardGlassButtonStyle())
             .disabled(!layoutSupported)
             .accessibilityLabel("Paste from clipboard")
             if isReviewing && !isTransmitting {
@@ -606,7 +650,7 @@ struct LiveKeyboardView: View {
                         .font(.title3)
                         .frame(minWidth: AppTheme.minimumInteractionSize, minHeight: AppTheme.minimumInteractionSize)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(KeyboardGlassButtonStyle())
                 .accessibilityLabel("Clear composer")
             }
             Button {
@@ -616,7 +660,7 @@ struct LiveKeyboardView: View {
                     .font(.footnote.weight(.semibold))
                     .frame(minHeight: AppTheme.minimumInteractionSize)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(KeyboardGlassButtonStyle(prominent: true))
             .disabled(composerText.isEmpty || isTransmitting || !layoutSupported)
         }
     }

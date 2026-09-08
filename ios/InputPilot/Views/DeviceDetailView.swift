@@ -8,6 +8,7 @@ struct DeviceDetailView: View {
     @EnvironmentObject private var viewModel: HomeViewModel
     @ObservedObject private var bluetooth: BLEHIDControlTransport
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
+    @Binding private var selectedTab: InputPilotTab
 
     @State private var displayName: String = ""
     @State private var showDeleteConfirmation = false
@@ -32,8 +33,9 @@ struct DeviceDetailView: View {
     @State private var wifiMessage: String?
     @State private var showClearWiFiConfirmation = false
 
-    init(device: StoredDevice) {
+    init(device: StoredDevice, selectedTab: Binding<InputPilotTab>) {
         _device = Bindable(wrappedValue: device)
+        _selectedTab = selectedTab
         _bluetooth = ObservedObject(wrappedValue: InputPilotBluetoothManager.session(deviceId: device.deviceId))
         _displayName = State(initialValue: device.displayName)
         let identity = device.cachedUSBIdentity
@@ -62,8 +64,9 @@ struct DeviceDetailView: View {
             }
 
             Section("Control") {
-                NavigationLink {
-                    StandaloneDeviceControlView(device: device)
+                Button {
+                    selectedDeviceId = device.deviceId
+                    selectedTab = .control
                 } label: {
                     Label("Open Trackpad & Keyboard", systemImage: "computermouse")
                 }

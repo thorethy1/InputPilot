@@ -4,6 +4,13 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+enum InputPilotTab: Hashable {
+    case devices
+    case control
+    case firmware
+    case settings
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \StoredDevice.displayName) private var storedDevices: [StoredDevice]
@@ -11,9 +18,10 @@ struct ContentView: View {
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
 
     @State private var showAddWizard = false
+    @State private var selectedTab = InputPilotTab.devices
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
           NavigationStack {
             Group {
                 if storedDevices.isEmpty {
@@ -37,12 +45,16 @@ struct ContentView: View {
             }
           }
           .tabItem { Label("Devices", systemImage: "memorychip") }
+          .tag(InputPilotTab.devices)
           NavigationStack { ControlRootView(devices: storedDevices) }
-            .tabItem { Label("Control", systemImage: "computermouse") }
+            .tabItem { Label("Control", systemImage: "rectangle.and.hand.point.up.left") }
+            .tag(InputPilotTab.control)
           NavigationStack { FirmwareRootView(devices: storedDevices) }
             .tabItem { Label("Firmware", systemImage: "arrow.triangle.2.circlepath") }
+            .tag(InputPilotTab.firmware)
           NavigationStack { ConnectionSettingsView() }
             .tabItem { Label("Settings", systemImage: "gearshape") }
+            .tag(InputPilotTab.settings)
         }
         .environmentObject(viewModel)
         .task(id: storedDevices.map(\.deviceId)) {
@@ -60,7 +72,7 @@ struct ContentView: View {
         List {
             ForEach(storedDevices) { device in
                 NavigationLink {
-                    DeviceDetailView(device: device)
+                    DeviceDetailView(device: device, selectedTab: $selectedTab)
                 } label: {
                     DeviceRowView(
                         device: device,
@@ -150,7 +162,7 @@ private struct DeviceRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "computermouse.fill")
+            Image(systemName: "memorychip")
                 .foregroundStyle(presence.color)
                 .frame(width: 20)
                 .accessibilityHidden(true)
