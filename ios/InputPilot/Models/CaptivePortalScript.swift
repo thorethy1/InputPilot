@@ -314,7 +314,7 @@ enum CaptivePortalScriptValidator {
 
     private static func protocolError(_ reply: String) -> Error {
         let code = reply.hasPrefix("error ") ? String(reply.dropFirst(6)) : reply
-        switch code {
+        return switch code {
         case "captive_not_found": TransportError.failed("The captive portal script no longer exists.")
         case "captive_busy": TransportError.failed("Another captive portal operation is already active.")
         case "captive_wrong_network": TransportError.failed("InputPilot is not connected to that Wi-Fi network.")
