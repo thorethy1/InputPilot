@@ -61,6 +61,12 @@ characteristics remain for BLE flow control, but every OTA control/data write
 is an encrypted record from that same session. Diagnostics are encrypted
 commands and responses on Control/Status rather than separate characteristics.
 
+The peripheral requests an ATT MTU up to 517, but the central selects the
+negotiated value. Clients therefore use CoreBluetooth's per-connection maximum
+write length instead of assuming a fixed iOS MTU. For example, an ATT MTU of
+185 exposes 182 bytes for a normal ATT value; secure framing and the OTA offset
+reduce the firmware bytes in that write further.
+
 ## Wi-Fi mapping
 
 TCP port 3333 carries the handshake and encrypted records on both SoftAP and
@@ -192,6 +198,11 @@ The same command core is available to TCP sessions with `WIFI SETHEX
 state plus a `provisioning` object with `state` and `error`. A failed
 join is therefore reported as `network_unreachable` without changing the
 authentication state of the transport used to query it.
+While an enabled fallback AP is kept alive during a station join, the reported
+state remains `connecting`; `soft_ap` denotes a settled fallback state and must
+not be cached as the final station endpoint. Clients may retain identity-verified
+station addresses across networks and try them directly before mDNS; the shared
+Soft-AP gateway remains a final, identity-checked fallback only.
 
 The `capabilities` array describes protocol features and transports supported
 by this firmware/device; `ble_transport` and `wifi_transport` remain static for

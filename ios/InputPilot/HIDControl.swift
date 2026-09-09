@@ -280,6 +280,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
     private var host: NWEndpoint.Host { NWEndpoint.Host(hosts[hostIndex]) }
     private var hosts: [String]
     private var hostIndex = 0
+    private var authenticationFailures = Set<Int>()
     private var connectionTimeoutWork: DispatchWorkItem?
     private let deviceId: String; private var connection: NWConnection?
     private var secureChannel: SecureChannel?
@@ -313,8 +314,15 @@ final class TCPHIDControlTransport: HIDControlTransport {
         shouldReconnect = true
         reconnectWork?.cancel(); reconnectWork = nil
         if connection != nil { return }
+        if state == .offline || state == .unavailable || state == .authenticationFailed {
+            authenticationFailures.removeAll()
+        }
         state = state == .offline ? .connecting : .reconnecting
-        let conn = NWConnection(host: host, port: 3333, using: .tcp); connection = conn
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        tcpOptions.disableAckStretching = true
+        let parameters = NWParameters(tls: nil, tcp: tcpOptions)
+        let conn = NWConnection(host: host, port: 3333, using: parameters); connection = conn
         conn.stateUpdateHandler = { [weak self, weak conn] state in
             guard let self, let conn, self.connection === conn else { return }
             switch state {
@@ -331,7 +339,7 @@ final class TCPHIDControlTransport: HIDControlTransport {
                         guard let self, let conn, self.connection === conn, let error else { return }
                         self.failConnection(error.localizedDescription, on: conn)
                     })
-                } else { self.failAuthentication(on: conn) }
+                } else { self.failAuthentication(on: conn, tryOtherHosts: false) }
             case .failed, .cancelled:
                 appLog(.tcp, "connection ended host=\(self.host) state=\(String(describing: state)) reconnect=\(self.shouldReconnect)")
                 self.connectionTimeoutWork?.cancel(); self.connectionTimeoutWork = nil
@@ -346,8 +354,11 @@ final class TCPHIDControlTransport: HIDControlTransport {
                         Task { await self.connect() }
                     }
                     self.reconnectWork = work
-                    appLog(.tcp, "reconnect scheduled host=\(self.host) delay=2s")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+                    // Move quickly between distinct saved endpoints; reserve
+                    // the longer backoff for repeatedly reconnecting one host.
+                    let delay: TimeInterval = self.hosts.count > 1 ? 0.2 : 2
+                    appLog(.tcp, "reconnect scheduled host=\(self.host) delay=\(delay)s")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
                 }
             default: self.isAvailable = false
             }
@@ -400,7 +411,8 @@ final class TCPHIDControlTransport: HIDControlTransport {
                 }
                 if reply.hasPrefix("secure ready ") {
                     try secureChannel.acceptReady(reply)
-                    authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = true; state = .ready
+                    authTimeoutWork?.cancel(); authTimeoutWork = nil
+                    authenticationFailures.removeAll(); isAvailable = true; state = .ready
                     return
                 }
                 if reply == "secure failed" {
@@ -438,7 +450,14 @@ final class TCPHIDControlTransport: HIDControlTransport {
         authTimeoutWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + authTimeout, execute: work)
     }
-    private func failAuthentication(on conn: NWConnection) { authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false; state = .authenticationFailed; receiving = false; conn.cancel() }
+    private func failAuthentication(on conn: NWConnection, tryOtherHosts: Bool = true) {
+        authTimeoutWork?.cancel(); authTimeoutWork = nil; isAvailable = false
+        authenticationFailures.insert(hostIndex)
+        state = tryOtherHosts && authenticationFailures.count < hosts.count
+            ? .reconnecting : .authenticationFailed
+        receiving = false
+        conn.cancel()
+    }
     private func retryAfterAuthenticationTimeout(on conn: NWConnection) {
         authTimeoutWork?.cancel(); authTimeoutWork = nil
         lastProtocolError = "Secure Wi-Fi handshake timed out; reconnecting."
@@ -1245,8 +1264,16 @@ private struct FirmwareLogsResponse: Decodable {
     init(device: StoredDevice, mode: ConnectionMode = .automatic) {
         self.mode = mode
         sharedBLE = InputPilotBluetoothManager.session(deviceId: device.deviceId)
-        let host = device.staIP ?? device.mdnsHost
-        wifi = host.isEmpty ? nil : InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+        let hosts = DeviceEndpointResolver.probeURLs(
+            mdnsHost: device.mdnsHost, staIP: device.staIP,
+            knownHosts: device.knownWiFiHosts
+        ).compactMap(\.host)
+        wifi = hosts.first.map {
+            InputPilotWiFiManager.session(
+                host: $0, deviceId: device.deviceId,
+                fallbackHosts: Array(hosts.dropFirst())
+            )
+        }
     }
     func start() {
         if mode == .wifiOnly {
@@ -1435,14 +1462,22 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
     }
 
     func configure(device: StoredDevice, mode: ConnectionMode) {
-        wifiEndpoints = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
+        wifiEndpoints = DeviceEndpointResolver.probeURLs(
+            mdnsHost: device.mdnsHost, staIP: device.staIP,
+            knownHosts: device.knownWiFiHosts
+        )
         activeWiFiEndpoint = nil
         connectionMode = mode; capabilities = Set(device.capabilities)
         hasSecurePairing = PairingKeyStore.load(deviceId: device.deviceId) != nil
         preUpdateDeviceId = device.deviceId
         installedBeforeUpdate = device.firmwareVersion
-        let host = device.staIP ?? device.mdnsHost
-        wifiTransport = host.isEmpty ? nil : InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+        let hosts = wifiEndpoints.compactMap(\.host)
+        wifiTransport = hosts.first.map {
+            InputPilotWiFiManager.session(
+                host: $0, deviceId: device.deviceId,
+                fallbackHosts: Array(hosts.dropFirst())
+            )
+        }
     }
 
     func attach(peripheral: CBPeripheral, control: CBCharacteristic, data: CBCharacteristic,
@@ -1562,7 +1597,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         while offset < firmware.count && !cancelled {
             while (!peripheral.canSendWriteWithoutResponse || offset - acknowledged >= windowSize) && !cancelled {
                 if Date().timeIntervalSince(lastProgress) > 15 { abortBLETransfer("Firmware transfer timed out."); return }
-                try? await Task.sleep(for: .milliseconds(10))
+                try? await Task.sleep(for: .milliseconds(2))
             }
             let count = min(maximum, firmware.count - offset)
             var frame = Data()
@@ -1577,7 +1612,7 @@ final class FirmwareUpdateManager: NSObject, ObservableObject {
         guard !cancelled else { return }
         state = .waitingForFinalAck
         let ackDeadline = Date().addingTimeInterval(15)
-        while acknowledged < firmware.count { if case .failed = state { return }; if Date() >= ackDeadline { abortBLETransfer("Final firmware acknowledgement timed out."); return }; try? await Task.sleep(for: .milliseconds(20)) }
+        while acknowledged < firmware.count { if case .failed = state { return }; if Date() >= ackDeadline { abortBLETransfer("Final firmware acknowledgement timed out."); return }; try? await Task.sleep(for: .milliseconds(5)) }
         do { peripheral.writeValue(try seal(Data("FINISH".utf8)), for: control, type: .withResponse) }
         catch { abortBLETransfer("Could not encrypt the firmware finalization command."); return }
         state = .verifying
@@ -2486,7 +2521,10 @@ enum InputPilotWiFiManager {
     init(device: StoredDevice) {
         self.device = device
         mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
-        let hosts = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).compactMap(\.host)
+        let hosts = DeviceEndpointResolver.probeURLs(
+            mdnsHost: device.mdnsHost, staIP: device.staIP,
+            knownHosts: device.knownWiFiHosts
+        ).compactMap(\.host)
         let host = hosts.first ?? ""
         let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId)
         bluetooth.metadataHandler = { [weak device] metadata in

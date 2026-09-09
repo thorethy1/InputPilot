@@ -83,6 +83,37 @@ final class DeviceRepositoryTests: XCTestCase {
         XCTAssertEqual(device.staIP, "192.168.2.44")
     }
 
+    func testRefreshFallsBackToPreviouslyVerifiedNetworkWithoutBonjour() async throws {
+        let container = try ModelContainer(
+            for: StoredDevice.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = ModelContext(container)
+        let device = StoredDevice(
+            deviceId: "aabbccddeeff", displayName: "Desk",
+            mdnsHost: "", staIP: "192.168.2.20"
+        )
+        device.knownWiFiHosts = ["172.20.10.2", "192.168.2.20"]
+        context.insert(device)
+        let api = MockAPIClient()
+        let hotspotURL = URL(string: "http://172.20.10.2/")!
+        api.statusResults[hotspotURL] = .success(DeviceStatus(
+            ok: true, name: "InputPilot", version: "0.9.0", deviceId: device.deviceId,
+            jiggle: false, jiggleIntervalMs: 30_000,
+            protocolVersion: 2, capabilities: ["secure_protocol_v2", "wifi_transport"],
+            otaSchema: 1
+        ))
+
+        let refreshed = await DeviceRepository(context: context).refresh(device: device, api: api)
+
+        XCTAssertTrue(refreshed)
+        XCTAssertEqual(Array(api.statusCalls.prefix(2)), [
+            URL(string: "http://192.168.2.20/")!, hotspotURL
+        ])
+        XCTAssertEqual(device.staIP, "172.20.10.2")
+        XCTAssertEqual(Array(device.knownWiFiHosts.prefix(2)), ["172.20.10.2", "192.168.2.20"])
+    }
+
     func testRefreshAcceptsIdentityVerifiedSoftAPFallback() async throws {
         let container = try ModelContainer(
             for: StoredDevice.self,
@@ -106,7 +137,8 @@ final class DeviceRepositoryTests: XCTestCase {
         let refreshed = await DeviceRepository(context: context).refresh(device: device, api: api)
         XCTAssertTrue(refreshed)
         XCTAssertEqual(api.statusCalls.last, fallbackURL)
-        XCTAssertEqual(device.staIP, DeviceEndpointResolver.softAPHost)
+        XCTAssertEqual(device.staIP, "192.168.2.20")
+        XCTAssertFalse(device.knownWiFiHosts.contains(DeviceEndpointResolver.softAPHost))
     }
 
     func testBonjourValidatesAndCachesChangedIP() async throws {
@@ -291,6 +323,38 @@ final class DeviceEndpointResolverTests: XCTestCase {
     func testEndpointsPreferDirectAddressAndDeduplicate() {
         XCTAssertEqual(DeviceEndpointResolver.endpointURLs(mdnsHost: "inputpilot-eeff.local", staIP: "192.168.2.20").map(\.absoluteString), ["http://192.168.2.20/", "http://inputpilot-eeff.local/"])
         XCTAssertEqual(DeviceEndpointResolver.endpointURLs(mdnsHost: "192.168.2.20", staIP: "192.168.2.20").count, 1)
+    }
+
+    func testEndpointsRetainVerifiedAddressesAcrossNetworks() {
+        XCTAssertEqual(
+            DeviceEndpointResolver.endpointURLs(
+                mdnsHost: "inputpilot-eeff.local",
+                staIP: "172.20.10.2",
+                knownHosts: ["172.20.10.2", "192.168.2.20"]
+            ).map(\.absoluteString),
+            ["http://172.20.10.2/", "http://192.168.2.20/", "http://inputpilot-eeff.local/"]
+        )
+        XCTAssertNil(DeviceEndpointResolver.directAddress(
+            reportedSTAIP: nil,
+            fallbackHost: DeviceEndpointResolver.softAPHost
+        ))
+        XCTAssertNil(DeviceEndpointResolver.directAddress(
+            reportedSTAIP: DeviceEndpointResolver.softAPHost,
+            fallbackHost: DeviceEndpointResolver.softAPHost
+        ))
+    }
+
+    func testRememberedWiFiHostsAreBoundedAndNeverContainSoftAP() {
+        let device = StoredDevice(
+            deviceId: "aabbccddeeff", displayName: "Desk", mdnsHost: ""
+        )
+        device.rememberWiFiHost(DeviceEndpointResolver.softAPHost)
+        device.rememberWiFiHost("inputpilot-eeff.local")
+        for suffix in 1 ... 10 { device.rememberWiFiHost("10.0.0.\(suffix)") }
+
+        XCTAssertEqual(device.knownWiFiHosts.count, 8)
+        XCTAssertEqual(device.knownWiFiHosts.first, "10.0.0.10")
+        XCTAssertFalse(device.knownWiFiHosts.contains(DeviceEndpointResolver.softAPHost))
     }
 
     func testProbeEndpointsUseSoftAPAsLastFallback() {

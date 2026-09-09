@@ -48,7 +48,10 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
     init(status: DeviceStatus, deviceId: String, endpointHost: String) {
         id = deviceId
         displayName = status.name
-        mdnsHost = status.mdns ?? endpointHost
+        mdnsHost = status.mdns ?? (
+            DeviceEndpointResolver.sanitizeHost(endpointHost) == DeviceEndpointResolver.softAPHost
+                ? "" : endpointHost
+        )
         staIP = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: endpointHost)
         jiggleEnabled = status.jiggle
         moveIntervalMs = status.jiggleIntervalMs
@@ -157,5 +160,48 @@ struct KeepAwakeSettings: Codable, Equatable, Sendable {
         case moveIntervalMs = "move_interval_ms"
         case clickEnabled = "click_enabled"
         case clickIntervalMs = "click_interval_ms"
+    }
+}
+
+struct SecureWiFiStatus: Decodable, Equatable, Sendable {
+    struct Provisioning: Decodable, Equatable, Sendable {
+        let state: String
+        let error: String
+    }
+
+    let state: String
+    let ip: String
+    let deviceId: String
+    let provisioning: Provisioning?
+    let radioMode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state, ip, provisioning
+        case deviceId = "device_id"
+        case radioMode = "radio_mode"
+    }
+}
+
+enum SecureWiFiHandoffState: Equatable {
+    case connecting
+    case station(String)
+    case softAP
+    case failed(String)
+}
+
+extension SecureWiFiStatus {
+    func handoffState(expectedDeviceId: String) -> SecureWiFiHandoffState? {
+        guard deviceId.caseInsensitiveCompare(expectedDeviceId) == .orderedSame else { return nil }
+        let stationHost = DeviceEndpointResolver.sanitizeHost(ip)
+        if state == "connected", !stationHost.isEmpty {
+            return .station(stationHost)
+        }
+        if let provisioning, provisioning.state == "failed" {
+            return .failed(provisioning.error)
+        }
+        if state == "soft_ap", provisioning?.state != "connecting" {
+            return .softAP
+        }
+        return .connecting
     }
 }

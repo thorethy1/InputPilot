@@ -1102,5 +1102,7 @@ void loop() {
              g_jiggle.isClickEnabled() ? "on" : "off",
              g_radio.statusStr());
   }
-  delay(2);
+  // Keep the cooperative Arduino task responsive to freshly queued BLE/TCP
+  // input while still yielding to the radio and USB stacks every iteration.
+  delay(1);
 }

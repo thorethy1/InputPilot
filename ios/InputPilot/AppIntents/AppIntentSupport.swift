@@ -69,7 +69,10 @@ struct PresetRunOutcome: Equatable, Sendable {
     /// scratch. A changed Wi-Fi endpoint replaces the cached manager.
     static func manager(for device: StoredDevice) -> HIDConnectionManager {
         let key = device.deviceId.lowercased()
-        let host = DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).map(\.absoluteString).joined(separator: "|")
+        let host = DeviceEndpointResolver.probeURLs(
+            mdnsHost: device.mdnsHost, staIP: device.staIP,
+            knownHosts: device.knownWiFiHosts
+        ).map(\.absoluteString).joined(separator: "|")
         if let cached = cachedManagers[key], cached.host == host {
             cached.manager.mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
             return cached.manager

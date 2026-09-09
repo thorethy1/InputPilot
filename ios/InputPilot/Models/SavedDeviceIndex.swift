@@ -23,6 +23,12 @@ struct SavedDeviceIndex: Equatable, Sendable {
                 let ip = DeviceEndpointResolver.sanitizeHost(staIP).lowercased()
                 if !ip.isEmpty { hosts.insert(ip) }
             }
+            for knownHost in device.knownWiFiHosts {
+                let host = DeviceEndpointResolver.sanitizeHost(knownHost).lowercased()
+                if !host.isEmpty, host != DeviceEndpointResolver.softAPHost {
+                    hosts.insert(host)
+                }
+            }
             return Entry(deviceId: device.deviceId, displayName: device.displayName, hosts: hosts, hasBluetooth: device.bluetoothDiscovered)
         })
     }

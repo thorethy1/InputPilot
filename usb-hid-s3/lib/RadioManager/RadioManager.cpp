@@ -902,12 +902,33 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     uint32_t generation = s_bleConnectionGeneration + 1;
     if (generation == 0) generation = 1;
     s_bleConnectionGeneration = generation;
-    // Ask iOS for a low-latency, zero-slave-latency link. The peer remains free
-    // to choose compatible values; these bounds improve sustained OTA writes
-    // without making reconnection depend on an aggressive single interval.
-    server->updateConnParams(handle, 12, 24, 0, 400);
+    // Apple permits a fixed 15 ms interval and remains free to scale it when
+    // radio conditions require. Zero peripheral latency keeps interactive HID
+    // traffic responsive; the 6 s supervision timeout follows current Apple
+    // accessory guidance. DLE and 2M PHY are best-effort and transparently
+    // remain at the peer-selected values when unsupported.
+    server->updateConnParams(handle, 12, 12, 0, 600);
+    server->setDataLen(handle, 251);
+    const bool requested2M = server->updatePhy(
+        handle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
+    LOG_BLE("performance requested handle=%u interval=15ms latency=0 data_len=251 phy_2m=%s",
+            handle, requested2M ? "yes" : "no");
     LOG_BLE("central connected handle=%u; secure authentication starts on protocol traffic timeout=%lums",
             handle, static_cast<unsigned long>(BLE_SECURE_AUTH_TIMEOUT_MS));
+  }
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo &info) override {
+    LOG_BLE("mtu negotiated handle=%u mtu=%u att_payload=%u",
+            info.getConnHandle(), mtu, mtu > 3 ? mtu - 3 : 0);
+  }
+  void onConnParamsUpdate(NimBLEConnInfo &info) override {
+    LOG_BLE("connection parameters handle=%u interval_x1.25ms=%u latency=%u timeout_x10ms=%u",
+            info.getConnHandle(), info.getConnInterval(), info.getConnLatency(),
+            info.getConnTimeout());
+  }
+  void onPhyUpdate(NimBLEConnInfo &info, uint8_t txPhy,
+                   uint8_t rxPhy) override {
+    LOG_BLE("phy updated handle=%u tx=%u rx=%u", info.getConnHandle(), txPhy,
+            rxPhy);
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
     const uint16_t handle = info.getConnHandle();
@@ -1000,12 +1021,12 @@ bool RadioManager::setMode(RadioMode m) {
 // ---------------------------------------------------------------------------
 // WiFi (STA with NVS creds, or Soft-AP setup portal)
 // ---------------------------------------------------------------------------
-void RadioManager::startSoftAp() {
+void RadioManager::startSoftAp(bool markProvisioningFailure) {
   staConnecting_ = false;
   staRetryPreservesSoftAp_ = false;
   softAp_ = true;
   softApStartedMs_ = millis();
-  if (provisioningState_ == "connecting") {
+  if (markProvisioningFailure && provisioningState_ == "connecting") {
     provisioningState_ = "failed";
     provisioningError_ = "network_unreachable";
   }
@@ -1053,6 +1074,22 @@ bool RadioManager::softApInterfaceReady() const {
   return ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0;
 }
 
+void RadioManager::startStaWithFallback(const String &ssid, const String &pass,
+                                        size_t credentialIndex) {
+  if (WifiCredentials::fallbackApEnabled()) {
+    // Make the recovery path available immediately, including after a live
+    // station connection disappears. AP+STA keeps it up while every saved
+    // credential is tried asynchronously.
+    startSoftAp(false);
+    if (softAp_) {
+      startSta(ssid, pass, credentialIndex, true);
+      return;
+    }
+    LOG_WIFI("fallback AP unavailable during station connect; continuing with STA only");
+  }
+  startSta(ssid, pass, credentialIndex);
+}
+
 void RadioManager::startSta(const String &ssid, const String &pass,
                             size_t credentialIndex, bool preserveSoftAp) {
   fallbackWaiting_ = false;
@@ -1060,6 +1097,10 @@ void RadioManager::startSta(const String &ssid, const String &pass,
   if (!staRetryPreservesSoftAp_) softAp_ = false;
   staCredentialIndex_ = credentialIndex;
   WiFi.mode(staRetryPreservesSoftAp_ ? WIFI_AP_STA : WIFI_STA);
+  // USB power removes the energy trade-off. Disabling station modem sleep
+  // avoids DTIM-sized receive latency; the ESP32 coexistence scheduler still
+  // reserves BLE radio time while both transports are enabled.
+  WiFi.setSleep(false);
   WiFi.begin(ssid.c_str(), pass.c_str());
   LOG_WIFI("connecting to %s (candidate %u/%u ap_preserved=%s) ...", ssid.c_str(),
            static_cast<unsigned>(credentialIndex + 1),
@@ -1173,7 +1214,7 @@ void RadioManager::serviceStaConnection() {
     const size_t next = (staCredentialIndex_ + 1) % count;
     const WifiCreds candidate = WifiCredentials::get(next);
     staDisconnectedSinceMs_ = 0;
-    startSta(candidate.ssid, candidate.pass, next);
+    startStaWithFallback(candidate.ssid, candidate.pass, next);
     return;
   }
   if (WiFi.status() == WL_CONNECTED) {
@@ -1220,7 +1261,7 @@ void RadioManager::startWifi() {
     startSoftAp();
     return;
   }
-  startSta(c.ssid, c.pass, 0);
+  startStaWithFallback(c.ssid, c.pass, 0);
 }
 
 void RadioManager::stopWifiServices() {
@@ -1285,16 +1326,11 @@ void RadioManager::applyFallbackApPreference() {
 }
 
 std::string RadioManager::wifiStatusJson() const {
-  const char *state = "disconnected";
+  const bool stationConnected = WiFi.status() == WL_CONNECTED;
+  const char *state = WifiFallbackPolicy::connectionState(
+      staConnecting_, stationConnected, softAp_, wifiEnabled(), fallbackWaiting_);
   String ip;
-  if (softAp_) {
-    state = "soft_ap";
-  } else if (WiFi.status() == WL_CONNECTED) {
-    state = "connected";
-    ip = WiFi.localIP().toString();
-  } else if (wifiEnabled() && !fallbackWaiting_) {
-    state = "connecting";
-  }
+  if (stationConnected && !staConnecting_) ip = WiFi.localIP().toString();
   return "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
          std::string(ip.c_str()) + "\",\"device_id\":\"" +
          std::string(DeviceIdentity::deviceId()) +
@@ -1398,6 +1434,9 @@ void RadioManager::startBle() {
                            adv->setAdvertisementData(advData) &&
                            adv->setScanResponseData(scanData);
     adv->enableScanResponse(true);
+    // Apple's fastest recommended discovery interval for a connectable BLE
+    // accessory is exactly 20 ms (32 * 0.625 ms).
+    adv->setAdvertisingInterval(32);
     LOG_BLE("advertising payload bytes=%u scan-response bytes=%u",
             static_cast<unsigned>(advData.getPayload().size()),
             static_cast<unsigned>(scanData.getPayload().size()));

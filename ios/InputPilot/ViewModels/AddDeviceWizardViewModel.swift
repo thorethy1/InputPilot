@@ -9,24 +9,6 @@ enum AddDeviceWizardStep: Equatable {
 
 @MainActor
 final class AddDeviceWizardViewModel: ObservableObject {
-    private struct SecureWiFiStatus: Decodable {
-        struct Provisioning: Decodable {
-            let state: String
-            let error: String
-        }
-        let state: String
-        let ip: String
-        let deviceId: String
-        let provisioning: Provisioning?
-        let radioMode: String?
-
-        enum CodingKeys: String, CodingKey {
-            case state, ip, provisioning
-            case deviceId = "device_id"
-            case radioMode = "radio_mode"
-        }
-    }
-
     private enum WiFiHandoff {
         case connected(String)
         case failed(String)
@@ -181,7 +163,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         var lastVerificationFailure: String?
         var loggedFailures = Set<String>()
         while Date() < deadline, verified == nil {
-            var verificationCandidates = candidates
+            var verificationCandidates: [DiscoveredService] = []
             if let directHost {
                 verificationCandidates.append(DiscoveredService(
                     id: "secure-ble-handoff-\(metadata.deviceId)",
@@ -191,6 +173,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
                     port: 80
                 ))
             }
+            verificationCandidates.append(contentsOf: candidates)
             verificationCandidates.append(DiscoveredService(
                 id: "soft-ap-fallback-\(metadata.deviceId)",
                 deviceId: metadata.deviceId,
@@ -198,8 +181,11 @@ final class AddDeviceWizardViewModel: ObservableObject {
                 host: DeviceEndpointResolver.softAPHost,
                 port: 80
             ))
-            for candidate in BonjourDiscoveryFilter.deduplicate(verificationCandidates) where
+            var attemptedEndpoints = Set<String>()
+            for candidate in verificationCandidates where
                 candidate.deviceId?.lowercased() == metadata.deviceId.lowercased() {
+                let endpointKey = "\(DeviceEndpointResolver.sanitizeHost(candidate.host).lowercased()):\(candidate.port)"
+                guard attemptedEndpoints.insert(endpointKey).inserted else { continue }
                 sawMatchingDiscovery = true
                 guard let baseURL = DeviceEndpointResolver.baseURL(host: candidate.host, port: candidate.port) else {
                     lastVerificationFailure = "The discovered network address was invalid."
@@ -264,22 +250,22 @@ final class AddDeviceWizardViewModel: ObservableObject {
             do {
                 let reply = try await bluetooth.request("WIFI STATUS", timeout: 2)
                 let status = try JSONDecoder().decode(SecureWiFiStatus.self, from: Data(reply.utf8))
-                guard status.deviceId.lowercased() == expectedDeviceId.lowercased() else {
+                guard let handoffState = status.handoffState(expectedDeviceId: expectedDeviceId) else {
                     AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned a different device identity")
                     return .failed("InputPilot returned a different secure device identity.")
                 }
-                if status.state == "connected", !status.ip.isEmpty {
-                    AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(status.ip)")
-                    return .connected(DeviceEndpointResolver.sanitizeHost(status.ip))
-                }
-                if status.state == "soft_ap" {
+                switch handoffState {
+                case let .station(host):
+                    AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(host)")
+                    return .connected(host)
+                case let .failed(error):
+                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(error)")
+                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
+                case .softAP:
                     AppLog.shared.write(.control, "BLE Wi-Fi handoff is using authenticated Soft-AP fallback host=\(DeviceEndpointResolver.softAPHost)")
                     return .connected(DeviceEndpointResolver.softAPHost)
-                }
-                if let provisioning = status.provisioning,
-                   provisioning.state == "failed" {
-                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(provisioning.error)")
-                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
+                case .connecting:
+                    break
                 }
             } catch {
                 AppLog.shared.write(.errors, "BLE Wi-Fi handoff status failed: \(error.localizedDescription)")

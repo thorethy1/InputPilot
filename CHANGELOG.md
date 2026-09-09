@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix Wi-Fi handoff and fallback recovery: AP+STA joins no longer make iOS cache the temporary `192.168.4.1` gateway, Device Settings persist an MRU history of authenticated station addresses (including iPhone Personal Hotspot leases), Wi-Fi management works without BLE, stale endpoints may self-heal from an already authenticated BLE session, and an enabled fallback AP remains available while saved networks are retried.
+- Reduce interactive transport latency with a 15 ms BLE connection request, 20 ms advertising, best-effort 2M PHY/data-length extension, dynamically negotiated ATT write sizes, faster pointer/scroll coalescing and OTA flow-control polling, TCP no-delay, and disabled Wi-Fi modem sleep while USB-powered.
 - Execute complete presets autonomously on the ESP32 after an acknowledged, resumable and checksummed BLE/Wi-Fi upload. Long delays continue when iOS or Shortcuts exits, the app restores device-side run status, and Stop Preset aborts on the firmware and releases all input.
 - Finalize 0.9.0 with a single Control connection summary plus live Bluetooth/Wi-Fi badges, Device Details routing into the shared Control tab, Settings-only transport selection, pointer sensitivity above the trackpad, and the established Devices and Control tab iconography.
 - Persist app diagnostics across relaunches and crashes and retain the firmware log tail in checksum-protected RTC memory across software, panic and watchdog resets.

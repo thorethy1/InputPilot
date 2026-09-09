@@ -3,6 +3,22 @@ import XCTest
 @testable import InputPilot
 
 final class SavedDeviceIndexTests: XCTestCase {
+    func testPreviouslyVerifiedWiFiHostMatchesSavedDevice() {
+        let device = StoredDevice(
+            deviceId: "aabbccddeeff", displayName: "Desk",
+            mdnsHost: "inputpilot-eeff.local", staIP: "192.168.2.20"
+        )
+        device.knownWiFiHosts = ["172.20.10.2"]
+        let index = SavedDeviceIndex(devices: [device])
+
+        let match = index.match(candidate: DiscoveredService(
+            id: "hotspot", deviceId: nil, name: "InputPilot",
+            host: "172.20.10.2", port: 80
+        ))
+
+        XCTAssertEqual(match?.deviceId, device.deviceId)
+    }
+
     func testMatchesOnlyStableIdentityOrKnownAddress() {
         let device = StoredDevice(deviceId: "aabbccddeeff", displayName: "Desk", mdnsHost: "inputpilot-eeff.local", staIP: "192.168.2.20")
         let index = SavedDeviceIndex(devices: [device])

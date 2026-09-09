@@ -34,7 +34,8 @@ final class DeviceRepository {
             (
                 deviceId: device.deviceId,
                 mdnsHost: device.mdnsHost,
-                staIP: device.staIP
+                staIP: device.staIP,
+                knownHosts: device.knownWiFiHosts
             )
         }
 
@@ -43,7 +44,8 @@ final class DeviceRepository {
                 group.addTask {
                     let urls = DeviceEndpointResolver.probeURLs(
                         mdnsHost: snapshot.mdnsHost,
-                        staIP: snapshot.staIP
+                        staIP: snapshot.staIP,
+                        knownHosts: snapshot.knownHosts
                     )
                     for url in urls {
                         if let status = try? await api.status(baseURL: url),
@@ -144,9 +146,15 @@ final class DeviceRepository {
         let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId)
         do { try await bluetooth.setKeepAwake(settings) }
         catch {
-            let host = device.staIP ?? device.mdnsHost
-            guard !host.isEmpty else { throw error }
-            let wifi = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+            let hosts = DeviceEndpointResolver.probeURLs(
+                mdnsHost: device.mdnsHost, staIP: device.staIP,
+                knownHosts: device.knownWiFiHosts
+            ).compactMap(\.host)
+            guard let host = hosts.first else { throw error }
+            let wifi = InputPilotWiFiManager.session(
+                host: host, deviceId: device.deviceId,
+                fallbackHosts: Array(hosts.dropFirst())
+            )
             try await wifi.setKeepAwake(settings)
         }
         apply(settings, to: device); try context.save()

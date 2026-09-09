@@ -166,7 +166,7 @@ struct DeviceDetailView: View {
                                         Image(systemName: "trash")
                                     }
                                     .buttonStyle(.borderless)
-                                    .disabled(wifiBusy || bluetooth.state != .ready)
+                                    .disabled(wifiBusy || !hasSecureManagementTransport)
                                     .accessibilityLabel("Remove \(ssid)")
                                 }
                             }
@@ -181,12 +181,12 @@ struct DeviceDetailView: View {
                     Button(device.capabilities.contains("multiple_wifi") ? "Add or Update Network" : "Change Wi-Fi Network") {
                         Task { await saveWiFi() }
                     }
-                    .disabled(wifiBusy || bluetooth.state != .ready || newWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(wifiBusy || !hasSecureManagementTransport || newWifiSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if device.capabilities.contains("multiple_wifi"), !wifiNetworks.isEmpty {
                         Button("Forget All Networks", role: .destructive) {
                             showClearWiFiConfirmation = true
                         }
-                        .disabled(wifiBusy || bluetooth.state != .ready)
+                        .disabled(wifiBusy || !hasSecureManagementTransport)
                     }
                     if wifiBusy { ProgressView() }
                     if let wifiMessage {
@@ -275,6 +275,16 @@ struct DeviceDetailView: View {
             async let bluetoothConnection: Void = bluetooth.connect()
             await viewModel.refreshDevice(device, context: modelContext)
             await bluetoothConnection
+            // Bonjour is commonly unavailable when this iPhone is the hotspot
+            // owner. Recover a stale router/AP address from the authenticated
+            // BLE status before opening any Wi-Fi management sessions.
+            if let host = await waitForUpdatedWiFiEndpoint(timeout: 6),
+               DeviceEndpointResolver.sanitizeHost(device.staIP ?? "") != host {
+                device.promoteWiFiHost(host)
+                try? modelContext.save()
+                await InputPilotWiFiManager.removeSessions(deviceId: device.deviceId)
+                await viewModel.refreshDevice(device, context: modelContext)
+            }
             await loadDeviceMetadata()
             await loadUSBIdentity()
             await loadWiFiNetworks()
@@ -308,6 +318,9 @@ struct DeviceDetailView: View {
     }
 
     private var hasPairingKey: Bool { PairingKeyStore.load(deviceId: device.deviceId) != nil }
+    private var hasSecureManagementTransport: Bool {
+        hasPairingKey && (bluetooth.state == .ready || viewModel.wifiState(for: device.deviceId) == .reachable)
+    }
 
     @MainActor
     private func loadDeviceMetadata() async {
@@ -320,10 +333,8 @@ struct DeviceDetailView: View {
         }
         if metadata?.runningPartition == nil,
            viewModel.wifiState(for: device.deviceId) == .reachable,
-           let host = wifiControlHost {
-            metadata = (try? await InputPilotWiFiManager.session(
-                host: host, deviceId: device.deviceId
-            ).diagnosticsInfo()).flatMap {
+           let wifi = wifiControlSession {
+            metadata = (try? await wifi.diagnosticsInfo()).flatMap {
                 try? JSONDecoder().decode(DiagnosticsMetadata.self, from: $0)
             } ?? metadata
         }
@@ -359,11 +370,9 @@ struct DeviceDetailView: View {
                 do { identity = try await bluetooth.usbIdentity(includeManufacturer: includeManufacturer) }
                 catch { lastError = error }
             }
-            if identity == nil, let host = wifiControlHost {
+            if identity == nil, let wifi = wifiControlSession {
                 do {
-                    identity = try await InputPilotWiFiManager.session(
-                        host: host, deviceId: device.deviceId
-                    ).usbIdentity(includeManufacturer: includeManufacturer)
+                    identity = try await wifi.usbIdentity(includeManufacturer: includeManufacturer)
                 } catch { lastError = error }
             }
             guard let identity else { throw lastError }
@@ -388,11 +397,9 @@ struct DeviceDetailView: View {
             }
             catch { lastError = error }
         }
-        if let host = wifiControlHost {
+        if let wifi = wifiControlSession {
             do {
-                applyWiFiNetworks(try await InputPilotWiFiManager.session(
-                    host: host, deviceId: device.deviceId
-                ).configuredWiFiNetworks())
+                applyWiFiNetworks(try await wifi.configuredWiFiNetworks())
                 wifiMessage = nil
                 return
             } catch { lastError = error }
@@ -436,11 +443,9 @@ struct DeviceDetailView: View {
             do { return try await bluetooth.request(command) }
             catch { lastError = error }
         }
-        if let host = wifiControlHost {
+        if let wifi = wifiControlSession {
             do {
-                return try await InputPilotWiFiManager.session(
-                    host: host, deviceId: device.deviceId
-                ).request(command)
+                return try await wifi.request(command)
             } catch { lastError = error }
         }
         throw lastError
@@ -492,14 +497,56 @@ struct DeviceDetailView: View {
         wifiBusy = true
         defer { wifiBusy = false }
         do {
-            try await bluetooth.setWiFi(ssid: ssid, password: newWifiPassword)
+            try await setWiFiOverAvailableTransport(ssid: ssid, password: newWifiPassword)
             newWifiSSID = ""; newWifiPassword = ""
-            wifiMessage = "Wi-Fi network saved."
             if device.capabilities.contains("multiple_wifi") {
                 applyWiFiNetworks([ssid] + wifiNetworks.filter { $0 != ssid })
-                await loadWiFiNetworks()
             }
+            if let host = await waitForUpdatedWiFiEndpoint(timeout: 20) {
+                device.promoteWiFiHost(host)
+                try? modelContext.save()
+                await InputPilotWiFiManager.removeSessions(deviceId: device.deviceId)
+                wifiMessage = "Wi-Fi connected at \(host)."
+            } else {
+                wifiMessage = "Wi-Fi network saved, but no station address was reported yet. The app will keep trying saved addresses, Bonjour, and Bluetooth when available."
+            }
+            if device.capabilities.contains("multiple_wifi") { await loadWiFiNetworks() }
         } catch { wifiMessage = error.localizedDescription }
+    }
+
+    @MainActor
+    private func waitForUpdatedWiFiEndpoint(timeout: TimeInterval) async -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while bluetooth.state != .ready, Date() < deadline {
+            if Task.isCancelled { return nil }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard bluetooth.state == .ready else { return nil }
+        while Date() < deadline {
+            if Task.isCancelled { return nil }
+            if let reply = try? await bluetooth.request("WIFI STATUS", timeout: 2),
+               let status = try? JSONDecoder().decode(SecureWiFiStatus.self, from: Data(reply.utf8)),
+               let state = status.handoffState(expectedDeviceId: device.deviceId) {
+                if case let .station(host) = state { return host }
+                if case .failed = state { return nil }
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return nil
+    }
+
+    @MainActor
+    private func setWiFiOverAvailableTransport(ssid: String, password: String) async throws {
+        var lastError: Error = TransportError.unavailable
+        if bluetooth.state == .ready {
+            do { try await bluetooth.setWiFi(ssid: ssid, password: password); return }
+            catch { lastError = error }
+        }
+        if let wifi = wifiControlSession {
+            do { try await wifi.setWiFi(ssid: ssid, password: password); return }
+            catch { lastError = error }
+        }
+        throw lastError
     }
 
     @MainActor
@@ -507,7 +554,17 @@ struct DeviceDetailView: View {
         wifiBusy = true
         defer { wifiBusy = false }
         do {
-            try await bluetooth.removeWiFi(ssid: ssid)
+            var lastError: Error = TransportError.unavailable
+            var removed = false
+            if bluetooth.state == .ready {
+                do { try await bluetooth.removeWiFi(ssid: ssid); removed = true }
+                catch { lastError = error }
+            }
+            if !removed, let wifi = wifiControlSession {
+                do { try await wifi.removeWiFi(ssid: ssid); removed = true }
+                catch { lastError = error }
+            }
+            if !removed { throw lastError }
             applyWiFiNetworks(wifiNetworks.filter { $0 != ssid })
             wifiMessage = "Wi-Fi network removed."
         } catch { wifiMessage = error.localizedDescription }
@@ -518,7 +575,17 @@ struct DeviceDetailView: View {
         wifiBusy = true
         defer { wifiBusy = false }
         do {
-            try await bluetooth.clearWiFiNetworks()
+            var lastError: Error = TransportError.unavailable
+            var cleared = false
+            if bluetooth.state == .ready {
+                do { try await bluetooth.clearWiFiNetworks(); cleared = true }
+                catch { lastError = error }
+            }
+            if !cleared, let wifi = wifiControlSession {
+                do { try await wifi.clearWiFiNetworks(); cleared = true }
+                catch { lastError = error }
+            }
+            if !cleared { throw lastError }
             applyWiFiNetworks([])
             wifiMessage = "All Wi-Fi networks removed. Bluetooth remains available."
         } catch { wifiMessage = error.localizedDescription }
@@ -557,8 +624,7 @@ struct DeviceDetailView: View {
                 try await bluetooth.setKeepAwake(settings)
                 DeviceRepository(context: modelContext).apply(settings, to: device)
                 try modelContext.save()
-            } else if hasPairingKey, let host = wifiControlHost {
-                let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+            } else if hasPairingKey, let tcp = wifiControlSession {
                 try await tcp.setKeepAwake(settings)
                 DeviceRepository(context: modelContext).apply(settings, to: device)
                 try modelContext.save()
@@ -578,8 +644,7 @@ struct DeviceDetailView: View {
         do {
             if bluetooth.state == .ready {
                 try await bluetooth.send(event)
-            } else if hasPairingKey, let host = wifiControlHost {
-                let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+            } else if hasPairingKey, let tcp = wifiControlSession {
                 try await tcp.send(event)
             } else { throw TransportError.unavailable }
             keepAwakeMessage = "Test action sent."
@@ -603,15 +668,19 @@ struct DeviceDetailView: View {
     }
 
     private var endpointURLs: [URL] {
-        DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP)
+        DeviceEndpointResolver.probeURLs(
+            mdnsHost: device.mdnsHost, staIP: device.staIP,
+            knownHosts: device.knownWiFiHosts
+        )
     }
 
-    private var wifiControlHost: String? {
-        if let staIP = device.staIP, !DeviceEndpointResolver.sanitizeHost(staIP).isEmpty {
-            return DeviceEndpointResolver.sanitizeHost(staIP)
-        }
-        let host = DeviceEndpointResolver.sanitizeHost(device.mdnsHost)
-        return host.isEmpty ? nil : host
+    private var wifiControlSession: TCPHIDControlTransport? {
+        let hosts = endpointURLs.compactMap(\.host)
+        guard let host = hosts.first else { return nil }
+        return InputPilotWiFiManager.session(
+            host: host, deviceId: device.deviceId,
+            fallbackHosts: Array(hosts.dropFirst())
+        )
     }
 
     private func parseUSBHex(_ value: String) -> Int? {
@@ -659,8 +728,7 @@ struct DeviceDetailView: View {
                     } else {
                         try await bluetooth.setUSBIdentity(productName: product, vid: vid, pid: pid, serialNumber: serial)
                     }
-                } else if let host = wifiControlHost {
-                    let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+                } else if let tcp = wifiControlSession {
                     if supportsManufacturer {
                         try await tcp.setUSBIdentity(manufacturerName: manufacturer, productName: product, vid: vid, pid: pid, serialNumber: serial)
                     } else {
@@ -698,8 +766,7 @@ struct DeviceDetailView: View {
             do {
                 if bluetooth.state == .ready {
                     try await bluetooth.resetUSBIdentity()
-                } else if let host = wifiControlHost {
-                    let tcp = InputPilotWiFiManager.session(host: host, deviceId: device.deviceId)
+                } else if let tcp = wifiControlSession {
                     try await tcp.resetUSBIdentity()
                 } else { throw TransportError.unavailable }
                 usbManufacturerName = device.capabilities.contains("usb_manufacturer") ? "thorethy" : ""
@@ -731,8 +798,8 @@ struct DeviceDetailView: View {
         do {
             if bluetooth.state == .ready {
                 try await bluetooth.reboot()
-            } else if let host = wifiControlHost {
-                try await InputPilotWiFiManager.session(host: host, deviceId: device.deviceId).reboot()
+            } else if let wifi = wifiControlSession {
+                try await wifi.reboot()
             } else { throw TransportError.unavailable }
             managementMessage = "Authenticated restart requested."
         } catch { managementMessage = error.localizedDescription }

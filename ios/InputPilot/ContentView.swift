@@ -199,7 +199,10 @@ private struct DeviceRowView: View {
         DevicePresenceStatus.resolve(
             wifi: wifiState,
             bluetooth: bluetooth.state,
-            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).isEmpty
+            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(
+                mdnsHost: device.mdnsHost, staIP: device.staIP,
+                knownHosts: device.knownWiFiHosts
+            ).isEmpty
         )
     }
 }
@@ -222,7 +225,10 @@ struct DeviceConnectionBanner: View {
         DevicePresenceStatus.resolve(
             wifi: viewModel.wifiState(for: device.deviceId),
             bluetooth: bluetooth.state,
-            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(mdnsHost: device.mdnsHost, staIP: device.staIP).isEmpty
+            hasConfiguredWiFi: !DeviceEndpointResolver.endpointURLs(
+                mdnsHost: device.mdnsHost, staIP: device.staIP,
+                knownHosts: device.knownWiFiHosts
+            ).isEmpty
         )
     }
 

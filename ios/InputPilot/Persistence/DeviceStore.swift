@@ -7,6 +7,7 @@ final class StoredDevice {
     var displayName: String
     var mdnsHost: String
     var staIP: String?
+    var knownWiFiHosts: [String] = []
     var jiggleEnabled: Bool
     var moveIntervalMs: Int = 30_000
     var clickEnabled: Bool = false
@@ -50,6 +51,7 @@ final class StoredDevice {
         self.displayName = displayName
         self.mdnsHost = mdnsHost
         self.staIP = staIP
+        self.knownWiFiHosts = []
         self.jiggleEnabled = jiggleEnabled
         self.moveIntervalMs = moveIntervalMs
         self.clickEnabled = clickEnabled
@@ -71,6 +73,7 @@ final class StoredDevice {
         self.cachedWiFiNetworks = []
         self.wifiNetworksUpdatedAt = nil
         self.bluetoothDiscovered = bluetoothDiscovered
+        rememberWiFiHost(staIP)
     }
 
     convenience init(device: Device) {
@@ -139,6 +142,30 @@ final class StoredDevice {
         cachedWiFiNetworks = Array(networks.prefix(5))
         wifiNetworksUpdatedAt = date
     }
+
+    /// Retains a small MRU set of verified station endpoints. The Soft-AP
+    /// gateway is deliberately excluded because it is temporary and shared by
+    /// every InputPilot.
+    func rememberWiFiHost(_ host: String?) {
+        guard let host else { return }
+        let sanitized = DeviceEndpointResolver.sanitizeHost(host).lowercased()
+        guard !sanitized.isEmpty,
+              sanitized != DeviceEndpointResolver.softAPHost,
+              !sanitized.hasSuffix(".local") else { return }
+        knownWiFiHosts.removeAll { DeviceEndpointResolver.sanitizeHost($0).lowercased() == sanitized }
+        knownWiFiHosts.insert(sanitized, at: 0)
+        knownWiFiHosts = Array(knownWiFiHosts.prefix(8))
+    }
+
+    func promoteWiFiHost(_ host: String) {
+        rememberWiFiHost(staIP)
+        let sanitized = DeviceEndpointResolver.sanitizeHost(host)
+        guard !sanitized.isEmpty,
+              sanitized != DeviceEndpointResolver.softAPHost,
+              !sanitized.lowercased().hasSuffix(".local") else { return }
+        staIP = sanitized
+        rememberWiFiHost(sanitized)
+    }
 }
 
 enum DeviceStore {
@@ -151,7 +178,7 @@ enum DeviceStore {
 
         if let existing = try context.fetch(descriptor).first {
             if !device.mdnsHost.isEmpty { existing.mdnsHost = device.mdnsHost }
-            if let staIP = device.staIP { existing.staIP = staIP }
+            if let staIP = device.staIP { existing.promoteWiFiHost(staIP) }
             existing.jiggleEnabled = device.jiggleEnabled
             existing.moveIntervalMs = device.moveIntervalMs
             existing.clickEnabled = device.clickEnabled
@@ -176,11 +203,12 @@ enum DeviceMerge {
         migrateLegacyAutomaticName(status.name, into: stored)
         if let mdns = status.mdns?.trimmingCharacters(in: .whitespacesAndNewlines), !mdns.isEmpty {
             stored.mdnsHost = mdns
-        } else if stored.mdnsHost.isEmpty {
+        } else if stored.mdnsHost.isEmpty,
+                  DeviceEndpointResolver.sanitizeHost(fallbackHost) != DeviceEndpointResolver.softAPHost {
             stored.mdnsHost = fallbackHost
         }
         if let address = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost) {
-            stored.staIP = address
+            stored.promoteWiFiHost(address)
         }
         stored.jiggleEnabled = status.jiggle
         stored.moveIntervalMs = status.jiggleIntervalMs

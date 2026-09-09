@@ -14,19 +14,21 @@ enum DeviceEndpointResolver {
 
     /// Candidate base URLs in preference order: direct/routable address first,
     /// then the Bonjour hostname as a discovery fallback.
-    static func endpointURLs(mdnsHost: String, staIP: String?) -> [URL] {
+    static func endpointURLs(mdnsHost: String, staIP: String?, knownHosts: [String] = []) -> [URL] {
         var urls: [URL] = []
-        if let staIP, let ipURL = baseURL(from: staIP), !urls.contains(ipURL) {
-            urls.append(ipURL)
+        func appendStationCandidate(_ host: String) {
+            guard sanitizeHost(host) != softAPHost,
+                  let url = baseURL(from: host), !urls.contains(url) else { return }
+            urls.append(url)
         }
-        if let mdnsURL = baseURL(from: mdnsHost), !urls.contains(mdnsURL) {
-            urls.append(mdnsURL)
-        }
+        if let staIP { appendStationCandidate(staIP) }
+        knownHosts.forEach(appendStationCandidate)
+        appendStationCandidate(mdnsHost)
         return urls
     }
 
-    static func probeURLs(mdnsHost: String, staIP: String?) -> [URL] {
-        var urls = endpointURLs(mdnsHost: mdnsHost, staIP: staIP)
+    static func probeURLs(mdnsHost: String, staIP: String?, knownHosts: [String] = []) -> [URL] {
+        var urls = endpointURLs(mdnsHost: mdnsHost, staIP: staIP, knownHosts: knownHosts)
         if let fallback = baseURL(from: softAPHost), !urls.contains(fallback) {
             urls.append(fallback)
         }
@@ -48,12 +50,14 @@ enum DeviceEndpointResolver {
     /// device-reported STA address may be unreachable across a VPN.
     static func directAddress(reportedSTAIP: String?, fallbackHost: String) -> String? {
         let fallback = sanitizeHost(fallbackHost)
-        if !fallback.isEmpty, !fallback.lowercased().hasSuffix(".local") {
+        if !fallback.isEmpty,
+           fallback != softAPHost,
+           !fallback.lowercased().hasSuffix(".local") {
             return fallback
         }
         guard let reportedSTAIP else { return nil }
         let reported = sanitizeHost(reportedSTAIP)
-        return reported.isEmpty ? nil : reported
+        return reported.isEmpty || reported == softAPHost ? nil : reported
     }
 
     static func baseURL(from host: String) -> URL? {

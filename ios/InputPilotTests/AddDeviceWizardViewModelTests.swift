@@ -33,4 +33,30 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
         model.selectBluetooth(metadata(capabilities: ["secure_protocol_v2"]))
         XCTAssertEqual(model.step, .bleScanning)
     }
+
+    func testSecureWiFiHandoffDoesNotCacheTemporarySoftAP() throws {
+        let connecting = try JSONDecoder().decode(
+            SecureWiFiStatus.self,
+            from: Data(#"{"state":"soft_ap","ip":"","device_id":"aabbccddeeff","provisioning":{"state":"connecting","error":""}}"#.utf8)
+        )
+        let connected = try JSONDecoder().decode(
+            SecureWiFiStatus.self,
+            from: Data(#"{"state":"connected","ip":"172.20.10.2","device_id":"aabbccddeeff","provisioning":{"state":"connected","error":""}}"#.utf8)
+        )
+        let failed = try JSONDecoder().decode(
+            SecureWiFiStatus.self,
+            from: Data(#"{"state":"soft_ap","ip":"","device_id":"aabbccddeeff","provisioning":{"state":"failed","error":"network_unreachable"}}"#.utf8)
+        )
+
+        XCTAssertEqual(connecting.handoffState(expectedDeviceId: "aabbccddeeff"), .connecting)
+        XCTAssertEqual(
+            connected.handoffState(expectedDeviceId: "AABBCCDDEEFF"),
+            .station("172.20.10.2")
+        )
+        XCTAssertEqual(
+            failed.handoffState(expectedDeviceId: "aabbccddeeff"),
+            .failed("network_unreachable")
+        )
+        XCTAssertNil(connected.handoffState(expectedDeviceId: "112233445566"))
+    }
 }
