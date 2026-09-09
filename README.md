@@ -134,6 +134,7 @@ the selected connection mode only changes transport preference.
 - **Keyboard:** native event input (including Backspace, Enter, Tab and paste), navigation/editing keys, one-shot modifiers, shortcuts, and actual German QWERTZ or US QWERTY USB-HID mapping.
 - **Presets:** local SwiftData text/shortcut items with favorite, duplicate, delete, reorder, optional Enter, and typing-delay metadata; complete presets execute autonomously on the ESP32 after an acknowledged, checksummed upload and can be stopped from the app.
 - **Macros:** records only actions produced inside this app, including timing. Playback supports 0.5×–2×, finite/infinite repeat and start delay. The visible STOP control cancels the queue and sends release-all.
+- **Captive portals:** Device Details can store up to five SSID-bound HTTP workflows on the InputPilot. The firmware runs the matching workflow after a configurable connection delay and reports waiting, running, successful, already-connected, or failed status back to the app. See [Captive Portal Scripts](docs/CAPTIVE_PORTAL_SCRIPTS.md).
 
 Automatic transport selection uses BLE for small low-latency events, persistent TCP for longer text and event streams, and REST for management/fallback. Device settings also offer Prefer Bluetooth, Prefer Wi-Fi, Bluetooth Only, and Wi-Fi Only. The active transport is shown above the control tabs.
 

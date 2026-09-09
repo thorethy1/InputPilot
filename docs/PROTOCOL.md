@@ -160,6 +160,34 @@ while a preset is active, and preset start/upload is rejected during OTA.
 - Automatic transport selection considers only authenticated ready sessions.
   It never introduces a less secure transport.
 
+## Captive portal workflows
+
+Firmware advertising `captive_portal_scripts` accepts authenticated `CAPTIVE`
+commands over BLE or Wi-Fi Secure Protocol v2. Workflows are associated with an
+exact saved SSID, persisted in NVS, and executed by the firmware once per new
+station association after the configured delay. Uploads use FNV-1a checksums and
+become active only after a complete `COMMIT`.
+
+- `CAPTIVE LIST` and `CAPTIVE GET <index>` enumerate metadata.
+- `CAPTIVE READ <index> <offset> <length>` retrieves editor content in bounded
+  hexadecimal chunks of at most 60 bytes.
+- `CAPTIVE BEGIN <token> <ssid-hex> <delay-ms> <size> <checksum> <enabled>`,
+  `CAPTIVE DATA <token> <offset> <hex>`, and `CAPTIVE COMMIT <token>` form the
+  transactional upload.
+- BLE may carry BEGIN as binary management operation `0x07` and DATA as `0x08`
+  after the authenticated `0xFE` marker; integers are big-endian and DATA keeps
+  the script bytes unexpanded. `CAPTIVE ABORT <token>` safely clears only the
+  matching incomplete upload.
+- `CAPTIVE REMOVE <ssid-hex>` removes one workflow.
+- `CAPTIVE RUN <ssid-hex>` tests a workflow only while that exact SSID is live.
+- `CAPTIVE STATUS` reports `idle`, `waiting`, `running`, `success`,
+  `already_connected`, or `failed`, plus the SSID, message, stable error code,
+  and device-uptime timestamp.
+
+The DSL and its security boundaries are documented in
+[Captive Portal Scripts](CAPTIVE_PORTAL_SCRIPTS.md). No POSIX shell source or
+portal-specific workflow is shipped in the app or firmware.
+
 ## Wi-Fi provisioning
 
 Wi-Fi is optional. A trusted device can be added and controlled entirely over

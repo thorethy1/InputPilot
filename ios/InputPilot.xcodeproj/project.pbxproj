@@ -59,6 +59,9 @@
 		A10000000000000000000070 /* MacroController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000070 /* MacroController.swift */; };
 		A10000000000000000000071 /* MacrosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000071 /* MacrosView.swift */; };
 		A10000000000000000000072 /* MacroControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000072 /* MacroControllerTests.swift */; };
+		A10000000000000000000080 /* CaptivePortalScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000080 /* CaptivePortalScript.swift */; };
+		A10000000000000000000081 /* CaptivePortalScriptsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000081 /* CaptivePortalScriptsView.swift */; };
+		A10000000000000000000082 /* CaptivePortalScriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000082 /* CaptivePortalScriptTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -128,6 +131,9 @@
 		A20000000000000000000070 /* MacroController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroController.swift; sourceTree = "<group>"; };
 		A20000000000000000000071 /* MacrosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacrosView.swift; sourceTree = "<group>"; };
 		A20000000000000000000072 /* MacroControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroControllerTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000080 /* CaptivePortalScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptivePortalScript.swift; sourceTree = "<group>"; };
+		A20000000000000000000081 /* CaptivePortalScriptsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptivePortalScriptsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000082 /* CaptivePortalScriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptivePortalScriptTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -207,6 +213,7 @@
 				A20000000000000000000057 /* SecretReferenceScannerTests.swift */,
 				A20000000000000000000059 /* PresetsViewModelTests.swift */,
 				A20000000000000000000063 /* AppIntentSupportTests.swift */,
+				A20000000000000000000082 /* CaptivePortalScriptTests.swift */,
 			);
 			path = InputPilotTests;
 			sourceTree = "<group>";
@@ -228,6 +235,7 @@
 				A20000000000000000000026 /* DevicePresenceStatus.swift */,
 				A20000000000000000000028 /* SavedDeviceIndex.swift */,
 				A20000000000000000000053 /* StoredSecret.swift */,
+				A20000000000000000000080 /* CaptivePortalScript.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -240,6 +248,7 @@
 				A20000000000000000000056 /* SecretsView.swift */,
 				A20000000000000000000058 /* PresetsView.swift */,
 				A20000000000000000000071 /* MacrosView.swift */,
+				A20000000000000000000081 /* CaptivePortalScriptsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -402,6 +411,8 @@
 				A10000000000000000000056 /* SecretsView.swift in Sources */,
 				A10000000000000000000058 /* PresetsView.swift in Sources */,
 				A10000000000000000000071 /* MacrosView.swift in Sources */,
+				A10000000000000000000080 /* CaptivePortalScript.swift in Sources */,
+				A10000000000000000000081 /* CaptivePortalScriptsView.swift in Sources */,
 				A10000000000000000000060 /* InputPilotIntents.swift in Sources */,
 				A10000000000000000000061 /* AppIntentSupport.swift in Sources */,
 				A10000000000000000000062 /* InputPilotShortcuts.swift in Sources */,
@@ -431,6 +442,7 @@
 				A10000000000000000000057 /* SecretReferenceScannerTests.swift in Sources */,
 				A10000000000000000000059 /* PresetsViewModelTests.swift in Sources */,
 				A10000000000000000000063 /* AppIntentSupportTests.swift in Sources */,
+				A10000000000000000000082 /* CaptivePortalScriptTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

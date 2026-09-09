@@ -199,6 +199,25 @@ struct DeviceDetailView: View {
                 }
             }
 
+            Section("Captive Portal") {
+                if device.capabilities.contains("captive_portal_scripts") {
+                    NavigationLink {
+                        CaptivePortalScriptsView(device: device)
+                    } label: {
+                        Label("Wi-Fi Portal Scripts", systemImage: "wifi.exclamationmark")
+                    }
+                    Text("Run a saved HTTP workflow automatically after InputPilot joins its assigned Wi-Fi network.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("Firmware update required", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(AppColors.warning)
+                    Text("Captive portal scripts require InputPilot firmware 0.9.2 or newer.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if device.capabilities.contains("secure_usb_identity") {
                 Section("USB Identity") {
                     TextField("Manufacturer", text: $usbManufacturerName)

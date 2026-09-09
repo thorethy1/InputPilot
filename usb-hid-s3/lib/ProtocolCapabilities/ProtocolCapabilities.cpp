@@ -9,20 +9,19 @@ const char *jsonArray() {
          "\"secure_ota\",\"secure_diagnostics\",\"mouse_move\","
          "\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\","
          "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\","
-         "\"release_all\",\"device_presets\"]";
+         "\"release_all\",\"device_presets\",\"captive_portal_scripts\"]";
 }
 
 const char *bleJsonArray() {
-  // The GATT metadata value is capped at 512 bytes. Diagnostics are part of
-  // secure protocol v2 and need no UI feature gate, so omit that one redundant
-  // flag here while retaining it in the full Wi-Fi discovery contract.
+  // The GATT metadata value is capped at 512 bytes. Diagnostics and the
+  // fine-grained mouse operation flags are implied by protocol_core, so omit
+  // those redundant flags here while retaining them in full Wi-Fi discovery.
   return "[\"secure_protocol_v2\",\"protocol_core\","
          "\"ble_transport\",\"wifi_transport\",\"secure_wifi_setup\","
          "\"multiple_wifi\",\"secure_usb_identity\",\"usb_manufacturer\","
-         "\"secure_ota\",\"mouse_move\",\"mouse_click\","
-         "\"mouse_button_state\",\"mouse_scroll\","
+         "\"secure_ota\","
          "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\","
-         "\"release_all\",\"device_presets\"]";
+         "\"release_all\",\"device_presets\",\"captive_portal_scripts\"]";
 }
 
 const char *radioModeJson(bool bleEnabled, bool wifiEnabled) {

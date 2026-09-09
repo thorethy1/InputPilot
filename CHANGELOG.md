@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add persistent, SSID-bound captive portal HTTP workflows. The iOS device settings provide an editor, validation, upload, enable/disable controls, manual testing and live run status; the ESP32 waits for the configured Wi-Fi path, then runs the matching workflow once per association without requiring the app to stay open. Portal-specific scripts are never bundled with InputPilot.
+
 - Fix Wi-Fi handoff and fallback recovery: AP+STA joins no longer make iOS cache the temporary `192.168.4.1` gateway, Device Settings persist an MRU history of authenticated station addresses (including iPhone Personal Hotspot leases), Wi-Fi management works without BLE, stale endpoints may self-heal from an already authenticated BLE session, and an enabled fallback AP remains available while saved networks are retried.
 - Reduce interactive transport latency with a 15 ms BLE connection request, 20 ms advertising, best-effort 2M PHY/data-length extension, dynamically negotiated ATT write sizes, faster pointer/scroll coalescing and OTA flow-control polling, TCP no-delay, and disabled Wi-Fi modem sleep while USB-powered.
 - Execute complete presets autonomously on the ESP32 after an acknowledged, resumable and checksummed BLE/Wi-Fi upload. Long delays continue when iOS or Shortcuts exits, the app restores device-side run status, and Stop Preset aborts on the firmware and releases all input.

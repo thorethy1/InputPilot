@@ -2105,6 +2105,20 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             Data(try secureChannel.sealText(command).utf8)
         }
     }
+    func captiveBinaryRequest(_ plaintext: Data, timeout: TimeInterval = 8) async throws -> String {
+        guard plaintext.count >= 2, plaintext[0] == 0xFE,
+              plaintext[1] == 0x07 || plaintext[1] == 0x08 else {
+            throw TransportError.encoding
+        }
+        return try await requestPayload(timeout: timeout) {
+            guard let secureChannel, let peripheral else { throw TransportError.unavailable }
+            let payload = try secureChannel.sealBinary(plaintext)
+            guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+                throw TransportError.failed("The negotiated Bluetooth packet size is too small for captive script upload.")
+            }
+            return payload
+        }
+    }
     func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
         try await request(command, timeout: timeout)
     }

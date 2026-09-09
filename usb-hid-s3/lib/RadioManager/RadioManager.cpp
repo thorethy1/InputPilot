@@ -34,6 +34,7 @@
 #include "SecureReplySizing.h"
 #include "USBIdentityConfig.h"
 #include "WifiManagement.h"
+#include "CaptivePortalAutomation.h"
 
 RadioManager g_radio;
 
@@ -245,6 +246,18 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     sendSecureReply(source, session, reply);
     return true;
   }
+  if (message.rfind("CAPTIVE ", 0) == 0) {
+    std::string reply;
+    if (g_otaEngine.active() && message != "CAPTIVE STATUS" &&
+        message != "CAPTIVE LIST" && message.rfind("CAPTIVE GET ", 0) != 0 &&
+        message.rfind("CAPTIVE READ ", 0) != 0) {
+      reply = "error ota_busy";
+    } else if (!g_captivePortalAutomation.handleCommand(message, reply)) {
+      reply = "error captive_invalid";
+    }
+    sendSecureReply(source, session, reply);
+    return true;
+  }
   if (message == "DIAGNOSTICS INFO") {
     sendSecureReply(source, session, strcmp(source, "ble") == 0
                                          ? g_bleDiagnostics.compactInfoJson()
@@ -427,6 +440,10 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     return true;
   }
   if (message.rfind("START ", 0) == 0) {
+    if (g_captivePortalAutomation.active()) {
+      sendSecureReply(source, session, "error captive_in_progress");
+      return true;
+    }
     if (devicePresetActive()) {
       sendSecureReply(source, session, "error preset_in_progress");
       return true;
@@ -714,6 +731,51 @@ void processBLEControlFrames(size_t budget = 8) {
     if (frame.length > 1 && frame.bytes[0] == 0xFE)
       frame.bytes[0] = 0xFD;
     if (frame.length > 1 && frame.bytes[0] == 0xFD) {
+      // Binary captive workflow BEGIN keeps maximum-length UTF-8 SSIDs within
+      // the bounded ATT frame: marker, op, token, delay, size, checksum,
+      // enabled, SSID length, SSID bytes.
+      if (frame.bytes[1] == 7 && frame.length >= 23) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t delayMs = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                 (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                 (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                 static_cast<uint32_t>(frame.bytes[13]);
+        const size_t size = (static_cast<size_t>(frame.bytes[14]) << 8) |
+                            static_cast<size_t>(frame.bytes[15]);
+        const uint32_t checksum = (static_cast<uint32_t>(frame.bytes[16]) << 24) |
+                                  (static_cast<uint32_t>(frame.bytes[17]) << 16) |
+                                  (static_cast<uint32_t>(frame.bytes[18]) << 8) |
+                                  static_cast<uint32_t>(frame.bytes[19]);
+        const bool enabled = frame.bytes[20] == 1;
+        const size_t ssidLength = frame.bytes[21];
+        std::string reply;
+        if (frame.length != 22 + ssidLength || ssidLength == 0 ||
+            frame.bytes[20] > 1 || g_otaEngine.active()) {
+          reply = g_otaEngine.active() ? "error ota_busy" : "error captive_invalid";
+        } else {
+          const String ssid(reinterpret_cast<const char *>(frame.bytes + 22), ssidLength);
+          g_captivePortalAutomation.beginUpload(token, ssid, delayMs, size,
+                                                checksum, enabled, reply);
+        }
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
+      // Binary captive DATA: marker, op, token, 32-bit offset, raw UTF-8 bytes.
+      if (frame.bytes[1] == 8 && frame.length > 14) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t offset = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                static_cast<uint32_t>(frame.bytes[13]);
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else g_captivePortalAutomation.writeUpload(token, offset, frame.bytes + 14,
+                                                   frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
       // Binary preset data: marker, operation, 64-bit token, 32-bit offset,
       // then raw bytecode. Every BLE chunk receives an encrypted app-level ACK.
       if (frame.bytes[1] == 6 && frame.length > 14) {

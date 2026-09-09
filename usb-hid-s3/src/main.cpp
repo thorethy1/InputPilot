@@ -29,6 +29,7 @@
 #include "RadioMode.h"
 #include "RadioManager.h"
 #include "StatusLed.h"
+#include "CaptivePortalAutomation.h"
 #include "USBIdentityConfig.h"
 #include "WifiCredentials.h"
 #include "BLEOTA.h"
@@ -1071,6 +1072,7 @@ void setup() {
 
   // NVS WiFi creds (seed from compile-time WIFI_SSID on first boot).
   WifiCredentials::begin();
+  g_captivePortalAutomation.begin();
 
   // Bring up the default radio (compile-time selectable; runtime via `radio`).
   RadioMode initial = RadioMode::None;
@@ -1089,6 +1091,7 @@ void loop() {
   serviceSerialCommands();
   servicePairingButton();
   g_radio.loop();
+  g_captivePortalAutomation.loop();
   servicePresetEngine();
   processHIDQueue(6);
   g_statusLed.loop();
