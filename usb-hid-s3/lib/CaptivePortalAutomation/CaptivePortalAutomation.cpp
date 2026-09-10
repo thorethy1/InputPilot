@@ -6,6 +6,7 @@
 #include <WiFiClientSecure.h>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <map>
 #include <vector>
 
@@ -267,15 +268,20 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
 
   int connect(const char *hostname, uint16_t port, int32_t timeout) override {
     _timeout = timeout;
-    LOG_WIFI("CAPTIVE TCP ip=%s port=%u", address_.toString().c_str(), port);
+    LOG_WIFI("CAPTIVE HTTPS ip=%s port=%u host=%s", address_.toString().c_str(),
+             port, hostname);
     // Connect the socket to the selected IPv4 address while retaining the
     // original hostname for TLS SNI. Captive HTTPS remains intentionally
     // certificate-insecure, as configured by setInsecure() below.
     const int connected = WiFiClientSecure::connect(
         address_, port, hostname, nullptr, nullptr, nullptr);
     if (!connected) {
-      LOG_WARN("CAPTIVE TCP failed host=%s ip=%s port=%u", hostname,
-               address_.toString().c_str(), port);
+      const int savedErrno = errno;
+      char tlsDetail[160] = {};
+      const int tlsError = lastError(tlsDetail, sizeof(tlsDetail));
+      LOG_WARN("CAPTIVE HTTPS connect failed host=%s ip=%s port=%u tls_error=%d detail=\"%s\" errno=%d",
+               hostname, address_.toString().c_str(), port, tlsError,
+               tlsDetail, savedErrno);
     }
     return connected;
   }
