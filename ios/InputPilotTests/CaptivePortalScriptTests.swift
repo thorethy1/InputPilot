@@ -234,6 +234,38 @@ import XCTest
         XCTAssertTrue(wifiCommands.last?.hasPrefix("CAPTIVE COMMIT ") == true)
     }
 
+    func testBLEClearsStaleUploadAndRetriesBeginBeforeFallingBack() async throws {
+        let script = "INPUTPILOT-CAPTIVE/1\nSUCCESS"
+        let bluetooth = BinaryCaptiveRecorder(firstBeginIsBusy: true)
+        var wifiCalls = 0
+
+        let result = try await CaptivePortalSaveCoordinator.save(
+            ssid: "Lobby",
+            delayMs: 0,
+            enabled: true,
+            script: script,
+            bluetoothIsReady: true,
+            waitForBluetooth: { _ in XCTFail("Ready Bluetooth must not wait.") },
+            bluetoothRequest: { command, timeout in
+                try await bluetooth.textReply(to: command, timeout: timeout)
+            },
+            bluetoothBinaryRequest: { payload, timeout in
+                try await bluetooth.binaryReply(to: payload, timeout: timeout)
+            },
+            wifiRequests: [{ _, _ in
+                wifiCalls += 1
+                throw TransportError.failed("Wi-Fi must not be used after BLE recovery.")
+            }]
+        )
+
+        let beginAttempts = await bluetooth.beginAttempts
+        let abortCalls = await bluetooth.abortCalls
+        XCTAssertEqual(result.transport, .bluetooth)
+        XCTAssertEqual(beginAttempts, 2)
+        XCTAssertEqual(abortCalls, 1)
+        XCTAssertEqual(wifiCalls, 0)
+    }
+
     func testBluetoothReadinessWaitIsBoundedBeforeWiFiFallback() async throws {
         let script = "INPUTPILOT-CAPTIVE/1\nSUCCESS"
         let wifi = RequestRecorder()
@@ -297,10 +329,17 @@ import XCTest
 }
 
 private actor BinaryCaptiveRecorder {
+    private let firstBeginIsBusy: Bool
     private var token: UInt64?
     private var received = 0
     private(set) var binaryOpcodes: [UInt8] = []
     private(set) var timeouts: [TimeInterval] = []
+    private(set) var beginAttempts = 0
+    private(set) var abortCalls = 0
+
+    init(firstBeginIsBusy: Bool = false) {
+        self.firstBeginIsBusy = firstBeginIsBusy
+    }
 
     func binaryReply(to payload: Data, timeout: TimeInterval) throws -> String {
         guard payload.count >= 2, payload[0] == 0xFE else {
@@ -311,6 +350,8 @@ private actor BinaryCaptiveRecorder {
         switch payload[1] {
         case 0x07:
             guard payload.count >= 10 else { throw TransportError.failed("Invalid BEGIN.") }
+            beginAttempts += 1
+            if firstBeginIsBusy, beginAttempts == 1 { return "error captive_busy" }
             token = payload[2 ..< 10].reduce(UInt64.zero) { ($0 << 8) | UInt64($1) }
             received = 0
             return "captive ready \(tokenText) 0"
@@ -327,6 +368,12 @@ private actor BinaryCaptiveRecorder {
 
     func textReply(to command: String, timeout: TimeInterval) throws -> String {
         timeouts.append(timeout)
+        if command == "CAPTIVE ABORT" {
+            abortCalls += 1
+            token = nil
+            received = 0
+            return "captive aborted"
+        }
         guard command == "CAPTIVE COMMIT \(tokenText)" else {
             throw TransportError.failed("Unexpected text request.")
         }

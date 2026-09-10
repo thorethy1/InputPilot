@@ -365,21 +365,29 @@ enum CaptivePortalScriptValidator {
         let transportLabel = suppliedTransportLabel ?? (binaryRequest == nil ? "Wi-Fi" : "BLE")
         var phase = "begin"
         do {
-            appLog(.control, "CAPTIVE \(transportLabel) begin")
-            let beginReply: String
-            if let binaryRequest {
-                var payload = Data([0xFE, 0x07])
-                payload.appendBigEndian(token)
-                payload.appendBigEndian(UInt32(delayMs))
-                payload.appendBigEndian(UInt16(scriptData.count))
-                payload.appendBigEndian(checksum)
-                payload.append(enabled ? 1 : 0)
-                payload.append(UInt8(ssidData.count))
-                payload.append(ssidData)
-                beginReply = try await binaryRequest(payload, operationTimeout)
-            } else {
+            let sendBegin: () async throws -> String = {
+                appLog(.control, "CAPTIVE \(transportLabel) begin")
+                if let binaryRequest {
+                    var payload = Data([0xFE, 0x07])
+                    payload.appendBigEndian(token)
+                    payload.appendBigEndian(UInt32(delayMs))
+                    payload.appendBigEndian(UInt16(scriptData.count))
+                    payload.appendBigEndian(checksum)
+                    payload.append(enabled ? 1 : 0)
+                    payload.append(UInt8(ssidData.count))
+                    payload.append(ssidData)
+                    return try await binaryRequest(payload, operationTimeout)
+                }
                 let begin = "CAPTIVE BEGIN \(tokenText) \(ssidData.hex) \(delayMs) \(scriptData.count) \(String(format: "%08x", checksum)) \(enabled ? 1 : 0)"
-                beginReply = try await request(begin, operationTimeout)
+                return try await request(begin, operationTimeout)
+            }
+            var beginReply = try await sendBegin()
+            if beginReply == "error captive_busy" {
+                appLog(.control, "CAPTIVE \(transportLabel) stale upload detected phase=begin")
+                let abortReply = try await request("CAPTIVE ABORT", abortTimeout)
+                guard abortReply == "captive aborted" else { throw protocolError(abortReply) }
+                appLog(.control, "CAPTIVE \(transportLabel) stale upload cleared; retrying begin")
+                beginReply = try await sendBegin()
             }
             let beginFields = beginReply.split(separator: " ").map(String.init)
             guard beginFields.count == 4, beginFields[0] == "captive", beginFields[1] == "ready",
@@ -535,6 +543,10 @@ enum CaptivePortalScriptValidator {
             } catch {
                 wifiError = error
             }
+        }
+        if let reply = try? await bluetoothRequest("CAPTIVE ABORT", abortTimeout),
+           reply == "captive aborted" {
+            appLog(.control, "CAPTIVE BLE cleanup completed after failed save")
         }
         throw CaptivePortalSaveError(bluetoothError: bluetoothError, wifiError: wifiError)
     }
