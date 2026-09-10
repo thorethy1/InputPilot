@@ -8,6 +8,7 @@
 #include <vector>
 #include <atomic>
 
+#include "CaptivePortalPolicy.h"
 #include "Config.h"
 
 // Persistent, SSID-bound HTTP workflows. The firmware deliberately does not
@@ -35,6 +36,8 @@ class CaptivePortalAutomation {
 
   std::string statusJson();
   bool active() const { return running_.load(); }
+  bool blocksWireGuard() const;
+  CaptivePortalPolicy::GateState wireGuardGateState() const;
 
  private:
   enum class State { Idle, Waiting, Running, Success, AlreadyConnected, Failed };
@@ -66,6 +69,10 @@ class CaptivePortalAutomation {
   bool remove(const String &ssid);
   size_t count() const;
   bool startForSSID(const String &ssid, bool manual);
+  void associateGate(const String &ssid, bool enabledScript);
+  void disconnectGate();
+  void startGate(const String &ssid);
+  void finishGate(const String &ssid, CaptivePortalPolicy::GateState result);
   void setStatus(State state, const String &ssid, const String &message,
                  const String &error = String());
   static uint32_t checksum(const uint8_t *data, size_t length);
@@ -73,10 +80,12 @@ class CaptivePortalAutomation {
   Upload upload_;
   String observedSSID_;
   String pendingSSID_;
+  String taskSSID_;
   uint32_t pendingSinceMs_ = 0;
   bool ranForCurrentConnection_ = false;
   std::atomic<bool> running_{false};
-  SemaphoreHandle_t mutex_ = nullptr;
+  mutable SemaphoreHandle_t mutex_ = nullptr;
+  CaptivePortalPolicy::Gate wireGuardGate_;
   State state_ = State::Idle;
   String statusSSID_;
   String statusMessage_;

@@ -9,8 +9,14 @@
 #include <map>
 #include <vector>
 
+extern "C" {
+#include <lwip/netdb.h>
+#include <lwip/sockets.h>
+}
+
 #include "CaptivePortalParsing.h"
 #include "Logging.h"
+#include "WireGuardManager.h"
 
 CaptivePortalAutomation g_captivePortalAutomation;
 
@@ -215,6 +221,69 @@ struct HTTPResult {
   String error;
 };
 
+bool resolveIPv4(const String &hostname, IPAddress &address) {
+  struct addrinfo hints {};
+  hints.ai_family = CaptivePortalPolicy::resolverFamily(
+      CaptivePortalPolicy::AddressFamily::IPv4);
+  hints.ai_socktype = SOCK_STREAM;
+  struct addrinfo *resolved = nullptr;
+  const int error = lwip_getaddrinfo(hostname.c_str(), nullptr, &hints, &resolved);
+  if (error != 0 || !resolved || resolved->ai_family != AF_INET ||
+      resolved->ai_addrlen < sizeof(struct sockaddr_in)) {
+    if (resolved) lwip_freeaddrinfo(resolved);
+    LOG_WARN("CAPTIVE DNS failed host=%s error=%d", hostname.c_str(), error);
+    return false;
+  }
+  const auto *socketAddress =
+      reinterpret_cast<const struct sockaddr_in *>(resolved->ai_addr);
+  address = IPAddress(reinterpret_cast<const uint8_t *>(&socketAddress->sin_addr));
+  lwip_freeaddrinfo(resolved);
+  LOG_WIFI("CAPTIVE DNS host=%s resolved=%s", hostname.c_str(),
+           address.toString().c_str());
+  return true;
+}
+
+class ResolvedIPv4Client final : public WiFiClient {
+ public:
+  explicit ResolvedIPv4Client(const IPAddress &address) : address_(address) {}
+
+  int connect(const char *hostname, uint16_t port, int32_t timeout) override {
+    LOG_WIFI("CAPTIVE TCP ip=%s port=%u", address_.toString().c_str(), port);
+    const int connected = WiFiClient::connect(address_, port, timeout);
+    if (!connected) {
+      LOG_WARN("CAPTIVE TCP failed host=%s ip=%s port=%u", hostname,
+               address_.toString().c_str(), port);
+    }
+    return connected;
+  }
+
+ private:
+  IPAddress address_;
+};
+
+class ResolvedIPv4SecureClient final : public WiFiClientSecure {
+ public:
+  explicit ResolvedIPv4SecureClient(const IPAddress &address) : address_(address) {}
+
+  int connect(const char *hostname, uint16_t port, int32_t timeout) override {
+    _timeout = timeout;
+    LOG_WIFI("CAPTIVE TCP ip=%s port=%u", address_.toString().c_str(), port);
+    // Connect the socket to the selected IPv4 address while retaining the
+    // original hostname for TLS SNI. Captive HTTPS remains intentionally
+    // certificate-insecure, as configured by setInsecure() below.
+    const int connected = WiFiClientSecure::connect(
+        address_, port, hostname, nullptr, nullptr, nullptr);
+    if (!connected) {
+      LOG_WARN("CAPTIVE TCP failed host=%s ip=%s port=%u", hostname,
+               address_.toString().c_str(), port);
+    }
+    return connected;
+  }
+
+ private:
+  IPAddress address_;
+};
+
 class BoundedResponseStream final : public Stream {
  public:
   explicit BoundedResponseStream(size_t limit) : limit_(limit) {
@@ -244,14 +313,15 @@ class BoundedResponseStream final : public Stream {
 HTTPResult performRequest(const String &method, String url, const String &body,
                           const String &contentType,
                           const std::map<std::string, String> &headers,
-                          const String &requiredHostSuffix, CookieJar &cookies) {
+                          const String &requiredHostSuffix, CookieJar &cookies,
+                          CaptivePortalPolicy::AddressFamily addressFamily) {
   HTTPResult result;
   String currentMethod = method;
   String currentBody = body;
   String currentContentType = contentType;
   for (int redirects = 0; redirects <= 10; ++redirects) {
+    const String currentHost = host(url);
     if (requiredHostSuffix.length()) {
-      const String currentHost = host(url);
       if (!currentHost.endsWith(requiredHostSuffix) ||
           currentHost.length() <= requiredHostSuffix.length()) {
         result.error = "UNTRUSTED_HOST";
@@ -261,9 +331,31 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     HTTPClient http;
     WiFiClient plain;
     WiFiClientSecure secure;
+    IPAddress resolvedAddress;
+    if (addressFamily == CaptivePortalPolicy::AddressFamily::IPv4 &&
+        !resolveIPv4(currentHost, resolvedAddress)) {
+      result.error = "NETWORK:DNS failed";
+      return result;
+    }
+    ResolvedIPv4Client ipv4Plain(resolvedAddress);
+    ResolvedIPv4SecureClient ipv4Secure(resolvedAddress);
     secure.setInsecure();  // Captive portals are reached before normal PKI is reliable.
+    ipv4Secure.setInsecure();
     const bool https = url.startsWith("https://");
-    if (!(https ? http.begin(secure, url) : http.begin(plain, url))) {
+    NetworkClient *client = nullptr;
+    if (https) {
+      client = addressFamily == CaptivePortalPolicy::AddressFamily::IPv4
+                   ? static_cast<NetworkClient *>(&ipv4Secure)
+                   : static_cast<NetworkClient *>(&secure);
+    } else {
+      client = addressFamily == CaptivePortalPolicy::AddressFamily::IPv4
+                   ? static_cast<NetworkClient *>(&ipv4Plain)
+                   : static_cast<NetworkClient *>(&plain);
+    }
+    LOG_WIFI("CAPTIVE HTTP method=%s host=%s family=%s", currentMethod.c_str(),
+             currentHost.c_str(),
+             CaptivePortalPolicy::addressFamilyName(addressFamily));
+    if (!http.begin(*client, url)) {
       result.error = "HTTP_INIT";
       return result;
     }
@@ -296,6 +388,7 @@ HTTPResult performRequest(const String &method, String url, const String &body,
       http.end();
       return result;
     }
+    LOG_WIFI("CAPTIVE HTTP status=%d", status);
     const String location = http.header("Location");
     if (status >= 300 && status < 400 && location.length()) {
       const String next = resolveURL(url, location);
@@ -353,6 +446,47 @@ std::vector<String> lines(const String &script) {
 void CaptivePortalAutomation::begin() {
   mutex_ = xSemaphoreCreateMutex();
   setStatus(State::Idle, "", "No captive portal automation has run yet.");
+}
+
+bool CaptivePortalAutomation::blocksWireGuard() const {
+  if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+  const bool blocked = wireGuardGate_.blocksWireGuard();
+  if (mutex_) xSemaphoreGive(mutex_);
+  return blocked;
+}
+
+CaptivePortalPolicy::GateState
+CaptivePortalAutomation::wireGuardGateState() const {
+  if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+  const CaptivePortalPolicy::GateState state = wireGuardGate_.state();
+  if (mutex_) xSemaphoreGive(mutex_);
+  return state;
+}
+
+void CaptivePortalAutomation::associateGate(const String &ssid,
+                                             bool enabledScript) {
+  if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+  wireGuardGate_.associate(ssid.c_str(), enabledScript);
+  if (mutex_) xSemaphoreGive(mutex_);
+}
+
+void CaptivePortalAutomation::disconnectGate() {
+  if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+  wireGuardGate_.disconnect();
+  if (mutex_) xSemaphoreGive(mutex_);
+}
+
+void CaptivePortalAutomation::startGate(const String &ssid) {
+  if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+  wireGuardGate_.start(ssid.c_str());
+  if (mutex_) xSemaphoreGive(mutex_);
+}
+
+void CaptivePortalAutomation::finishGate(
+    const String &ssid, CaptivePortalPolicy::GateState result) {
+  if (mutex_) xSemaphoreTake(mutex_, portMAX_DELAY);
+  wireGuardGate_.finish(ssid.c_str(), result);
+  if (mutex_) xSemaphoreGive(mutex_);
 }
 
 size_t CaptivePortalAutomation::count() const {
@@ -495,9 +629,17 @@ bool CaptivePortalAutomation::startForSSID(const String &ssid, bool manual) {
     return false;
   }
   pendingSSID_ = ssid;
+  taskSSID_ = ssid;
+  if (manual) ranForCurrentConnection_ = true;
+  startGate(ssid);
+  if (manual && g_wireGuardManager.active()) {
+    LOG_WIFI("WIREGUARD stopping for manual captive run ssid=\"%s\"", ssid.c_str());
+    g_wireGuardManager.stop();
+  }
   setStatus(State::Running, ssid, manual ? "Manual run started." : "Captive portal script started.");
   if (xTaskCreatePinnedToCore(taskEntry, "captive-http", 10240, this, 1, nullptr, 0) != pdPASS) {
     running_.store(false);
+    finishGate(ssid, CaptivePortalPolicy::GateState::Failed);
     setStatus(State::Failed, ssid, "Could not start captive portal task.", "TASK_START");
     return false;
   }
@@ -509,11 +651,14 @@ void CaptivePortalAutomation::taskEntry(void *context) {
 }
 
 void CaptivePortalAutomation::runTask() {
+  const String ssid = taskSSID_;
   ScriptRecord record;
-  const int index = find(pendingSSID_);
+  const int index = find(ssid);
   if (index < 0 || !load(index, record))
-    setStatus(State::Failed, pendingSSID_, "The configured script is no longer available.", "NOT_FOUND");
+    setStatus(State::Failed, ssid, "The configured script is no longer available.", "NOT_FOUND");
   else run(record);
+  if (index < 0 || record.ssid.isEmpty())
+    finishGate(ssid, CaptivePortalPolicy::GateState::Failed);
   running_.store(false);
   vTaskDelete(nullptr);
 }
@@ -529,12 +674,15 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
   variables["SSID"] = record.ssid;
   std::map<std::string, String> headers;
   String requiredHostSuffix;
+  CaptivePortalPolicy::AddressFamily addressFamily =
+      CaptivePortalPolicy::AddressFamily::Auto;
   CookieJar cookies;
   HTTPResult last;
   size_t pc = 0;
   size_t steps = 0;
   auto fail = [&](const String &code, const String &message) {
     LOG_WARN("captive ssid=\"%s\" error=%s", record.ssid.c_str(), code.c_str());
+    finishGate(record.ssid, CaptivePortalPolicy::GateState::Failed);
     setStatus(State::Failed, record.ssid, message, code);
   };
   auto jump = [&](const String &name) -> bool {
@@ -552,6 +700,15 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
     String line = trimmed(program[pc++]);
     if (!line.length() || line.startsWith("#") || line == "INPUTPILOT-CAPTIVE/1" ||
         line.startsWith("LABEL ")) continue;
+
+    if (line.startsWith("ADDRESS_FAMILY ")) {
+      const std::string value(trimmed(line.substring(15)).c_str());
+      if (!CaptivePortalPolicy::parseAddressFamily(value, addressFamily)) {
+        fail("INVALID_ADDRESS_FAMILY", "ADDRESS_FAMILY must be AUTO or IPV4.");
+        return;
+      }
+      continue;
+    }
 
     if (line.startsWith("WAIT ")) {
       const uint32_t duration = static_cast<uint32_t>(line.substring(5).toInt());
@@ -623,7 +780,7 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
         }
       }
       last = performRequest(method, target, payload, contentType, expandedHeaders,
-                            requiredHostSuffix, cookies);
+                            requiredHostSuffix, cookies, addressFamily);
       if (last.error.length()) { fail(last.error, "A captive portal network request failed."); return; }
       variables["URL"] = last.finalURL;
       variables["STATUS"] = String(last.status);
@@ -807,12 +964,14 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
     }
     if (line.startsWith("GOTO ")) { if (!jump(line.substring(5))) return; continue; }
     if (line == "SUCCESS" || line.startsWith("SUCCESS ")) {
+      finishGate(record.ssid, CaptivePortalPolicy::GateState::Success);
       setStatus(State::Success, record.ssid,
                 line.length() > 8 ? line.substring(8) : "Captive portal login succeeded.");
       LOG_WIFI("captive ssid=\"%s\" success", record.ssid.c_str());
       return;
     }
     if (line == "ALREADY_CONNECTED" || line.startsWith("ALREADY_CONNECTED ")) {
+      finishGate(record.ssid, CaptivePortalPolicy::GateState::AlreadyConnected);
       setStatus(State::AlreadyConnected, record.ssid,
                 line.length() > 18 ? line.substring(18) : "Internet was already available.");
       return;
@@ -839,6 +998,7 @@ void CaptivePortalAutomation::loop() {
     observedSSID_ = "";
     pendingSSID_ = "";
     ranForCurrentConnection_ = false;
+    disconnectGate();
     return;
   }
   if (ssid != observedSSID_) {
@@ -848,7 +1008,10 @@ void CaptivePortalAutomation::loop() {
     ranForCurrentConnection_ = false;
     const int index = find(ssid);
     ScriptRecord record;
-    if (index >= 0 && load(index, record) && record.enabled) {
+    const bool enabledScript =
+        index >= 0 && load(index, record) && record.enabled;
+    associateGate(ssid, enabledScript);
+    if (enabledScript) {
       pendingSSID_ = ssid;
       setStatus(State::Waiting, ssid, "Waiting for the Wi-Fi path to settle.");
     }
@@ -857,7 +1020,11 @@ void CaptivePortalAutomation::loop() {
   if (ranForCurrentConnection_ || pendingSSID_.isEmpty() || active()) return;
   ScriptRecord record;
   const int index = find(pendingSSID_);
-  if (index < 0 || !load(index, record) || !record.enabled) { pendingSSID_ = ""; return; }
+  if (index < 0 || !load(index, record) || !record.enabled) {
+    pendingSSID_ = "";
+    associateGate(ssid, false);
+    return;
+  }
   if (millis() - pendingSinceMs_ < record.delayMs) return;
   ranForCurrentConnection_ = true;
   startForSSID(pendingSSID_, false);
@@ -965,6 +1132,10 @@ bool CaptivePortalAutomation::handleCommand(const std::string &command, std::str
     String ssid;
     reply = decodeHex(command.substr(15), ssid) && remove(ssid)
         ? "captive removed" : "error captive_not_found";
+    if (reply == "captive removed" && WiFi.status() == WL_CONNECTED &&
+        WiFi.SSID() == ssid) {
+      observedSSID_ = "";  // Re-evaluate the gate for the current association.
+    }
     return true;
   }
   if (command.rfind("CAPTIVE RUN ", 0) == 0) {

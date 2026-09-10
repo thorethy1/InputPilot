@@ -41,6 +41,7 @@ import XCTest
     func testValidatorAcceptsCompleteM3ConnectFixture() throws {
         let script = """
         INPUTPILOT-CAPTIVE/1
+        ADDRESS_FAMILY IPV4
         HEADER User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148
         GET http://detectportal.firefox.com/success.txt
         IF_BODY_EQUALS success GOTO confirm_online
@@ -92,8 +93,27 @@ import XCTest
         ALREADY_CONNECTED Internet already available
         """
 
-        XCTAssertEqual(script.lengthOfBytes(using: .utf8), 2_037)
+        XCTAssertEqual(script.lengthOfBytes(using: .utf8), 2_057)
         XCTAssertNoThrow(try CaptivePortalScriptValidator.validate(script))
+    }
+
+    func testValidatorAcceptsAddressFamilyAutoAndIPv4() throws {
+        for family in ["AUTO", "IPV4"] {
+            let script = "ADDRESS_FAMILY \(family)\nGET http://example.test\nSUCCESS"
+            XCTAssertNoThrow(try CaptivePortalScriptValidator.validate(script))
+        }
+    }
+
+    func testValidatorRejectsUnsupportedAddressFamilies() {
+        for family in ["IPV6", "foo"] {
+            let script = "ADDRESS_FAMILY \(family)\nGET http://example.test\nSUCCESS"
+            XCTAssertThrowsError(try CaptivePortalScriptValidator.validate(script)) {
+                XCTAssertEqual(
+                    $0 as? CaptivePortalScriptValidationError,
+                    .invalidLine(1, "ADDRESS_FAMILY must be AUTO or IPV4.")
+                )
+            }
+        }
     }
 
     func testValidatorRejectsMalformedNewCommands() {

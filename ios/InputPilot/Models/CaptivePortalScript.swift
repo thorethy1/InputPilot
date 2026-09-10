@@ -118,6 +118,15 @@ enum CaptivePortalScriptValidator {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !line.isEmpty, !line.hasPrefix("#") else { continue }
             if line == "INPUTPILOT-CAPTIVE/1" { continue }
+            if line.hasPrefix("ADDRESS_FAMILY ") {
+                let family = argument(line, after: "ADDRESS_FAMILY ")
+                guard family == "AUTO" || family == "IPV4" else {
+                    throw CaptivePortalScriptValidationError.invalidLine(
+                        number, "ADDRESS_FAMILY must be AUTO or IPV4."
+                    )
+                }
+                continue
+            }
             if line.hasPrefix("LABEL ") {
                 let name = argument(line, after: "LABEL ")
                 guard validName(name) else { throw CaptivePortalScriptValidationError.invalidLine(number, "LABEL needs a simple name.") }

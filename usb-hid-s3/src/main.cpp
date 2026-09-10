@@ -1093,8 +1093,8 @@ void loop() {
   serviceSerialCommands();
   servicePairingButton();
   g_radio.loop();
-  g_wireGuardManager.loop();
   g_captivePortalAutomation.loop();
+  g_wireGuardManager.loop();
   servicePresetEngine();
   processHIDQueue(6);
   g_statusLed.loop();

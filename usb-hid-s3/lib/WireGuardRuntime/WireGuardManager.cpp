@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include "Config.h"
+#include "CaptivePortalAutomation.h"
 #include "Logging.h"
 
 WireGuardManager g_wireGuardManager;
@@ -100,6 +101,7 @@ const char *stateName(WireGuardManager::State state) {
     case WireGuardManager::State::WaitingWiFi: return "waiting_wifi";
     case WireGuardManager::State::SSIDBlocked: return "ssid_blocked";
     case WireGuardManager::State::WaitingTime: return "waiting_time";
+    case WireGuardManager::State::CaptiveBlocked: return "captive_blocked";
     case WireGuardManager::State::Connecting: return "connecting";
     case WireGuardManager::State::Connected: return "connected";
     case WireGuardManager::State::Error: return "error";
@@ -182,6 +184,8 @@ void WireGuardManager::resetAssociation() {
   timeSyncStartedMs_ = 0;
   retryAtMs_ = 0;
   error_ = "";
+  captiveGateWasBlocking_ = false;
+  lastCaptiveGateState_ = CaptivePortalPolicy::GateState::NotRequired;
 }
 
 void WireGuardManager::scheduleRuntimeReset() {
@@ -334,6 +338,33 @@ void WireGuardManager::evaluate() {
   if (!enabled_) { stop(); state_ = State::Disabled; return; }
   if (!stationConnected) { stop(); state_ = State::WaitingWiFi; return; }
   if (!ssidAllowed(ssid)) { stop(); state_ = State::SSIDBlocked; return; }
+  const CaptivePortalPolicy::GateState captiveGate =
+      g_captivePortalAutomation.wireGuardGateState();
+  const bool captiveBlocks = CaptivePortalPolicy::blocksWireGuard(captiveGate);
+  if (captiveBlocks) {
+    stop();
+    state_ = State::CaptiveBlocked;
+    if (!captiveGateWasBlocking_) {
+      LOG_WIFI("WIREGUARD blocked by captive ssid=\"%s\"", ssid.c_str());
+    }
+    if (captiveGate == CaptivePortalPolicy::GateState::Failed &&
+        lastCaptiveGateState_ != CaptivePortalPolicy::GateState::Failed) {
+      LOG_WARN("WIREGUARD remains blocked captive_result=failed");
+    }
+    captiveGateWasBlocking_ = true;
+    lastCaptiveGateState_ = captiveGate;
+    return;
+  }
+  if (captiveGateWasBlocking_) {
+    if (captiveGate == CaptivePortalPolicy::GateState::Success) {
+      LOG_WIFI("WIREGUARD captive gate released result=success");
+    } else if (captiveGate ==
+               CaptivePortalPolicy::GateState::AlreadyConnected) {
+      LOG_WIFI("WIREGUARD captive gate released result=already_connected");
+    }
+  }
+  captiveGateWasBlocking_ = false;
+  lastCaptiveGateState_ = captiveGate;
   if (state_ == State::Error) {
     if (static_cast<int32_t>(millis() - retryAtMs_) < 0) return;
     requestedTimeSync_ = false;

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "WireGuardConfigParser.h"
+#include "CaptivePortalPolicy.h"
 
 extern "C" {
 #include "lwip/netif.h"
@@ -16,7 +17,7 @@ class WireGuardManager {
  public:
   static constexpr size_t MaxSSIDs = 5;
   enum class State { Disabled, NoConfig, WaitingWiFi, SSIDBlocked, WaitingTime,
-                     Connecting, Connected, Error };
+                     CaptiveBlocked, Connecting, Connected, Error };
 
   void begin();
   void loop();
@@ -69,6 +70,9 @@ class WireGuardManager {
   uint32_t tunnelStartedMs_ = 0;
   uint32_t runtimeResetAtMs_ = 0;
   String error_;
+  bool captiveGateWasBlocking_ = false;
+  CaptivePortalPolicy::GateState lastCaptiveGateState_ =
+      CaptivePortalPolicy::GateState::NotRequired;
 
   struct netif wgNetifStorage_ {};
   struct netif *wgNetif_ = nullptr;

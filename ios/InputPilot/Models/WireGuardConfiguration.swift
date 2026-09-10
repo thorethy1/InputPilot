@@ -181,7 +181,8 @@ enum WireGuardConfigurationError: LocalizedError, Equatable {
 struct WireGuardDeviceStatus: Decodable, Equatable, Sendable {
     enum State: String, Decodable, Sendable {
         case disabled, notConfigured = "not_configured", waitingWiFi = "waiting_wifi"
-        case ssidBlocked = "ssid_blocked", waitingTime = "waiting_time"
+        case ssidBlocked = "ssid_blocked", captiveBlocked = "captive_blocked"
+        case waitingTime = "waiting_time"
         case connecting, connected, error
     }
     let configured: Bool

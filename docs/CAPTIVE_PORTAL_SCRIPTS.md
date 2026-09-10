@@ -27,6 +27,7 @@ steps, ten redirects per request, a 32 KiB response body, and 60 seconds per
 
 | Command | Meaning |
 |---|---|
+| `ADDRESS_FAMILY AUTO` / `ADDRESS_FAMILY IPV4` | Select normal address-family resolution (the default) or resolve and connect only over IPv4 for every following request and redirect. |
 | `GET <url>` | Send a GET; follow redirects and retain the portal cookie. |
 | `POST_FORM <url> <body>` | POST an URL-encoded form body. |
 | `POST_JSON <url> <body>` | POST a JSON body. |
@@ -82,6 +83,7 @@ probe responses.
 
 ```text
 INPUTPILOT-CAPTIVE/1
+ADDRESS_FAMILY IPV4
 GET http://detectportal.firefox.com/success.txt
 IF_BODY_EQUALS success GOTO online
 REQUIRE_HOST_SUFFIX .portal.example
@@ -99,6 +101,18 @@ ALREADY_CONNECTED Internet is already available
 ```
 
 This is deliberately provider-neutral and is not installed as a default.
+
+In `IPV4` mode the firmware resolves each request hostname with an `AF_INET`
+DNS query and connects TCP to that address. The original hostname remains the
+HTTP `Host` value, the redirect base, and the TLS SNI name for HTTPS. This is
+useful on captive networks that advertise IPv6 but intercept only IPv4 HTTP.
+`AUTO` retains the normal Arduino-ESP32 resolver behavior for existing scripts.
+
+An enabled script also gates WireGuard for its matching Wi-Fi association.
+WireGuard remains stopped while the script is waiting or running, starts only
+after `SUCCESS` or `ALREADY_CONNECTED`, and stays stopped after a failure. A
+disconnect, reconnect, or SSID change creates a fresh gate. Starting a manual
+run stops an active tunnel first and applies the same success/failure rules.
 
 ## Security
 

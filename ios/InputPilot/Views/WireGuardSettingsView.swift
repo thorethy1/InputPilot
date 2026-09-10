@@ -367,6 +367,7 @@ struct WireGuardSettingsView: View {
         case .notConfigured: "Not configured"
         case .waitingWiFi: "Waiting for Wi-Fi"
         case .ssidBlocked: "Disabled on this Wi-Fi"
+        case .captiveBlocked: "Waiting for captive portal"
         case .waitingTime: "Synchronizing clock"
         case .connecting: "Connecting"
         case .connected: "Connected"
@@ -379,7 +380,7 @@ struct WireGuardSettingsView: View {
         case .connected: "checkmark.shield.fill"
         case .connecting, .waitingTime: "arrow.triangle.2.circlepath"
         case .error: "exclamationmark.shield.fill"
-        case .ssidBlocked, .disabled: "shield.slash"
+        case .ssidBlocked, .captiveBlocked, .disabled: "shield.slash"
         case .waitingWiFi: "wifi.slash"
         case .notConfigured: "shield"
         }
