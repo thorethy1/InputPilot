@@ -163,8 +163,12 @@ struct CaptivePortalScriptsView: View {
         isBusy = true
         defer { isBusy = false }
         do {
-            scripts = try await CaptivePortalDeviceClient.list(using: request)
-            runStatus = try await CaptivePortalDeviceClient.status(using: request)
+            scripts = try await CaptivePortalDeviceClient.list { command, timeout in
+                try await request(command, timeout)
+            }
+            runStatus = try await CaptivePortalDeviceClient.status { command, timeout in
+                try await request(command, timeout)
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -188,7 +192,11 @@ struct CaptivePortalScriptsView: View {
         isBusy = true
         defer { isBusy = false }
         do {
-            let script = try await CaptivePortalDeviceClient.script(index: index, size: metadata.size, using: request)
+            let script = try await CaptivePortalDeviceClient.script(
+                index: index,
+                size: metadata.size,
+                using: { command, timeout in try await request(command, timeout) }
+            )
             editor = EditorPayload(metadata: metadata, script: script)
         } catch { errorMessage = error.localizedDescription }
     }
@@ -268,8 +276,13 @@ struct CaptivePortalScriptsView: View {
         isBusy = true
         defer { isBusy = false }
         do {
-            try await CaptivePortalDeviceClient.remove(ssid: metadata.ssid, using: request)
-            scripts = try await CaptivePortalDeviceClient.list(using: request)
+            try await CaptivePortalDeviceClient.remove(
+                ssid: metadata.ssid,
+                using: { command, timeout in try await request(command, timeout) }
+            )
+            scripts = try await CaptivePortalDeviceClient.list { command, timeout in
+                try await request(command, timeout)
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -278,7 +291,10 @@ struct CaptivePortalScriptsView: View {
         isBusy = true
         defer { isBusy = false }
         do {
-            try await CaptivePortalDeviceClient.run(ssid: metadata.ssid, using: request)
+            try await CaptivePortalDeviceClient.run(
+                ssid: metadata.ssid,
+                using: { command, timeout in try await request(command, timeout) }
+            )
             await refreshStatus(quietly: false, allowWhileBusy: true)
         } catch { errorMessage = error.localizedDescription }
     }
