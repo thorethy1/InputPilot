@@ -347,7 +347,7 @@ enum CaptivePortalScriptValidator {
     }
 
     static func save(ssid: String, delayMs: Int, enabled: Bool, script: String,
-                     token suppliedToken: UInt64? = nil, using request: Request,
+                     token suppliedToken: UInt64? = nil, using request: @escaping Request,
                      binaryRequest: BinaryRequest? = nil,
                      transportLabel suppliedTransportLabel: String? = nil,
                      operationTimeout: TimeInterval = 8,
