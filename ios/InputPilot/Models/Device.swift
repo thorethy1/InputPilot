@@ -75,6 +75,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let clickEnabled: Bool
     let clickIntervalMs: Int
     let staIp: String?
+    let wireGuardIP: String?
     let mdns: String?
     let protocolVersion: Int
     let capabilities: [String]
@@ -91,6 +92,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case clickEnabled = "click_enabled"
         case clickIntervalMs = "click_interval_ms"
         case staIp = "sta_ip"
+        case wireGuardIP = "wireguard_ip"
         case mdns
         case protocolVersion = "protocol_version"
         case capabilities
@@ -108,6 +110,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         clickEnabled: Bool = false,
         clickIntervalMs: Int = 60_000,
         staIp: String? = nil,
+        wireGuardIP: String? = nil,
         mdns: String? = nil,
         protocolVersion: Int = 0,
         capabilities: [String] = [],
@@ -123,6 +126,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.clickEnabled = clickEnabled
         self.clickIntervalMs = clickIntervalMs
         self.staIp = staIp
+        self.wireGuardIP = wireGuardIP
         self.mdns = mdns
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
@@ -141,6 +145,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         clickEnabled = try container.decodeIfPresent(Bool.self, forKey: .clickEnabled) ?? false
         clickIntervalMs = try container.decodeIfPresent(Int.self, forKey: .clickIntervalMs) ?? 60_000
         staIp = try container.decodeIfPresent(String.self, forKey: .staIp)
+        wireGuardIP = try container.decodeIfPresent(String.self, forKey: .wireGuardIP)
         mdns = try container.decodeIfPresent(String.self, forKey: .mdns)
         protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []

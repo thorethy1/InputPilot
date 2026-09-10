@@ -218,6 +218,25 @@ struct DeviceDetailView: View {
                 }
             }
 
+            Section("WireGuard") {
+                if device.capabilities.contains("wireguard_client") {
+                    NavigationLink {
+                        WireGuardSettingsView(device: device)
+                    } label: {
+                        Label("VPN Configuration", systemImage: "shield.lefthalf.filled")
+                    }
+                    Text("Connect this InputPilot to a WireGuard server and control it through its VPN address.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("Firmware update required", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(AppColors.warning)
+                    Text("ESP32 WireGuard support requires InputPilot firmware 0.9.3 or newer.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if device.capabilities.contains("secure_usb_identity") {
                 Section("USB Identity") {
                     TextField("Manufacturer", text: $usbManufacturerName)

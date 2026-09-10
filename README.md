@@ -135,6 +135,7 @@ the selected connection mode only changes transport preference.
 - **Presets:** local SwiftData text/shortcut items with favorite, duplicate, delete, reorder, optional Enter, and typing-delay metadata; complete presets execute autonomously on the ESP32 after an acknowledged, checksummed upload and can be stopped from the app.
 - **Macros:** records only actions produced inside this app, including timing. Playback supports 0.5×–2×, finite/infinite repeat and start delay. The visible STOP control cancels the queue and sends release-all.
 - **Captive portals:** Device Details can store up to five SSID-bound HTTP workflows on the InputPilot. The firmware runs the matching workflow after a configurable connection delay and reports waiting, running, successful, already-connected, or failed status back to the app. See [Captive Portal Scripts](docs/CAPTIVE_PORTAL_SCRIPTS.md).
+- **WireGuard:** Import a client `.conf` in Device Details and transfer it through Secure Protocol v2. The ESP32—not the iPhone—establishes the tunnel and remains controllable at its WireGuard IPv4 address. Tunnel use can be limited to selected Wi-Fi SSIDs. See [WireGuard](docs/WIREGUARD.md).
 
 Automatic transport selection uses BLE for small low-latency events, persistent TCP for longer text and event streams, and REST for management/fallback. Device settings also offer Prefer Bluetooth, Prefer Wi-Fi, Bluetooth Only, and Wi-Fi Only. The active transport is shown above the control tabs.
 

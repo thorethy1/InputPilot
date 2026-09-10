@@ -62,6 +62,9 @@
 		A10000000000000000000080 /* CaptivePortalScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000080 /* CaptivePortalScript.swift */; };
 		A10000000000000000000081 /* CaptivePortalScriptsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000081 /* CaptivePortalScriptsView.swift */; };
 		A10000000000000000000082 /* CaptivePortalScriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000082 /* CaptivePortalScriptTests.swift */; };
+		A10000000000000000000083 /* WireGuardConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000083 /* WireGuardConfiguration.swift */; };
+		A10000000000000000000084 /* WireGuardSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000084 /* WireGuardSettingsView.swift */; };
+		A10000000000000000000085 /* WireGuardConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000085 /* WireGuardConfigurationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -134,6 +137,9 @@
 		A20000000000000000000080 /* CaptivePortalScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptivePortalScript.swift; sourceTree = "<group>"; };
 		A20000000000000000000081 /* CaptivePortalScriptsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptivePortalScriptsView.swift; sourceTree = "<group>"; };
 		A20000000000000000000082 /* CaptivePortalScriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptivePortalScriptTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000083 /* WireGuardConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfiguration.swift; sourceTree = "<group>"; };
+		A20000000000000000000084 /* WireGuardSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardSettingsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000085 /* WireGuardConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigurationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -214,6 +220,7 @@
 				A20000000000000000000059 /* PresetsViewModelTests.swift */,
 				A20000000000000000000063 /* AppIntentSupportTests.swift */,
 				A20000000000000000000082 /* CaptivePortalScriptTests.swift */,
+				A20000000000000000000085 /* WireGuardConfigurationTests.swift */,
 			);
 			path = InputPilotTests;
 			sourceTree = "<group>";
@@ -236,6 +243,7 @@
 				A20000000000000000000028 /* SavedDeviceIndex.swift */,
 				A20000000000000000000053 /* StoredSecret.swift */,
 				A20000000000000000000080 /* CaptivePortalScript.swift */,
+				A20000000000000000000083 /* WireGuardConfiguration.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -249,6 +257,7 @@
 				A20000000000000000000058 /* PresetsView.swift */,
 				A20000000000000000000071 /* MacrosView.swift */,
 				A20000000000000000000081 /* CaptivePortalScriptsView.swift */,
+				A20000000000000000000084 /* WireGuardSettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -413,6 +422,8 @@
 				A10000000000000000000071 /* MacrosView.swift in Sources */,
 				A10000000000000000000080 /* CaptivePortalScript.swift in Sources */,
 				A10000000000000000000081 /* CaptivePortalScriptsView.swift in Sources */,
+				A10000000000000000000083 /* WireGuardConfiguration.swift in Sources */,
+				A10000000000000000000084 /* WireGuardSettingsView.swift in Sources */,
 				A10000000000000000000060 /* InputPilotIntents.swift in Sources */,
 				A10000000000000000000061 /* AppIntentSupport.swift in Sources */,
 				A10000000000000000000062 /* InputPilotShortcuts.swift in Sources */,
@@ -443,6 +454,7 @@
 				A10000000000000000000059 /* PresetsViewModelTests.swift in Sources */,
 				A10000000000000000000063 /* AppIntentSupportTests.swift in Sources */,
 				A10000000000000000000082 /* CaptivePortalScriptTests.swift in Sources */,
+				A10000000000000000000085 /* WireGuardConfigurationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

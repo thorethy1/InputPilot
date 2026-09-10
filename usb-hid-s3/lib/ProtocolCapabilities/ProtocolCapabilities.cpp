@@ -9,7 +9,8 @@ const char *jsonArray() {
          "\"secure_ota\",\"secure_diagnostics\",\"mouse_move\","
          "\"mouse_click\",\"mouse_button_state\",\"mouse_scroll\","
          "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\","
-         "\"release_all\",\"device_presets\",\"captive_portal_scripts\"]";
+         "\"release_all\",\"device_presets\",\"captive_portal_scripts\","
+         "\"wireguard_client\"]";
 }
 
 const char *bleJsonArray() {
@@ -21,7 +22,8 @@ const char *bleJsonArray() {
          "\"multiple_wifi\",\"secure_usb_identity\",\"usb_manufacturer\","
          "\"secure_ota\","
          "\"keyboard_type\",\"keyboard_key\",\"keyboard_layout\","
-         "\"release_all\",\"device_presets\",\"captive_portal_scripts\"]";
+         "\"release_all\",\"device_presets\",\"captive_portal_scripts\","
+         "\"wireguard_client\"]";
 }
 
 const char *radioModeJson(bool bleEnabled, bool wifiEnabled) {

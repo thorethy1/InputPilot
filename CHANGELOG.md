@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an ESP32-side WireGuard client for 0.9.3. The iOS device settings import and validate a `.conf`, transfer it transactionally over authenticated Secure Protocol v2, show live tunnel state, and optionally restrict tunnel startup to up to five Wi-Fi SSIDs. The app remembers the tunnel IPv4 address as a secure TCP endpoint; private and preshared keys are never returned by discovery, status, or diagnostics.
+
 - Add persistent, SSID-bound captive portal HTTP workflows. The iOS device settings provide an editor, validation, upload, enable/disable controls, manual testing and live run status; the ESP32 waits for the configured Wi-Fi path, then runs the matching workflow once per association without requiring the app to stay open. Portal-specific scripts are never bundled with InputPilot.
 
 - Fix Wi-Fi handoff and fallback recovery: AP+STA joins no longer make iOS cache the temporary `192.168.4.1` gateway, Device Settings persist an MRU history of authenticated station addresses (including iPhone Personal Hotspot leases), Wi-Fi management works without BLE, stale endpoints may self-heal from an already authenticated BLE session, and an enabled fallback AP remains available while saved networks are retried.

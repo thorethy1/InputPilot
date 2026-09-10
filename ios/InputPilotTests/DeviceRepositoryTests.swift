@@ -7,11 +7,12 @@ final class DeviceRepositoryTests: XCTestCase {
     func testDiscoveryPersistsSecureProtocolIdentity() async throws {
         let container = try ModelContainer(for: StoredDevice.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let context = ModelContext(container)
-        let status = DeviceStatus(ok: true, name: "InputPilot", version: "0.8.11", deviceId: "aabbccddeeff", jiggle: false, jiggleIntervalMs: 30_000, staIp: "192.168.2.20", mdns: "inputpilot-eeff.local", protocolVersion: 2, capabilities: ["secure_protocol_v2", "wifi_transport"], otaSchema: 1)
+        let status = DeviceStatus(ok: true, name: "InputPilot", version: "0.9.3", deviceId: "aabbccddeeff", jiggle: false, jiggleIntervalMs: 30_000, staIp: "192.168.2.20", wireGuardIP: "10.7.0.23", mdns: "inputpilot-eeff.local", protocolVersion: 2, capabilities: ["secure_protocol_v2", "wifi_transport", "wireguard_client"], otaSchema: 1)
         let stored = try await DeviceRepository(context: context).addFromDiscovery(status: status, fallbackHost: "inputpilot-eeff.local", displayName: "Desk")
         XCTAssertEqual(stored.deviceId, "aabbccddeeff")
         XCTAssertEqual(stored.protocolVersion, 2)
-        XCTAssertEqual(Set(stored.capabilities), Set(["secure_protocol_v2", "wifi_transport"]))
+        XCTAssertEqual(Set(stored.capabilities), Set(["secure_protocol_v2", "wifi_transport", "wireguard_client"]))
+        XCTAssertTrue(stored.knownWiFiHosts.contains("10.7.0.23"))
     }
 
     func testRefreshUsesPublicStatusOnly() async throws {

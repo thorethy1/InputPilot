@@ -2119,6 +2119,20 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             return payload
         }
     }
+    func wireGuardBinaryRequest(_ plaintext: Data, timeout: TimeInterval = 8) async throws -> String {
+        guard plaintext.count >= 2, plaintext[0] == 0xFE,
+              plaintext[1] == 0x09 || plaintext[1] == 0x0A else {
+            throw TransportError.encoding
+        }
+        return try await requestPayload(timeout: timeout) {
+            guard let secureChannel, let peripheral else { throw TransportError.unavailable }
+            let payload = try secureChannel.sealBinary(plaintext)
+            guard payload.count <= peripheral.maximumWriteValueLength(for: .withResponse) else {
+                throw TransportError.failed("The negotiated Bluetooth packet size is too small for WireGuard setup.")
+            }
+            return payload
+        }
+    }
     func managementRequest(_ command: String, timeout: TimeInterval) async throws -> String {
         try await request(command, timeout: timeout)
     }

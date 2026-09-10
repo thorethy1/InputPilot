@@ -35,6 +35,7 @@
 #include "USBIdentityConfig.h"
 #include "WifiManagement.h"
 #include "CaptivePortalAutomation.h"
+#include "WireGuardManager.h"
 
 RadioManager g_radio;
 
@@ -254,6 +255,19 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
       reply = "error ota_busy";
     } else if (!g_captivePortalAutomation.handleCommand(message, reply)) {
       reply = "error captive_invalid";
+    }
+    sendSecureReply(source, session, reply);
+    return true;
+  }
+  if (message.rfind("WIREGUARD ", 0) == 0) {
+    std::string reply;
+    const bool readOnly = message == "WIREGUARD STATUS" ||
+                          message == "WIREGUARD PEER" ||
+                          message.rfind("WIREGUARD SSID ", 0) == 0;
+    if (g_otaEngine.active() && !readOnly) {
+      reply = "error ota_busy";
+    } else if (!g_wireGuardManager.handleCommand(message, reply)) {
+      reply = "error wireguard_invalid";
     }
     sendSecureReply(source, session, reply);
     return true;
@@ -773,6 +787,31 @@ void processBLEControlFrames(size_t budget = 8) {
         if (g_otaEngine.active()) reply = "error ota_busy";
         else g_captivePortalAutomation.writeUpload(token, offset, frame.bytes + 14,
                                                    frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
+      // Binary WireGuard DATA: marker, op, token, 32-bit offset, raw .conf.
+      if (frame.bytes[1] == 9 && frame.length > 14) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t offset = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                static_cast<uint32_t>(frame.bytes[13]);
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else g_wireGuardManager.writeUpload(token, offset, frame.bytes + 14,
+                                            frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
+      // Binary WireGuard policy SSID: marker, op, length, raw UTF-8 SSID.
+      if (frame.bytes[1] == 10 && frame.length >= 3) {
+        const size_t ssidLength = frame.bytes[2];
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else if (frame.length != 3 + ssidLength) reply = "error wireguard_policy";
+        else g_wireGuardManager.addPolicySSID(frame.bytes + 3, ssidLength, reply);
         sendSecureReply("ble", s_bleSecureSession, reply);
         continue;
       }
@@ -1341,6 +1380,7 @@ void RadioManager::stopWifiServices() {
 }
 
 void RadioManager::stopWifi() {
+  g_wireGuardManager.stop();
   stopWifiServices();
   staConnecting_ = false;
   staRetryPreservesSoftAp_ = false;

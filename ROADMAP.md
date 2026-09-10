@@ -506,6 +506,15 @@ Actions should:
 
 Do not duplicate BLE/Wi-Fi transport implementations inside App Intents.
 
+# 0.9.3 — ESP32 WireGuard
+
+- Import a supported WireGuard client `.conf` through the iOS device settings.
+- Transfer and persist the profile through authenticated Secure Protocol v2.
+- Establish the tunnel on the ESP32 and control InputPilot through its VPN IPv4
+  address using the existing secure TCP service.
+- Optionally allow tunnel startup only on selected Wi-Fi SSIDs.
+- Keep BLE available for status, reconfiguration, disable, and recovery.
+
 ### Security & Secrets
 
 Apple Shortcuts must never receive the plaintext value of an InputPilot Secret unless explicitly required by a future carefully reviewed design.

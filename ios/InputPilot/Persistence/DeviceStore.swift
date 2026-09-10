@@ -210,6 +210,7 @@ enum DeviceMerge {
         if let address = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: fallbackHost) {
             stored.promoteWiFiHost(address)
         }
+        stored.rememberWiFiHost(status.wireGuardIP)
         stored.jiggleEnabled = status.jiggle
         stored.moveIntervalMs = status.jiggleIntervalMs
         stored.clickEnabled = status.clickEnabled

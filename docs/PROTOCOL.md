@@ -188,6 +188,29 @@ The DSL and its security boundaries are documented in
 [Captive Portal Scripts](CAPTIVE_PORTAL_SCRIPTS.md). No POSIX shell source or
 portal-specific workflow is shipped in the app or firmware.
 
+## WireGuard client
+
+Firmware advertising `wireguard_client` accepts authenticated `WIREGUARD`
+commands over BLE or Wi-Fi Secure Protocol v2. A profile is installed by
+`WIREGUARD BEGIN <token> <size> <fnv1a32> <enabled>`, ordered `DATA` chunks,
+and `COMMIT`; `ABORT` drops an incomplete upload. BLE binary operation `0x09`
+carries the token, big-endian offset, and raw configuration bytes after the
+authenticated `0xFE` marker.
+
+`WIREGUARD POLICY BEGIN|ANY`, zero to five `POLICY ADD <ssid-hex>` commands,
+and `POLICY COMMIT` update the exact-SSID allow-list transactionally. BLE
+binary operation `0x0A` carries one length-prefixed raw SSID. `ENABLE 0|1` and
+`REMOVE` control or erase the profile. `STATUS` returns compact JSON with keys
+`c` (configured), `e` (enabled), `s` (state), `ip`, `r` (restricted), `n`
+(SSID count), and `x` (error). `PEER` returns the non-secret endpoint in `p`,
+and `SSID <index>` returns one non-secret allow-list entry. Keys are never
+returned. Separate bounded queries keep every response within common BLE MTUs.
+
+The tunnel is an additional ESP32 lwIP interface. TCP 3333 remains protected
+by the same device identity and USB-established trust secret when reached at
+the tunnel address. Format, routing limitations, setup, and storage behavior
+are documented in [ESP32 WireGuard client](WIREGUARD.md).
+
 ## Wi-Fi provisioning
 
 Wi-Fi is optional. A trusted device can be added and controlled entirely over
