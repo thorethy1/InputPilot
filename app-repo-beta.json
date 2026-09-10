@@ -3,7 +3,7 @@
   "subtitle": "InputPilot beta releases for early testing.",
   "description": "Install and update InputPilot beta builds.",
   "website": "https://github.com/thorethy1/InputPilot",
-  "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.1-beta.1/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+  "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.3-beta.1/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
   "tintColor": "#007AFF",
   "apps": [
     {
@@ -12,14 +12,25 @@
       "developerName": "thorethy",
       "subtitle": "Control InputPilot securely over Bluetooth or Wi-Fi.",
       "localizedDescription": "Securely pair, control, configure, diagnose, and update InputPilot ESP32-S3 devices.",
-      "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.1-beta.1/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "iconURL": "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.3-beta.1/ios/InputPilot/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "#007AFF",
       "category": "utilities",
       "screenshots": [
-        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.1-beta.1/docs/images/ios-device-list.jpg",
-        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.1-beta.1/docs/images/ios-device-detail.jpg"
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.3-beta.1/docs/images/ios-device-list.jpg",
+        "https://raw.githubusercontent.com/thorethy1/InputPilot/v0.9.3-beta.1/docs/images/ios-device-detail.jpg"
       ],
       "versions": [
+        {
+          "version": "0.9.3",
+          "buildVersion": "137",
+          "marketingVersion": "0.9.3-beta.1",
+          "date": "2026-09-10",
+          "localizedDescription": "InputPilot 0.9.3-beta.1 beta release.",
+          "downloadURL": "https://github.com/thorethy1/InputPilot/releases/download/v0.9.3-beta.1/InputPilot-v0.9.3-beta.1-ios-unsigned.ipa",
+          "size": 3375612,
+          "sha256": "1fb2be42552f39f518cf1e42dae0e180d3e1c3cdea6a05c7ca51ebf0a2f701d2",
+          "minOSVersion": "17.0"
+        },
         {
           "version": "0.9.1",
           "buildVersion": "130",
