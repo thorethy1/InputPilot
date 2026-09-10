@@ -12,6 +12,7 @@ extern "C" {
 #include "lwip/err.h"
 #include "lwip/ip.h"
 #include "lwip/netdb.h"
+#include "lwip/tcpip.h"
 #include "wireguard-platform.h"
 #include "wireguardif.h"
 }
@@ -30,6 +31,14 @@ constexpr const char *kRestrictedKey = "restricted";
 constexpr const char *kSSIDCountKey = "ssid_count";
 constexpr time_t kMinimumValidTime = 1704067200;  // 2024-01-01 UTC
 constexpr uint32_t kTimeSyncTimeoutMs = 30000;
+
+class LwipCoreLock {
+ public:
+  LwipCoreLock() { LOCK_TCPIP_CORE(); }
+  ~LwipCoreLock() { UNLOCK_TCPIP_CORE(); }
+  LwipCoreLock(const LwipCoreLock &) = delete;
+  LwipCoreLock &operator=(const LwipCoreLock &) = delete;
+};
 
 bool parseUnsigned(const std::string &text, unsigned long maximum,
                    unsigned long &result, int base = 10) {
@@ -202,13 +211,14 @@ bool WireGuardManager::start() {
   const struct in_addr address = reinterpret_cast<struct sockaddr_in *>(resolved->ai_addr)->sin_addr;
   inet_addr_to_ip4addr(ip_2_ip4(&endpointIP), &address);
   lwip_freeaddrinfo(resolved);
+  char endpointText[IP4ADDR_STRLEN_MAX] {};
+  ipaddr_ntoa_r(&endpointIP, endpointText, sizeof(endpointText));
+  LOG_WIFI("WireGuard endpoint resolved host=%s ip=%s", config_.endpointHost.c_str(),
+           endpointText);
 
-  physicalNetif_ = netif_default;
-  if (!physicalNetif_) { setError("physical_interface"); return false; }
   struct wireguardif_init_data init {};
   init.private_key = config_.privateKey.c_str();
   init.listen_port = config_.listenPort;
-  init.bind_netif = physicalNetif_;
 
   // The custom lwIP interface has no independent route table. Using the
   // AllowedIPs mask routes exactly that range; the parser ensures the local
@@ -218,12 +228,6 @@ bool WireGuardManager::start() {
   ip_addr_t ipaddr = IPADDR4_INIT(static_cast<uint32_t>(localIP));
   ip_addr_t netmask = IPADDR4_INIT(static_cast<uint32_t>(subnet));
   ip_addr_t gatewayAddress = IPADDR4_INIT(static_cast<uint32_t>(gateway));
-  memset(&wgNetifStorage_, 0, sizeof(wgNetifStorage_));
-  wgNetif_ = netif_add(&wgNetifStorage_, ip_2_ip4(&ipaddr), ip_2_ip4(&netmask),
-                       ip_2_ip4(&gatewayAddress), &init, &wireguardif_init, &ip_input);
-  if (!wgNetif_) { setError("interface_init"); return false; }
-  wgNetif_->mtu = config_.mtu;
-  netif_set_up(wgNetif_);
 
   struct wireguardif_peer peer;
   wireguardif_peer_init(&peer);
@@ -245,10 +249,42 @@ bool WireGuardManager::start() {
   peer.allowed_mask = IPADDR4_INIT(static_cast<uint32_t>(allowedMask));
 
   wireguard_platform_init();
-  if (wireguardif_add_peer(wgNetif_, &peer, &peerIndex_) != ERR_OK ||
-      peerIndex_ == WIREGUARDIF_INVALID_INDEX ||
-      wireguardif_connect(wgNetif_, peerIndex_) != ERR_OK) {
-    setError("peer_init");
+  const char *startupError = nullptr;
+  bool netifCreated = false;
+  bool peerCreated = false;
+  bool peerConnected = false;
+  {
+    LwipCoreLock lock;
+    physicalNetif_ = netif_default;
+    if (!physicalNetif_) {
+      startupError = "physical_interface";
+    } else {
+      init.bind_netif = physicalNetif_;
+      memset(&wgNetifStorage_, 0, sizeof(wgNetifStorage_));
+      wgNetif_ = netif_add(&wgNetifStorage_, ip_2_ip4(&ipaddr), ip_2_ip4(&netmask),
+                           ip_2_ip4(&gatewayAddress), &init, &wireguardif_init, &ip_input);
+      netifCreated = wgNetif_ != nullptr;
+      if (!netifCreated) {
+        startupError = "interface_init";
+      } else {
+        wgNetif_->mtu = config_.mtu;
+        netif_set_up(wgNetif_);
+        peerCreated = wireguardif_add_peer(wgNetif_, &peer, &peerIndex_) == ERR_OK &&
+                      peerIndex_ != WIREGUARDIF_INVALID_INDEX;
+        if (!peerCreated) {
+          startupError = "peer_init";
+        } else {
+          peerConnected = wireguardif_connect(wgNetif_, peerIndex_) == ERR_OK;
+          if (!peerConnected) startupError = "peer_init";
+        }
+      }
+    }
+  }
+  if (netifCreated) LOG_WIFI("WireGuard netif created mtu=%u", config_.mtu);
+  if (peerCreated) LOG_WIFI("WireGuard peer created index=%u", peerIndex_);
+  if (peerConnected) LOG_WIFI("WireGuard peer connect requested index=%u", peerIndex_);
+  if (startupError) {
+    setError(startupError);
     return false;
   }
   // The WireGuard UDP PCB is pinned to physicalNetif_. The physical interface
@@ -264,14 +300,21 @@ bool WireGuardManager::start() {
 
 void WireGuardManager::stop() {
   if (wgNetif_) {
-    if (peerIndex_ != WIREGUARDIF_INVALID_INDEX) {
-      wireguardif_disconnect(wgNetif_, peerIndex_);
-      wireguardif_remove_peer(wgNetif_, peerIndex_);
+    LOG_WIFI("WireGuard shutdown begin netif=%p peer=%u", wgNetif_, peerIndex_);
+    {
+      LwipCoreLock lock;
+      if (peerIndex_ != WIREGUARDIF_INVALID_INDEX) {
+        wireguardif_disconnect(wgNetif_, peerIndex_);
+        wireguardif_remove_peer(wgNetif_, peerIndex_);
+      }
+      wireguardif_shutdown(wgNetif_);
+      netif_remove(wgNetif_);
+      memset(&wgNetifStorage_, 0, sizeof(wgNetifStorage_));
+      wgNetif_ = nullptr;
+      physicalNetif_ = nullptr;
+      peerIndex_ = WIREGUARDIF_INVALID_INDEX;
     }
-    wireguardif_shutdown(wgNetif_);
-    netif_remove(wgNetif_);
-    memset(&wgNetifStorage_, 0, sizeof(wgNetifStorage_));
-    LOG_WIFI("WireGuard stopped");
+    LOG_WIFI("WireGuard shutdown complete");
   }
   memset(presharedKey_, 0, sizeof(presharedKey_));
   wgNetif_ = nullptr;
@@ -297,7 +340,12 @@ void WireGuardManager::evaluate() {
     error_ = "";
   }
   if (wgNetif_) {
-    if (wireguardif_peer_is_up(wgNetif_, peerIndex_, nullptr, nullptr) == ERR_OK) {
+    bool peerUp = false;
+    {
+      LwipCoreLock lock;
+      peerUp = wireguardif_peer_is_up(wgNetif_, peerIndex_, nullptr, nullptr) == ERR_OK;
+    }
+    if (peerUp) {
       state_ = State::Connected;
     } else if (millis() - tunnelStartedMs_ > 30000) {
       setError("handshake_timeout");

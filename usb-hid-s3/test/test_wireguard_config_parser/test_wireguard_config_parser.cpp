@@ -47,6 +47,21 @@ void test_accepts_comments_crlf_and_full_tunnel() {
   TEST_ASSERT_EQUAL_UINT8(0, config.allowedPrefix);
 }
 
+void test_accepts_repeated_dns_and_reported_lan_range() {
+  std::string text(validConfig);
+  text.insert(text.find("[Peer]"), "DNS = 1.1.1.1\n");
+  const std::string address = "Address = 10.7.0.23/32";
+  text.replace(text.find(address), address.size(), "Address = 192.168.178.209/24");
+  const std::string allowed = "AllowedIPs = 10.7.0.0/24";
+  text.replace(text.find(allowed), allowed.size(), "AllowedIPs = 192.168.178.0/24");
+  WireGuardConfig config;
+  WireGuardConfigError error;
+  TEST_ASSERT_TRUE(WireGuardConfigParser::parse(text, config, error));
+  TEST_ASSERT_EQUAL_STRING("192.168.178.209", config.address.c_str());
+  TEST_ASSERT_EQUAL_STRING("192.168.178.0", config.allowedIP.c_str());
+  TEST_ASSERT_EQUAL_UINT16(25, config.persistentKeepalive);
+}
+
 void test_rejects_multiple_peers() {
   std::string text(validConfig);
   text += "\n[Peer]\nPublicKey = DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD=\n";
@@ -107,6 +122,7 @@ int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_parses_supported_single_peer_config);
   RUN_TEST(test_accepts_comments_crlf_and_full_tunnel);
+  RUN_TEST(test_accepts_repeated_dns_and_reported_lan_range);
   RUN_TEST(test_rejects_multiple_peers);
   RUN_TEST(test_rejects_multiple_allowed_ranges);
   RUN_TEST(test_rejects_ipv6_and_script_hooks);

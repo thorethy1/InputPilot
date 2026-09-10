@@ -23,6 +23,14 @@ final class WireGuardConfigurationTests: XCTestCase {
         XCTAssertEqual(configuration.allowedIPs, "10.7.0.0/24")
     }
 
+    func testAcceptsRepeatedDNSLines() throws {
+        let configuration = valid.replacingOccurrences(
+            of: "DNS = 10.7.0.1",
+            with: "DNS = 10.7.0.1\nDNS = 1.1.1.1"
+        )
+        XCTAssertNoThrow(try WireGuardConfiguration.parse(configuration))
+    }
+
     func testRejectsMultiplePeers() {
         XCTAssertThrowsError(try WireGuardConfiguration.parse(valid + "\n[Peer]\n")) {
             XCTAssertEqual($0 as? WireGuardConfigurationError, .multiplePeers)

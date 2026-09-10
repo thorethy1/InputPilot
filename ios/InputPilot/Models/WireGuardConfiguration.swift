@@ -48,7 +48,8 @@ struct WireGuardConfiguration: Equatable, Sendable {
             switch section {
             case .interface:
                 guard interfaceKeys.contains(key) else { throw WireGuardConfigurationError.unsupportedKey(offset + 1, key) }
-                guard interface.updateValue(value, forKey: key) == nil else { throw WireGuardConfigurationError.duplicateKey(offset + 1, key) }
+                let previous = interface.updateValue(value, forKey: key)
+                guard previous == nil || key == "dns" else { throw WireGuardConfigurationError.duplicateKey(offset + 1, key) }
             case .peer:
                 guard peerKeys.contains(key) else { throw WireGuardConfigurationError.unsupportedKey(offset + 1, key) }
                 guard peer.updateValue(value, forKey: key) == nil else { throw WireGuardConfigurationError.duplicateKey(offset + 1, key) }

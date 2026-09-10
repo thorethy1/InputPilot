@@ -24,8 +24,8 @@ authenticated control service on port 3333 through the tunnel interface.
 The constrained ESP32 implementation accepts:
 
 - one `[Interface]` with one IPv4 `Address` and `PrivateKey`;
-- optional `ListenPort`, `DNS`, and `MTU` (576–1420; `DNS` is accepted but the
-  ESP continues to use the DNS server supplied by Wi-Fi);
+- optional `ListenPort`, one or more `DNS` lines, and `MTU` (576–1420; `DNS`
+  is accepted but the ESP continues to use the DNS server supplied by Wi-Fi);
 - one `[Peer]` with `PublicKey`, `Endpoint`, and one IPv4 `AllowedIPs` range;
 - optional `PresharedKey` and `PersistentKeepalive`.
 

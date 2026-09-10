@@ -150,7 +150,12 @@ bool WireGuardConfigParser::parse(const std::string &text,
     if (key.empty() || value.empty()) { error = WireGuardConfigError::InvalidLine; return false; }
     if (!allowedKey(section, key)) { error = WireGuardConfigError::UnsupportedKey; return false; }
     auto &values = section == Section::Interface ? interfaceValues : peerValues;
-    if (values.count(key)) { error = WireGuardConfigError::DuplicateKey; return false; }
+    // wg-quick permits more than one DNS entry. DNS is intentionally ignored
+    // at runtime because endpoint lookup must continue using the Wi-Fi DNS.
+    if (values.count(key) && key != "dns") {
+      error = WireGuardConfigError::DuplicateKey;
+      return false;
+    }
     values[key] = value;
   }
 
