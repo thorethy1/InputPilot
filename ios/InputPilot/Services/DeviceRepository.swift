@@ -110,6 +110,8 @@ final class DeviceRepository {
         guard let stored = try fetchStored(deviceId: deviceId) else {
             throw DeviceRepositoryError.notFound
         }
+        stored.rememberWiFiHost(status.wireGuardIP)
+        try context.save()
         return stored
     }
 
