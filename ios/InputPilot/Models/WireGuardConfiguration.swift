@@ -4,7 +4,7 @@ struct WireGuardConfiguration: Equatable, Sendable {
     static let maximumBytes = 2_048
     let text: String
     let address: String
-    var endpoint: String
+    let endpoint: String
     let allowedIPs: String
 
     static func parse(_ text: String) throws -> Self {
@@ -189,7 +189,7 @@ struct WireGuardDeviceStatus: Decodable, Equatable, Sendable {
     let ip: String
     let restricted: Bool
     let ssidCount: Int
-    let endpoint: String
+    var endpoint: String
     let error: String
     var ssids: [String] = []
 
