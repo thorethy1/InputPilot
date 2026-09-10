@@ -154,6 +154,188 @@ import XCTest
         XCTAssertTrue(commands.contains { $0.hasPrefix("CAPTIVE DATA ") })
         XCTAssertTrue(commands.last?.hasPrefix("CAPTIVE COMMIT ") == true)
     }
+
+    func testBLECommitIsSuccessEvenWhenBestEffortRefreshFails() async throws {
+        let script = "INPUTPILOT-CAPTIVE/1\n#\(String(repeating: "x", count: 2_000))\nSUCCESS"
+        let bluetooth = BinaryCaptiveRecorder()
+        var waitedForBluetooth = false
+        var wifiCalls = 0
+
+        let result = try await CaptivePortalSaveCoordinator.save(
+            ssid: "Hotel WiFi",
+            delayMs: 4_000,
+            enabled: true,
+            script: script,
+            bluetoothIsReady: true,
+            waitForBluetooth: { _ in waitedForBluetooth = true },
+            bluetoothRequest: { command, timeout in
+                try await bluetooth.textReply(to: command, timeout: timeout)
+            },
+            bluetoothBinaryRequest: { payload, timeout in
+                try await bluetooth.binaryReply(to: payload, timeout: timeout)
+            },
+            wifiRequests: [{ _, _ in
+                wifiCalls += 1
+                throw TransportError.failed("Wi-Fi must not be used after commit.")
+            }]
+        )
+
+        let binaryOpcodes = await bluetooth.binaryOpcodes
+        let timeouts = await bluetooth.timeouts
+        XCTAssertEqual(result.transport, .bluetooth)
+        XCTAssertEqual(
+            result.metadata,
+            CaptivePortalScriptMetadata(
+                ssid: "Hotel WiFi", delayMs: 4_000, enabled: true,
+                size: script.lengthOfBytes(using: .utf8)
+            )
+        )
+        XCTAssertFalse(waitedForBluetooth)
+        XCTAssertEqual(wifiCalls, 0)
+        XCTAssertEqual(binaryOpcodes.first, 0x07)
+        XCTAssertTrue(binaryOpcodes.dropFirst().allSatisfy { $0 == 0x08 })
+        XCTAssertEqual(binaryOpcodes.count - 1, (result.metadata.size + 127) / 128)
+        XCTAssertTrue(timeouts.allSatisfy { $0 == CaptivePortalSaveCoordinator.bluetoothOperationTimeout })
+
+        let refreshed = await CaptivePortalDeviceClient.refreshAfterSuccessfulSave(
+            preserving: [result.metadata],
+            status: nil,
+            using: { command, _ in
+                throw TransportError.failed("Refresh failed for \(command).")
+            }
+        )
+        XCTAssertEqual(refreshed.scripts, [result.metadata])
+        XCTAssertNil(refreshed.status)
+    }
+
+    func testBLEFailureBeforeCommitFallsBackToWiFi() async throws {
+        let script = "INPUTPILOT-CAPTIVE/1\nSUCCESS"
+        let wifi = RequestRecorder()
+        var bluetoothBinaryCalls = 0
+
+        let result = try await CaptivePortalSaveCoordinator.save(
+            ssid: "Lobby",
+            delayMs: 0,
+            enabled: true,
+            script: script,
+            bluetoothIsReady: true,
+            waitForBluetooth: { _ in XCTFail("Ready Bluetooth must not wait.") },
+            bluetoothRequest: { _, _ in throw TransportError.failed("Unexpected BLE text request.") },
+            bluetoothBinaryRequest: { _, _ in
+                bluetoothBinaryCalls += 1
+                throw TransportError.failed("Secure Bluetooth response timed out.")
+            },
+            wifiRequests: [{ command, _ in try await wifi.reply(to: command) }]
+        )
+
+        let wifiCommands = await wifi.commands
+        XCTAssertEqual(bluetoothBinaryCalls, 1)
+        XCTAssertEqual(result.transport, .wifi)
+        XCTAssertTrue(wifiCommands.last?.hasPrefix("CAPTIVE COMMIT ") == true)
+    }
+
+    func testBluetoothReadinessWaitIsBoundedBeforeWiFiFallback() async throws {
+        let script = "INPUTPILOT-CAPTIVE/1\nSUCCESS"
+        let wifi = RequestRecorder()
+        var readinessTimeout: TimeInterval?
+
+        let result = try await CaptivePortalSaveCoordinator.save(
+            ssid: "Lobby",
+            delayMs: 0,
+            enabled: true,
+            script: script,
+            bluetoothIsReady: false,
+            waitForBluetooth: { timeout in
+                readinessTimeout = timeout
+                throw TransportError.failed("Encrypted Bluetooth connection timed out.")
+            },
+            bluetoothRequest: { _, _ in throw TransportError.failed("Unexpected BLE request.") },
+            bluetoothBinaryRequest: { _, _ in throw TransportError.failed("Unexpected BLE request.") },
+            wifiRequests: [{ command, _ in try await wifi.reply(to: command) }]
+        )
+
+        XCTAssertEqual(readinessTimeout, 1.5)
+        XCTAssertEqual(result.transport, .wifi)
+    }
+
+    func testBLEAndWiFiFailuresAreBothReported() async {
+        let script = "INPUTPILOT-CAPTIVE/1\nSUCCESS"
+
+        do {
+            _ = try await CaptivePortalSaveCoordinator.save(
+                ssid: "Lobby",
+                delayMs: 0,
+                enabled: true,
+                script: script,
+                bluetoothIsReady: true,
+                waitForBluetooth: { _ in XCTFail("Ready Bluetooth must not wait.") },
+                bluetoothRequest: { _, _ in throw TransportError.failed("Bluetooth commit failed.") },
+                bluetoothBinaryRequest: { _, _ in
+                    throw TransportError.failed("Secure Bluetooth response timed out.")
+                },
+                wifiRequests: [{ _, _ in
+                    throw TransportError.failed("Encrypted Wi-Fi connection timed out.")
+                }]
+            )
+            XCTFail("Expected both transports to fail.")
+        } catch let error as CaptivePortalSaveError {
+            let description = error.localizedDescription
+            XCTAssertTrue(description.contains("Bluetooth:"))
+            XCTAssertTrue(description.contains("Secure Bluetooth response timed out."))
+            XCTAssertTrue(description.contains("Wi-Fi:"))
+            XCTAssertTrue(description.contains("Encrypted Wi-Fi connection timed out."))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testPollingPausesForBusyOperationsAndPostSaveRefresh() {
+        XCTAssertFalse(CaptivePortalPollingPolicy.shouldPoll(isBusy: true, isRefreshingAfterSave: false))
+        XCTAssertFalse(CaptivePortalPollingPolicy.shouldPoll(isBusy: false, isRefreshingAfterSave: true))
+        XCTAssertTrue(CaptivePortalPollingPolicy.shouldPoll(isBusy: false, isRefreshingAfterSave: false))
+    }
+}
+
+private actor BinaryCaptiveRecorder {
+    private var token: UInt64?
+    private var received = 0
+    private(set) var binaryOpcodes: [UInt8] = []
+    private(set) var timeouts: [TimeInterval] = []
+
+    func binaryReply(to payload: Data, timeout: TimeInterval) throws -> String {
+        guard payload.count >= 2, payload[0] == 0xFE else {
+            throw TransportError.failed("Invalid binary request.")
+        }
+        binaryOpcodes.append(payload[1])
+        timeouts.append(timeout)
+        switch payload[1] {
+        case 0x07:
+            guard payload.count >= 10 else { throw TransportError.failed("Invalid BEGIN.") }
+            token = payload[2 ..< 10].reduce(UInt64.zero) { ($0 << 8) | UInt64($1) }
+            received = 0
+            return "captive ready \(tokenText) 0"
+        case 0x08:
+            guard token != nil, payload.count >= 14 else { throw TransportError.failed("Invalid DATA.") }
+            let offset = payload[10 ..< 14].reduce(Int.zero) { ($0 << 8) | Int($1) }
+            guard offset == received else { throw TransportError.failed("Wrong DATA offset.") }
+            received += payload.count - 14
+            return "captive ack \(tokenText) \(received)"
+        default:
+            throw TransportError.failed("Unexpected binary opcode.")
+        }
+    }
+
+    func textReply(to command: String, timeout: TimeInterval) throws -> String {
+        timeouts.append(timeout)
+        guard command == "CAPTIVE COMMIT \(tokenText)" else {
+            throw TransportError.failed("Unexpected text request.")
+        }
+        return "captive committed"
+    }
+
+    private var tokenText: String {
+        token.map { String(format: "%016llx", $0) } ?? ""
+    }
 }
 
 private actor RequestRecorder {

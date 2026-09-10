@@ -45,6 +45,42 @@ struct CaptivePortalRunStatus: Codable, Equatable, Sendable {
     }
 }
 
+struct CaptivePortalRefreshSnapshot: Equatable, Sendable {
+    let scripts: [CaptivePortalScriptMetadata]
+    let status: CaptivePortalRunStatus?
+}
+
+enum CaptivePortalSaveTransport: String, Equatable, Sendable {
+    case bluetooth = "BLE"
+    case wifi = "Wi-Fi"
+}
+
+struct CaptivePortalSaveResult: Equatable, Sendable {
+    let metadata: CaptivePortalScriptMetadata
+    let transport: CaptivePortalSaveTransport
+}
+
+struct CaptivePortalSaveError: LocalizedError {
+    let bluetoothError: Error
+    let wifiError: Error
+
+    var errorDescription: String? {
+        """
+        Could not save captive portal script.
+        Bluetooth:
+        \(bluetoothError.localizedDescription)
+        Wi-Fi:
+        \(wifiError.localizedDescription)
+        """
+    }
+}
+
+enum CaptivePortalPollingPolicy {
+    static func shouldPoll(isBusy: Bool, isRefreshingAfterSave: Bool) -> Bool {
+        !isBusy && !isRefreshingAfterSave
+    }
+}
+
 enum CaptivePortalScriptValidationError: LocalizedError, Equatable {
     case empty
     case tooLarge(Int)
@@ -271,6 +307,26 @@ enum CaptivePortalScriptValidator {
         try decode(CaptivePortalRunStatus.self, from: try await request("CAPTIVE STATUS", 5))
     }
 
+    static func refreshAfterSuccessfulSave(
+        preserving scripts: [CaptivePortalScriptMetadata],
+        status: CaptivePortalRunStatus?,
+        using request: Request
+    ) async -> CaptivePortalRefreshSnapshot {
+        var refreshedScripts = scripts
+        var refreshedStatus = status
+        do {
+            refreshedScripts = try await list(using: request)
+        } catch {
+            appLog(.errors, "CAPTIVE refresh failed after successful save phase=list error=\(error.localizedDescription)")
+        }
+        do {
+            refreshedStatus = try await self.status(using: request)
+        } catch {
+            appLog(.errors, "CAPTIVE refresh failed after successful save phase=status error=\(error.localizedDescription)")
+        }
+        return CaptivePortalRefreshSnapshot(scripts: refreshedScripts, status: refreshedStatus)
+    }
+
     static func script(index: Int, size: Int, using request: Request) async throws -> String {
         guard (0 ... maximumScriptSize).contains(size) else { throw TransportError.failed("InputPilot returned an invalid captive script size.") }
         var data = Data()
@@ -292,7 +348,11 @@ enum CaptivePortalScriptValidator {
 
     static func save(ssid: String, delayMs: Int, enabled: Bool, script: String,
                      token suppliedToken: UInt64? = nil, using request: Request,
-                     binaryRequest: BinaryRequest? = nil) async throws {
+                     binaryRequest: BinaryRequest? = nil,
+                     transportLabel suppliedTransportLabel: String? = nil,
+                     operationTimeout: TimeInterval = 8,
+                     abortOnFailure: Bool = true,
+                     abortTimeout: TimeInterval = 3) async throws {
         try CaptivePortalScriptValidator.validate(script)
         let ssidData = Data(ssid.utf8)
         let scriptData = Data(script.utf8)
@@ -302,7 +362,10 @@ enum CaptivePortalScriptValidator {
         let token = suppliedToken ?? UInt64.random(in: 1 ... UInt64.max)
         let tokenText = String(format: "%016llx", token)
         let checksum = fnv1a(scriptData)
+        let transportLabel = suppliedTransportLabel ?? (binaryRequest == nil ? "Wi-Fi" : "BLE")
+        var phase = "begin"
         do {
+            appLog(.control, "CAPTIVE \(transportLabel) begin")
             let beginReply: String
             if let binaryRequest {
                 var payload = Data([0xFE, 0x07])
@@ -313,10 +376,10 @@ enum CaptivePortalScriptValidator {
                 payload.append(enabled ? 1 : 0)
                 payload.append(UInt8(ssidData.count))
                 payload.append(ssidData)
-                beginReply = try await binaryRequest(payload, 8)
+                beginReply = try await binaryRequest(payload, operationTimeout)
             } else {
                 let begin = "CAPTIVE BEGIN \(tokenText) \(ssidData.hex) \(delayMs) \(scriptData.count) \(String(format: "%08x", checksum)) \(enabled ? 1 : 0)"
-                beginReply = try await request(begin, 8)
+                beginReply = try await request(begin, operationTimeout)
             }
             let beginFields = beginReply.split(separator: " ").map(String.init)
             guard beginFields.count == 4, beginFields[0] == "captive", beginFields[1] == "ready",
@@ -324,6 +387,7 @@ enum CaptivePortalScriptValidator {
                   (0 ... scriptData.count).contains(receivedOffset) else {
                 throw protocolError(beginReply)
             }
+            appLog(.control, "CAPTIVE \(transportLabel) ready offset=\(receivedOffset)")
             // BEGIN is idempotent for the same token and metadata, allowing a
             // partially transferred BLE upload to resume over secure Wi-Fi.
             var offset = receivedOffset
@@ -332,23 +396,31 @@ enum CaptivePortalScriptValidator {
                 // 185; larger negotiated MTUs are not required for this path.
                 let count = min(binaryRequest == nil ? 60 : 128, scriptData.count - offset)
                 let chunk = Data(scriptData[offset ..< offset + count])
+                phase = "data offset=\(offset)"
+                appLog(.control, "CAPTIVE \(transportLabel) chunk offset=\(offset) size=\(count)")
                 let chunkReply: String
                 if let binaryRequest {
                     var payload = Data([0xFE, 0x08])
                     payload.appendBigEndian(token)
                     payload.appendBigEndian(UInt32(offset))
                     payload.append(chunk)
-                    chunkReply = try await binaryRequest(payload, 8)
+                    chunkReply = try await binaryRequest(payload, operationTimeout)
                 } else {
-                    chunkReply = try await request("CAPTIVE DATA \(tokenText) \(offset) \(chunk.hex)", 8)
+                    chunkReply = try await request("CAPTIVE DATA \(tokenText) \(offset) \(chunk.hex)", operationTimeout)
                 }
                 offset += count
                 guard chunkReply == "captive ack \(tokenText) \(offset)" else { throw protocolError(chunkReply) }
             }
-            let commitReply = try await request("CAPTIVE COMMIT \(tokenText)", 8)
+            phase = "commit"
+            appLog(.control, "CAPTIVE \(transportLabel) commit")
+            let commitReply = try await request("CAPTIVE COMMIT \(tokenText)", operationTimeout)
             guard commitReply == "captive committed" else { throw protocolError(commitReply) }
+            appLog(.control, "CAPTIVE \(transportLabel) committed")
         } catch {
-            _ = try? await request("CAPTIVE ABORT \(tokenText)", 3)
+            appLog(.errors, "CAPTIVE \(transportLabel) failed phase=\(phase) error=\(error.localizedDescription)")
+            if abortOnFailure {
+                _ = try? await request("CAPTIVE ABORT \(tokenText)", abortTimeout)
+            }
             throw error
         }
     }
@@ -385,6 +457,91 @@ enum CaptivePortalScriptValidator {
 
     private static func fnv1a(_ data: Data) -> UInt32 {
         data.reduce(UInt32(2_166_136_261)) { ($0 ^ UInt32($1)) &* 16_777_619 }
+    }
+}
+
+@MainActor enum CaptivePortalSaveCoordinator {
+    static let bluetoothReadinessTimeout: TimeInterval = 1.5
+    static let bluetoothOperationTimeout: TimeInterval = 3
+    static let wifiOperationTimeout: TimeInterval = 8
+    static let abortTimeout: TimeInterval = 1
+
+    static func save(
+        ssid: String,
+        delayMs: Int,
+        enabled: Bool,
+        script: String,
+        bluetoothIsReady: Bool,
+        waitForBluetooth: (_ timeout: TimeInterval) async throws -> Void,
+        bluetoothRequest: @escaping CaptivePortalDeviceClient.Request,
+        bluetoothBinaryRequest: @escaping CaptivePortalDeviceClient.BinaryRequest,
+        wifiRequests: [CaptivePortalDeviceClient.Request]
+    ) async throws -> CaptivePortalSaveResult {
+        try CaptivePortalScriptValidator.validate(script)
+        let ssidByteCount = ssid.lengthOfBytes(using: .utf8)
+        guard (1 ... 32).contains(ssidByteCount), (0 ... 60_000).contains(delayMs) else {
+            throw TransportError.failed("Wi-Fi names are limited to 32 bytes and the delay to 60 seconds.")
+        }
+        let startedAt = Date()
+        let byteCount = script.lengthOfBytes(using: .utf8)
+        let metadata = CaptivePortalScriptMetadata(
+            ssid: ssid, delayMs: delayMs, enabled: enabled, size: byteCount
+        )
+        let uploadToken = UInt64.random(in: 1 ... UInt64.max)
+        appLog(.control, "CAPTIVE save start ssid=\(ssid) bytes=\(byteCount)")
+
+        var bluetoothError: Error
+        var bluetoothReadinessCompleted = bluetoothIsReady
+        do {
+            if !bluetoothIsReady {
+                try await waitForBluetooth(bluetoothReadinessTimeout)
+                bluetoothReadinessCompleted = true
+            }
+            appLog(.control, "CAPTIVE transport=BLE ready")
+            try await CaptivePortalDeviceClient.save(
+                ssid: ssid, delayMs: delayMs, enabled: enabled, script: script,
+                token: uploadToken,
+                using: bluetoothRequest,
+                binaryRequest: bluetoothBinaryRequest,
+                transportLabel: CaptivePortalSaveTransport.bluetooth.rawValue,
+                operationTimeout: bluetoothOperationTimeout,
+                abortOnFailure: wifiRequests.isEmpty,
+                abortTimeout: abortTimeout
+            )
+            logSuccess(transport: .bluetooth, startedAt: startedAt)
+            return CaptivePortalSaveResult(metadata: metadata, transport: .bluetooth)
+        } catch {
+            bluetoothError = error
+            if !bluetoothReadinessCompleted {
+                appLog(.errors, "CAPTIVE BLE failed phase=readiness error=\(error.localizedDescription)")
+            }
+        }
+
+        appLog(.control, "CAPTIVE fallback transport=Wi-Fi")
+        var wifiError: Error = TransportError.unavailable
+        for (index, wifiRequest) in wifiRequests.enumerated() {
+            do {
+                try await CaptivePortalDeviceClient.save(
+                    ssid: ssid, delayMs: delayMs, enabled: enabled, script: script,
+                    token: uploadToken,
+                    using: wifiRequest,
+                    transportLabel: CaptivePortalSaveTransport.wifi.rawValue,
+                    operationTimeout: wifiOperationTimeout,
+                    abortOnFailure: index == wifiRequests.index(before: wifiRequests.endIndex),
+                    abortTimeout: abortTimeout
+                )
+                logSuccess(transport: .wifi, startedAt: startedAt)
+                return CaptivePortalSaveResult(metadata: metadata, transport: .wifi)
+            } catch {
+                wifiError = error
+            }
+        }
+        throw CaptivePortalSaveError(bluetoothError: bluetoothError, wifiError: wifiError)
+    }
+
+    private static func logSuccess(transport: CaptivePortalSaveTransport, startedAt: Date) {
+        let milliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+        appLog(.control, "CAPTIVE save success transport=\(transport.rawValue) duration=\(milliseconds)ms")
     }
 }
 

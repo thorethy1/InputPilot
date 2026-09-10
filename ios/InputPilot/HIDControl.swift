@@ -2119,6 +2119,17 @@ final class BLEHIDControlTransport: NSObject, ObservableObject, HIDControlTransp
             return payload
         }
     }
+    func captiveRequest(_ command: String, timeout: TimeInterval = 3) async throws -> String {
+        guard state == .ready, isAvailable else { throw TransportError.unavailable }
+        guard !firmwareUpdater.blocksControl else {
+            throw TransportError.failed("Secure Bluetooth management is busy during firmware transfer.")
+        }
+        guard command.hasPrefix("CAPTIVE "), !command.contains("\n"), !command.contains("\r"),
+              let secureChannel else { throw TransportError.encoding }
+        return try await requestPayload(timeout: timeout) {
+            Data(try secureChannel.sealText(command).utf8)
+        }
+    }
     func wireGuardBinaryRequest(_ plaintext: Data, timeout: TimeInterval = 8) async throws -> String {
         guard plaintext.count >= 2, plaintext[0] == 0xFE,
               plaintext[1] == 0x09 || plaintext[1] == 0x0A else {

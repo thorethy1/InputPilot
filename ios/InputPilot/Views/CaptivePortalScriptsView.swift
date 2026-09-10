@@ -8,8 +8,11 @@ struct CaptivePortalScriptsView: View {
     @State private var runStatus: CaptivePortalRunStatus?
     @State private var editor: EditorPayload?
     @State private var isBusy = false
+    @State private var isRefreshingAfterSave = false
     @State private var errorMessage: String?
     @State private var deleteTarget: CaptivePortalScriptMetadata?
+    @State private var saveConfirmation: SaveConfirmation?
+    @State private var operationGeneration = 0
 
     init(device: StoredDevice) {
         self.device = device
@@ -18,6 +21,12 @@ struct CaptivePortalScriptsView: View {
 
     var body: some View {
         List {
+            if let saveConfirmation {
+                Section {
+                    Label(saveConfirmation.message, systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(AppColors.success)
+                }
+            }
             statusSection
             Section {
                 if scripts.isEmpty, !isBusy {
@@ -76,6 +85,9 @@ struct CaptivePortalScriptsView: View {
             await refresh()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
+                guard CaptivePortalPollingPolicy.shouldPoll(
+                    isBusy: isBusy, isRefreshingAfterSave: isRefreshingAfterSave
+                ) else { continue }
                 await refreshStatus(quietly: true)
             }
         }
@@ -104,6 +116,7 @@ struct CaptivePortalScriptsView: View {
             }
             Button("Cancel", role: .cancel) { deleteTarget = nil }
         }
+        .sensoryFeedback(.success, trigger: saveConfirmation?.id)
     }
 
     @ViewBuilder private var statusSection: some View {
@@ -146,6 +159,7 @@ struct CaptivePortalScriptsView: View {
     }
 
     private func refresh() async {
+        guard !isBusy, !isRefreshingAfterSave else { return }
         isBusy = true
         defer { isBusy = false }
         do {
@@ -154,12 +168,23 @@ struct CaptivePortalScriptsView: View {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func refreshStatus(quietly: Bool) async {
-        do { runStatus = try await CaptivePortalDeviceClient.status(using: request) }
-        catch { if !quietly { errorMessage = error.localizedDescription } }
+    private func refreshStatus(quietly: Bool, allowWhileBusy: Bool = false) async {
+        guard allowWhileBusy || CaptivePortalPollingPolicy.shouldPoll(
+            isBusy: isBusy, isRefreshingAfterSave: isRefreshingAfterSave
+        ) else { return }
+        do {
+            runStatus = try await CaptivePortalDeviceClient.status { command, timeout in
+                try await request(command, timeout, cancelIfBusy: !allowWhileBusy)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            if !quietly { errorMessage = error.localizedDescription }
+        }
     }
 
     private func edit(_ metadata: CaptivePortalScriptMetadata, index: Int) async {
+        operationGeneration += 1
         isBusy = true
         defer { isBusy = false }
         do {
@@ -169,46 +194,77 @@ struct CaptivePortalScriptsView: View {
     }
 
     private func save(ssid: String, delayMs: Int, enabled: Bool, script: String) async throws {
+        operationGeneration += 1
+        let generation = operationGeneration
         isBusy = true
-        defer { isBusy = false }
-        var lastError: Error = TransportError.unavailable
-        let uploadToken = UInt64.random(in: 1 ... UInt64.max)
-        do {
-            try await bluetooth.waitUntilReady()
-            try await CaptivePortalDeviceClient.save(
-                ssid: ssid, delayMs: delayMs, enabled: enabled, script: script,
-                token: uploadToken,
-                using: { command, timeout in try await bluetooth.request(command, timeout: timeout) },
-                binaryRequest: { payload, timeout in
-                    try await bluetooth.captiveBinaryRequest(payload, timeout: timeout)
-                }
+        let endpoints = DeviceEndpointResolver.endpointURLs(
+            mdnsHost: device.mdnsHost, staIP: device.staIP, knownHosts: device.knownWiFiHosts
+        )
+        let wifiRequests: [CaptivePortalDeviceClient.Request] = endpoints.map { endpoint in
+            let wifi = InputPilotWiFiManager.session(
+                host: endpoint.host ?? endpoint.absoluteString, deviceId: device.deviceId
             )
-        } catch {
-            lastError = error
-            var uploaded = false
-            for endpoint in DeviceEndpointResolver.endpointURLs(
-                mdnsHost: device.mdnsHost, staIP: device.staIP, knownHosts: device.knownWiFiHosts
-            ) {
-                let wifi = InputPilotWiFiManager.session(
-                    host: endpoint.host ?? endpoint.absoluteString, deviceId: device.deviceId
-                )
-                do {
-                    try await CaptivePortalDeviceClient.save(
-                        ssid: ssid, delayMs: delayMs, enabled: enabled, script: script,
-                        token: uploadToken,
-                        using: { command, timeout in try await wifi.request(command, timeout: timeout) }
-                    )
-                    uploaded = true
-                    break
-                } catch { lastError = error }
-            }
-            if !uploaded { throw lastError }
+            return { command, timeout in try await wifi.request(command, timeout: timeout) }
         }
-        scripts = try await CaptivePortalDeviceClient.list(using: request)
-        runStatus = try? await CaptivePortalDeviceClient.status(using: request)
+        do {
+            let result = try await CaptivePortalSaveCoordinator.save(
+                ssid: ssid, delayMs: delayMs, enabled: enabled, script: script,
+                bluetoothIsReady: bluetooth.state == .ready && bluetooth.isAvailable,
+                waitForBluetooth: { timeout in try await bluetooth.waitUntilReady(timeout: timeout) },
+                bluetoothRequest: { command, timeout in
+                    try await bluetooth.captiveRequest(command, timeout: timeout)
+                },
+                bluetoothBinaryRequest: { payload, timeout in
+                    try await bluetooth.captiveBinaryRequest(payload, timeout: timeout)
+                },
+                wifiRequests: wifiRequests
+            )
+            upsert(result.metadata)
+            showSaveConfirmation()
+            isBusy = false
+            Task { await refreshAfterSuccessfulSave(generation: generation) }
+        } catch {
+            isBusy = false
+            throw error
+        }
+    }
+
+    private func refreshAfterSuccessfulSave(generation: Int) async {
+        guard operationGeneration == generation, !isBusy else { return }
+        isRefreshingAfterSave = true
+        defer { isRefreshingAfterSave = false }
+        let snapshot = await CaptivePortalDeviceClient.refreshAfterSuccessfulSave(
+            preserving: scripts,
+            status: runStatus,
+            using: { command, timeout in
+                try await request(command, timeout, cancelIfBusy: true)
+            }
+        )
+        guard operationGeneration == generation, !isBusy else { return }
+        scripts = snapshot.scripts
+        runStatus = snapshot.status
+    }
+
+    private func upsert(_ metadata: CaptivePortalScriptMetadata) {
+        if let index = scripts.firstIndex(where: { $0.ssid == metadata.ssid }) {
+            scripts[index] = metadata
+        } else {
+            scripts.append(metadata)
+        }
+    }
+
+    private func showSaveConfirmation() {
+        let confirmation = SaveConfirmation(message: "Saved")
+        saveConfirmation = confirmation
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard saveConfirmation?.id == confirmation.id else { return }
+            saveConfirmation = nil
+        }
     }
 
     private func remove(_ metadata: CaptivePortalScriptMetadata) async {
+        operationGeneration += 1
         isBusy = true
         defer { isBusy = false }
         do {
@@ -218,20 +274,29 @@ struct CaptivePortalScriptsView: View {
     }
 
     private func run(_ metadata: CaptivePortalScriptMetadata) async {
+        operationGeneration += 1
+        isBusy = true
+        defer { isBusy = false }
         do {
             try await CaptivePortalDeviceClient.run(ssid: metadata.ssid, using: request)
-            await refreshStatus(quietly: false)
+            await refreshStatus(quietly: false, allowWhileBusy: true)
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func request(_ command: String, _ timeout: TimeInterval) async throws -> String {
+    private func request(
+        _ command: String,
+        _ timeout: TimeInterval,
+        cancelIfBusy: Bool = false
+    ) async throws -> String {
         var lastError: Error = TransportError.unavailable
         do { return try await bluetooth.request(command, timeout: timeout) }
         catch { lastError = error }
+        if cancelIfBusy, isBusy { throw CancellationError() }
         let endpoints = DeviceEndpointResolver.endpointURLs(
             mdnsHost: device.mdnsHost, staIP: device.staIP, knownHosts: device.knownWiFiHosts
         )
         for endpoint in endpoints {
+            if cancelIfBusy, isBusy { throw CancellationError() }
             let wifi = InputPilotWiFiManager.session(host: endpoint.host ?? endpoint.absoluteString,
                                                      deviceId: device.deviceId)
             do { return try await wifi.request(command, timeout: timeout) }
@@ -262,6 +327,11 @@ struct CaptivePortalScriptsView: View {
         case .idle: AppColors.neutral
         }
     }
+}
+
+private struct SaveConfirmation: Equatable {
+    let id = UUID()
+    let message: String
 }
 
 private struct EditorPayload: Identifiable {
