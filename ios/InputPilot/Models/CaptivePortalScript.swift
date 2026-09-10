@@ -56,7 +56,7 @@ enum CaptivePortalScriptValidationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .empty: "The script is empty."
-        case let .tooLarge(bytes): "The script is \(bytes) bytes; the device limit is 1800 bytes."
+        case let .tooLarge(bytes): "The script is \(bytes) bytes; the device limit is \(CaptivePortalScriptValidator.maximumBytes) bytes."
         case let .invalidLine(line, reason): "Line \(line): \(reason)"
         case .missingResult: "The script needs SUCCESS, ALREADY_CONNECTED, or FAIL."
         case let .duplicateLabel(line, name): "Line \(line): label '\(name)' is duplicated."
@@ -66,7 +66,7 @@ enum CaptivePortalScriptValidationError: LocalizedError, Equatable {
 }
 
 enum CaptivePortalScriptValidator {
-    static let maximumBytes = 1_800
+    static let maximumBytes = 2_304
 
     static func validate(_ script: String) throws {
         let byteCount = script.lengthOfBytes(using: .utf8)
@@ -93,7 +93,8 @@ enum CaptivePortalScriptValidator {
                 guard validName(name) else { throw CaptivePortalScriptValidationError.invalidLine(number, "GOTO needs a label.") }
                 jumps.append((number, name)); continue
             }
-            if line.hasPrefix("IF_STATUS ") || line.hasPrefix("IF_BODY_CONTAINS ") {
+            if line.hasPrefix("IF_STATUS ") || line.hasPrefix("IF_BODY_CONTAINS ") ||
+                line.hasPrefix("IF_BODY_EQUALS ") {
                 guard let range = line.range(of: " GOTO ", options: .backwards) else {
                     throw CaptivePortalScriptValidationError.invalidLine(number, "the condition needs GOTO and a label.")
                 }
@@ -102,6 +103,30 @@ enum CaptivePortalScriptValidator {
                     guard Int(line[start ..< range.lowerBound]) != nil else {
                         throw CaptivePortalScriptValidationError.invalidLine(number, "IF_STATUS needs an HTTP status code.")
                     }
+                }
+                if line.hasPrefix("IF_BODY_EQUALS ") {
+                    let start = line.index(line.startIndex, offsetBy: "IF_BODY_EQUALS ".count)
+                    guard !String(line[start ..< range.lowerBound]).trimmingCharacters(in: .whitespaces).isEmpty else {
+                        throw CaptivePortalScriptValidationError.invalidLine(number, "IF_BODY_EQUALS needs comparison text.")
+                    }
+                }
+                let name = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                guard validName(name) else { throw CaptivePortalScriptValidationError.invalidLine(number, "GOTO needs a valid label.") }
+                jumps.append((number, name)); continue
+            }
+            if line.hasPrefix("IF_VAR_EQUALS ") {
+                guard let range = line.range(of: " GOTO ", options: .backwards) else {
+                    throw CaptivePortalScriptValidationError.invalidLine(number, "IF_VAR_EQUALS needs GOTO and a label.")
+                }
+                let start = line.index(line.startIndex, offsetBy: "IF_VAR_EQUALS ".count)
+                let operands = String(line[start ..< range.lowerBound])
+                guard let separator = operands.firstIndex(of: " ") else {
+                    throw CaptivePortalScriptValidationError.invalidLine(number, "IF_VAR_EQUALS needs a variable name and value.")
+                }
+                let variable = String(operands[..<separator])
+                let value = String(operands[operands.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
+                guard validPortableName(variable), !value.isEmpty else {
+                    throw CaptivePortalScriptValidationError.invalidLine(number, "IF_VAR_EQUALS needs a valid variable name and value.")
                 }
                 let name = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
                 guard validName(name) else { throw CaptivePortalScriptValidationError.invalidLine(number, "GOTO needs a valid label.") }
@@ -148,6 +173,28 @@ enum CaptivePortalScriptValidator {
                 }
                 continue
             }
+            if line.hasPrefix("CAPTURE_JSON_FIRST ") {
+                let arguments = argument(line, after: "CAPTURE_JSON_FIRST ")
+                guard let separator = arguments.firstIndex(of: " ") else {
+                    throw CaptivePortalScriptValidationError.invalidLine(number, "CAPTURE_JSON_FIRST needs a variable name and path.")
+                }
+                let variable = String(arguments[..<separator])
+                let pathList = String(arguments[arguments.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
+                let paths = pathList.components(separatedBy: " || ")
+                guard validPortableName(variable), !paths.isEmpty,
+                      paths.allSatisfy({ validDotPath($0.trimmingCharacters(in: .whitespaces)) }) else {
+                    throw CaptivePortalScriptValidationError.invalidLine(number, "CAPTURE_JSON_FIRST needs a valid variable and one or more dot-paths separated by ' || '.")
+                }
+                continue
+            }
+            if line.hasPrefix("CAPTURE_OBJECT_STRING ") {
+                let fields = argument(line, after: "CAPTURE_OBJECT_STRING ").split(separator: " ", omittingEmptySubsequences: true)
+                guard fields.count == 2, validPortableName(String(fields[0])),
+                      validPortableName(String(fields[1])) else {
+                    throw CaptivePortalScriptValidationError.invalidLine(number, "CAPTURE_OBJECT_STRING needs a valid variable name and key.")
+                }
+                continue
+            }
             if line.hasPrefix("REQUIRE_HOST_SUFFIX ") {
                 let suffix = argument(line, after: "REQUIRE_HOST_SUFFIX ")
                 guard suffix.hasPrefix("."), suffix.count > 1, !suffix.contains("/") else {
@@ -190,6 +237,18 @@ enum CaptivePortalScriptValidator {
 
     private static func validName(_ value: String) -> Bool {
         !value.isEmpty && value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+    }
+
+    private static func validDotPath(_ value: String) -> Bool {
+        !value.isEmpty && value.split(separator: ".", omittingEmptySubsequences: false)
+            .allSatisfy { validPortableName(String($0)) }
+    }
+
+    private static func validPortableName(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.allSatisfy {
+            ($0 >= 97 && $0 <= 122) || ($0 >= 65 && $0 <= 90) ||
+                ($0 >= 48 && $0 <= 57) || $0 == 95 || $0 == 45
+        }
     }
 }
 
@@ -304,7 +363,7 @@ enum CaptivePortalScriptValidator {
         guard reply == "captive started" else { throw protocolError(reply) }
     }
 
-    private static let maximumScriptSize = 1_800
+    private static let maximumScriptSize = CaptivePortalScriptValidator.maximumBytes
 
     private static func decode<T: Decodable>(_ type: T.Type, from reply: String) throws -> T {
         if reply.hasPrefix("error ") { throw protocolError(reply) }

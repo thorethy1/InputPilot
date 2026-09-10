@@ -22,6 +22,101 @@ import XCTest
         XCTAssertNoThrow(try CaptivePortalScriptValidator.validate(script))
     }
 
+    func testValidatorAcceptsNewCommands() throws {
+        let script = """
+        INPUTPILOT-CAPTIVE/1
+        CAPTURE_JSON_FIRST SESSION session || payload.session
+        CAPTURE_OBJECT_STRING TOKEN token
+        IF_VAR_EQUALS LOGGED_IN true GOTO done
+        IF_BODY_EQUALS success GOTO online
+        LABEL done
+        SUCCESS Registered
+        LABEL online
+        ALREADY_CONNECTED Online
+        """
+
+        XCTAssertNoThrow(try CaptivePortalScriptValidator.validate(script))
+    }
+
+    func testValidatorAcceptsCompleteM3ConnectFixture() throws {
+        let script = """
+        INPUTPILOT-CAPTIVE/1
+        HEADER User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148
+        GET http://detectportal.firefox.com/success.txt
+        IF_BODY_EQUALS success GOTO confirm_online
+        GOTO portal
+        LABEL confirm_online
+        WAIT 2000
+        GET http://detectportal.firefox.com/success.txt
+        IF_BODY_EQUALS success GOTO online
+        LABEL portal
+        REQUIRE_HOST_SUFFIX .conn4.com
+        SET_ORIGIN BASE
+        CAPTURE_OBJECT_STRING TOKEN token
+        CAPTURE_OBJECT_STRING SCENE id
+        GET ${BASE}/scenes/${SCENE}/
+        HEADER X-Requested-With: XMLHttpRequest
+        HEADER Origin: ${BASE}
+        HEADER Referer: ${BASE}/scenes/${SCENE}/
+        HEADER Accept: */*
+        POST_FORM ${BASE}/wbs/api/v1/create-session/ session_id=&with-tariffs=1&locale=de_DE&authorization=token%3D${url:TOKEN}
+        CAPTURE_JSON_FIRST SESSION session || payload.session
+        POST_FORM ${BASE}/wbs/api/v1/register/free/ authorization=session%3D${url:SESSION}&registration_type=terms-only&registration%5Bterms%5D=1
+        CAPTURE_JSON REGISTER_OK ok
+        IF_VAR_EQUALS REGISTER_OK true GOTO registered
+        FAIL REGISTER_FAILED Registration failed
+        LABEL registered
+        POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
+        CAPTURE_JSON LOGGED_IN loggedIn
+        IF_VAR_EQUALS LOGGED_IN true GOTO success
+        WAIT 1000
+        POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
+        CAPTURE_JSON LOGGED_IN loggedIn
+        IF_VAR_EQUALS LOGGED_IN true GOTO success
+        WAIT 1000
+        POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
+        CAPTURE_JSON LOGGED_IN loggedIn
+        IF_VAR_EQUALS LOGGED_IN true GOTO success
+        WAIT 1000
+        POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
+        CAPTURE_JSON LOGGED_IN loggedIn
+        IF_VAR_EQUALS LOGGED_IN true GOTO success
+        WAIT 1000
+        POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
+        CAPTURE_JSON LOGGED_IN loggedIn
+        IF_VAR_EQUALS LOGGED_IN true GOTO success
+        FAIL LOGIN_NOT_CONFIRMED Login was not confirmed
+        LABEL success
+        SUCCESS WLAN freigeschaltet
+        LABEL online
+        ALREADY_CONNECTED Internet already available
+        """
+
+        XCTAssertEqual(script.lengthOfBytes(using: .utf8), 2_037)
+        XCTAssertNoThrow(try CaptivePortalScriptValidator.validate(script))
+    }
+
+    func testValidatorRejectsMalformedNewCommands() {
+        let cases: [String] = [
+            "IF_BODY_EQUALS success GOTO missing\nSUCCESS",
+            "IF_VAR_EQUALS true GOTO done\nLABEL done\nSUCCESS",
+            "CAPTURE_JSON_FIRST SESSION\nSUCCESS",
+            "IF_VAR_EQUALS LOGGED_IN true\nSUCCESS",
+            "CAPTURE_OBJECT_STRING TOKEN invalid.key\nSUCCESS",
+        ]
+        for script in cases {
+            XCTAssertThrowsError(try CaptivePortalScriptValidator.validate(script), script)
+        }
+    }
+
+    func testValidatorRejectsOversizedScriptAtSharedLimit() {
+        let script = String(repeating: "#", count: CaptivePortalScriptValidator.maximumBytes + 1)
+        XCTAssertThrowsError(try CaptivePortalScriptValidator.validate(script)) { error in
+            XCTAssertEqual(error as? CaptivePortalScriptValidationError,
+                           .tooLarge(CaptivePortalScriptValidator.maximumBytes + 1))
+        }
+    }
+
     func testValidatorRejectsUnknownJumpTarget() {
         XCTAssertThrowsError(try CaptivePortalScriptValidator.validate("GOTO missing\nSUCCESS")) { error in
             XCTAssertEqual(error as? CaptivePortalScriptValidationError, .unknownLabel(1, "missing"))

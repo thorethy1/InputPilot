@@ -21,7 +21,7 @@ specific script is bundled with InputPilot.
 ## Format
 
 The optional first line is `INPUTPILOT-CAPTIVE/1`. Blank lines and lines starting
-with `#` are ignored. A workflow can use at most 1,800 UTF-8 bytes, 200 executed
+with `#` are ignored. A workflow can use at most 2,304 UTF-8 bytes, 200 executed
 steps, ten redirects per request, a 32 KiB response body, and 60 seconds per
 `WAIT`. Network requests have finite connect and response timeouts.
 
@@ -30,17 +30,21 @@ steps, ten redirects per request, a 32 KiB response body, and 60 seconds per
 | `GET <url>` | Send a GET; follow redirects and retain the portal cookie. |
 | `POST_FORM <url> <body>` | POST an URL-encoded form body. |
 | `POST_JSON <url> <body>` | POST a JSON body. |
-| `HEADER <name>: <value>` | Add a persistent request header. |
+| `HEADER <name>: <value>` | Add a persistent request header. A `User-Agent` value replaces the InputPilot default rather than adding a second header. |
 | `WAIT <milliseconds>` | Wait without exceeding 60 seconds. |
 | `EXPECT_STATUS <code>` | Fail unless the last status matches. |
 | `EXPECT_BODY <text>` | Fail unless the last body contains text. |
 | `REQUIRE_HOST_SUFFIX <suffix>` | Require a leading-dot suffix, verify the last response host, then restrict every later request and redirect to its subdomains. |
 | `SET_ORIGIN <name>` | Save the last response URL's scheme and authority. |
 | `CAPTURE_JSON <name> <dot.path>` | Read a scalar from the last JSON response. |
+| `CAPTURE_JSON_FIRST <name> <path1> \|\| <path2> [...]` | Parse the last response once and save the first non-empty scalar found at the listed dot-paths. |
+| `CAPTURE_OBJECT_STRING <name> <key>` | Read a quoted string for an exact key from JSON-/JavaScript-like response text, allowing whitespace around `:`. |
 | `CAPTURE_BETWEEN <name> <prefix> \|\| <suffix>` | Capture text between two literal delimiters. |
 | `LABEL <name>` / `GOTO <name>` | Define or jump to a label. |
 | `IF_STATUS <code> GOTO <name>` | Branch on the last HTTP status. |
 | `IF_BODY_CONTAINS <text> GOTO <name>` | Branch when the last body contains text. |
+| `IF_BODY_EQUALS <text> GOTO <name>` | Trim leading/trailing body whitespace, then branch on an exact match. |
+| `IF_VAR_EQUALS <variable> <value> GOTO <name>` | Branch when an existing variable exactly equals the expanded value. |
 | `SUCCESS [message]` | Finish successfully. |
 | `ALREADY_CONNECTED [message]` | Finish without logging in because access already works. |
 | `FAIL <code> [message]` | Finish with a stable error code. |
@@ -50,19 +54,45 @@ Captured variables use `${NAME}`; `${url:NAME}` applies form-safe percent
 encoding. Redirect locations may be absolute, scheme-relative, root-relative,
 or relative to the current path.
 
+`CAPTURE_JSON_FIRST` accepts the same string, Boolean, and number scalars as
+`CAPTURE_JSON`. Missing, object, array, `null`, and empty-string candidates are
+skipped so a compatible fallback path can be tried. It fails if no usable path
+exists with `JSON_VALUE_MISSING`. `CAPTURE_OBJECT_STRING` fails with
+`CAPTURE_MISSING` when the key or a valid quoted value is absent. It is
+intentionally a small bounded extractor, not
+a JavaScript parser; keys and variable names use ASCII letters, numbers, `_`, or `-`,
+and standard JSON string escapes are decoded. All captures retain the 1,024-byte
+value limit. `IF_VAR_EQUALS` fails with `MISSING_VARIABLE` if its left-hand
+variable or a variable referenced by its comparison value does not exist.
+
+## New command examples
+
+```text
+CAPTURE_JSON_FIRST SESSION session || payload.session
+CAPTURE_OBJECT_STRING CSRF_TOKEN csrfToken
+IF_VAR_EQUALS LOGIN_STATE ready GOTO authenticated
+IF_BODY_EQUALS online GOTO internet_available
+```
+
+These patterns are provider-neutral: they cover compatible API response shapes,
+configuration embedded in HTML, exact state checks, and strict connectivity
+probe responses.
+
 ## Minimal example
 
 ```text
 INPUTPILOT-CAPTIVE/1
 GET http://detectportal.firefox.com/success.txt
-IF_BODY_CONTAINS success GOTO online
+IF_BODY_EQUALS success GOTO online
 REQUIRE_HOST_SUFFIX .portal.example
 SET_ORIGIN BASE
-CAPTURE_BETWEEN TOKEN "token":" || "
+CAPTURE_OBJECT_STRING TOKEN token
 POST_FORM ${BASE}/api/login token=${url:TOKEN}&terms=1
 EXPECT_STATUS 200
-CAPTURE_JSON LOGGED_IN loggedIn
-EXPECT_BODY "loggedIn":true
+CAPTURE_JSON_FIRST LOGGED_IN loggedIn || result.loggedIn
+IF_VAR_EQUALS LOGGED_IN true GOTO logged_in
+FAIL LOGIN_NOT_CONFIRMED Login was not confirmed
+LABEL logged_in
 SUCCESS Portal login succeeded
 LABEL online
 ALREADY_CONNECTED Internet is already available

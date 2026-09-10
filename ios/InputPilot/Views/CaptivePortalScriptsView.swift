@@ -339,7 +339,7 @@ private struct CaptivePortalScriptEditor: View {
                             .foregroundStyle(validationMessage == "Script is valid." ? AppColors.success : AppColors.error)
                     }
                 } header: { Text("HTTP Workflow") } footer: {
-                    Text("Commands: GET, POST_FORM, POST_JSON, HEADER, WAIT, EXPECT_STATUS, EXPECT_BODY, REQUIRE_HOST_SUFFIX, SET_ORIGIN, CAPTURE_JSON, CAPTURE_BETWEEN, LABEL/GOTO, IF_STATUS, IF_BODY_CONTAINS, SUCCESS, ALREADY_CONNECTED, FAIL. Use ${NAME} or ${url:NAME} for captured values. HTTP redirects and cookies are handled automatically.")
+                    Text("Commands: GET, POST_FORM, POST_JSON, HEADER, WAIT, EXPECT_STATUS, EXPECT_BODY, REQUIRE_HOST_SUFFIX, SET_ORIGIN, CAPTURE_JSON, CAPTURE_JSON_FIRST, CAPTURE_OBJECT_STRING, CAPTURE_BETWEEN, LABEL/GOTO, IF_STATUS, IF_BODY_CONTAINS, IF_BODY_EQUALS, IF_VAR_EQUALS, SUCCESS, ALREADY_CONNECTED, FAIL. Use ${NAME} or ${url:NAME} for captured values. HTTP redirects and cookies are handled automatically.")
                 }
                 Section("Security") {
                     Label("Only add scripts you trust", systemImage: "exclamationmark.shield")

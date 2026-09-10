@@ -11,6 +11,7 @@
 #include <map>
 #include <vector>
 
+#include "CaptivePortalParsing.h"
 #include "Logging.h"
 
 CaptivePortalAutomation g_captivePortalAutomation;
@@ -292,11 +293,22 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     }
     http.setConnectTimeout(10000);
     http.setTimeout(20000);
-    http.setUserAgent(String("InputPilot/") + FW_VERSION + " CaptivePortal");
+    // Arduino-ESP32 deliberately ignores User-Agent passed to addHeader(); use
+    // its dedicated field so a workflow override replaces the default exactly.
+    String userAgent = String("InputPilot/") + FW_VERSION + " CaptivePortal";
+    for (const auto &header : headers) {
+      const String name(header.first.c_str());
+      if (name.equalsIgnoreCase("User-Agent")) userAgent = header.second;
+    }
+    http.setUserAgent(userAgent);
     http.setCookieJar(&cookies);
     const char *keys[] = {"Location"};
     http.collectHeaders(keys, 1);
-    for (const auto &header : headers) http.addHeader(header.first.c_str(), header.second);
+    for (const auto &header : headers) {
+      const String name(header.first.c_str());
+      if (!name.equalsIgnoreCase("User-Agent"))
+        http.addHeader(header.first.c_str(), header.second);
+    }
     int status = 0;
     if (currentMethod == "GET") status = http.GET();
     else {
@@ -681,6 +693,64 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
       variables[std::string(args.substring(0, separator).c_str())] = value;
       continue;
     }
+    if (line.startsWith("CAPTURE_JSON_FIRST ")) {
+      const String args = trimmed(line.substring(19));
+      const int nameEnd = args.indexOf(' ');
+      if (nameEnd <= 0) {
+        fail("INVALID_CAPTURE", "CAPTURE_JSON_FIRST requires a name and paths."); return;
+      }
+      const String name = args.substring(0, nameEnd);
+      const String pathList = trimmed(args.substring(nameEnd + 1));
+      std::vector<std::string> paths;
+      size_t cursor = 0;
+      bool valid = CaptivePortalParsing::isSimpleName(std::string(name.c_str()));
+      while (valid && cursor <= pathList.length()) {
+        const int delimiter = pathList.indexOf(" || ", cursor);
+        const String path = trimmed(delimiter < 0 ? pathList.substring(cursor)
+                                                  : pathList.substring(cursor, delimiter));
+        const std::string pathText(path.c_str());
+        if (!CaptivePortalParsing::isDotPath(pathText)) { valid = false; break; }
+        paths.push_back(pathText);
+        if (delimiter < 0) break;
+        cursor = static_cast<size_t>(delimiter + 4);
+      }
+      if (!valid || paths.empty()) {
+        fail("INVALID_CAPTURE", "CAPTURE_JSON_FIRST has an invalid name or path."); return;
+      }
+      std::string captured;
+      const auto result = CaptivePortalParsing::captureFirstJsonScalar(
+          last.body.c_str(), last.body.length(), paths, kMaxCapturedBytes, captured);
+      if (result == CaptivePortalParsing::CaptureResult::TooLarge) {
+        fail("CAPTURE_TOO_LARGE", "A captured JSON value is too large."); return;
+      }
+      if (result != CaptivePortalParsing::CaptureResult::Found) {
+        fail("JSON_VALUE_MISSING", "A required JSON value is missing."); return;
+      }
+      variables[std::string(name.c_str())] = String(captured.c_str());
+      continue;
+    }
+    if (line.startsWith("CAPTURE_OBJECT_STRING ")) {
+      const String args = trimmed(line.substring(22));
+      const int separator = args.indexOf(' ');
+      const String name = separator < 0 ? String() : args.substring(0, separator);
+      const String objectKey = separator < 0 ? String() : trimmed(args.substring(separator + 1));
+      if (!CaptivePortalParsing::isSimpleName(std::string(name.c_str())) ||
+          !CaptivePortalParsing::isSimpleName(std::string(objectKey.c_str()))) {
+        fail("INVALID_CAPTURE", "CAPTURE_OBJECT_STRING requires a valid name and key."); return;
+      }
+      std::string captured;
+      const auto result = CaptivePortalParsing::captureObjectString(
+          last.body.c_str(), last.body.length(), std::string(objectKey.c_str()),
+          kMaxCapturedBytes, captured);
+      if (result == CaptivePortalParsing::CaptureResult::TooLarge) {
+        fail("CAPTURE_TOO_LARGE", "A captured portal value is too large."); return;
+      }
+      if (result != CaptivePortalParsing::CaptureResult::Found) {
+        fail("CAPTURE_MISSING", "A required portal value could not be extracted."); return;
+      }
+      variables[std::string(name.c_str())] = String(captured.c_str());
+      continue;
+    }
     if (line.startsWith("CAPTURE_BETWEEN ")) {
       const String args = line.substring(16);
       const int nameEnd = args.indexOf(' ');
@@ -714,6 +784,42 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
       const String expected = expand(args.substring(0, marker), variables, ok);
       if (!ok) { fail("MISSING_VARIABLE", "A condition references a missing variable."); return; }
       if (last.body.indexOf(expected) >= 0 && !jump(args.substring(marker + 6))) return;
+      continue;
+    }
+    if (line.startsWith("IF_BODY_EQUALS ")) {
+      const String args = line.substring(15);
+      const int marker = args.lastIndexOf(" GOTO ");
+      if (marker <= 0) { fail("INVALID_CONDITION", "IF_BODY_EQUALS requires text and GOTO."); return; }
+      bool ok = false;
+      const String expected = expand(args.substring(0, marker), variables, ok);
+      if (!ok) { fail("MISSING_VARIABLE", "A condition references a missing variable."); return; }
+      if (CaptivePortalParsing::bodyEqualsTrimmed(
+              last.body.c_str(), last.body.length(), expected.c_str(), expected.length()) &&
+          !jump(args.substring(marker + 6))) return;
+      continue;
+    }
+    if (line.startsWith("IF_VAR_EQUALS ")) {
+      const String args = line.substring(14);
+      const int marker = args.lastIndexOf(" GOTO ");
+      const int nameEnd = args.indexOf(' ');
+      if (marker <= 0 || nameEnd <= 0 || nameEnd >= marker) {
+        fail("INVALID_CONDITION", "IF_VAR_EQUALS requires a variable, value and GOTO."); return;
+      }
+      const String name = args.substring(0, nameEnd);
+      if (!CaptivePortalParsing::isSimpleName(std::string(name.c_str()))) {
+        fail("INVALID_CONDITION", "IF_VAR_EQUALS has an invalid variable name."); return;
+      }
+      bool ok = false;
+      const String expected = expand(args.substring(nameEnd + 1, marker), variables, ok);
+      if (!ok) { fail("MISSING_VARIABLE", "A condition references a missing variable."); return; }
+      const auto found = variables.find(std::string(name.c_str()));
+      const auto comparison = CaptivePortalParsing::compareVariable(
+          found == variables.end() ? nullptr : found->second.c_str(), expected.c_str());
+      if (comparison == CaptivePortalParsing::VariableComparison::Missing) {
+        fail("MISSING_VARIABLE", "A condition references a missing variable."); return;
+      }
+      if (comparison == CaptivePortalParsing::VariableComparison::Equal &&
+          !jump(args.substring(marker + 6))) return;
       continue;
     }
     if (line.startsWith("GOTO ")) { if (!jump(line.substring(5))) return; continue; }

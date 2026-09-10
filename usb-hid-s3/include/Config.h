@@ -89,8 +89,10 @@
 
 // SSID-bound captive portal workflows are uploaded from the authenticated app.
 // No portal-specific script or credential is compiled into the firmware.
+// Keep five maximum-sized records compatible with the shared 20 KiB NVS
+// partition, including Wi-Fi, pairing, identity, and WireGuard preferences.
 #define CAPTIVE_PORTAL_MAX_SCRIPTS 5
-#define CAPTIVE_PORTAL_MAX_SCRIPT_BYTES 1800
+#define CAPTIVE_PORTAL_MAX_SCRIPT_BYTES 2304
 
 // Soft-AP/BLE use a friendly deterministic full-MAC-derived name; mDNS keeps
 // the hex suffix (e.g. InputPilot-Halo9, inputpilot-de94.local).
