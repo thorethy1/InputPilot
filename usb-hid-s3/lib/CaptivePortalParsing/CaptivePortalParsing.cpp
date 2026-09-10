@@ -13,6 +13,8 @@ bool isJsonWhitespace(char value) {
   return value == ' ' || value == '\t' || value == '\r' || value == '\n';
 }
 
+constexpr char kCommitPrefix[] = "CAPTIVE COMMIT ";
+
 int hexDigit(char value) {
   if (value >= '0' && value <= '9') return value - '0';
   if (value >= 'a' && value <= 'f') return value - 'a' + 10;
@@ -158,6 +160,22 @@ bool scalarString(JsonVariantConst variant, std::string &value) {
 }
 
 }  // namespace
+
+bool parseCommitToken(const std::string &command, uint64_t &token) {
+  constexpr size_t prefixLength = sizeof(kCommitPrefix) - 1;
+  if (command.compare(0, prefixLength, kCommitPrefix) != 0) return false;
+  const std::string text = command.substr(prefixLength);
+  if (text.empty() || text.size() > 16) return false;
+  uint64_t value = 0;
+  for (const char character : text) {
+    const int digit = hexDigit(character);
+    if (digit < 0) return false;
+    value = (value << 4) | static_cast<uint64_t>(digit);
+  }
+  if (value == 0) return false;
+  token = value;
+  return true;
+}
 
 bool isSimpleName(const std::string &value) {
   if (value.empty()) return false;

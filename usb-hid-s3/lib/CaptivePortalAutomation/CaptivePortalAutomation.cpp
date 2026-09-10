@@ -944,7 +944,7 @@ bool CaptivePortalAutomation::handleCommand(const std::string &command, std::str
   }
   if (command.rfind("CAPTIVE COMMIT ", 0) == 0) {
     uint64_t token = 0;
-    const bool valid = parseToken(command.substr(16), token) && upload_.active &&
+    const bool valid = CaptivePortalParsing::parseCommitToken(command, token) && upload_.active &&
         token == upload_.token && upload_.bytes.size() == upload_.expectedSize &&
         checksum(upload_.bytes.data(), upload_.bytes.size()) == upload_.expectedChecksum;
     if (!valid) reply = "error captive_checksum";

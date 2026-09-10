@@ -162,6 +162,17 @@ void test_body_equals_trims_only_body_edges() {
       html.data(), html.size(), expected, 7));
 }
 
+void test_commit_parser_keeps_the_complete_upload_token() {
+  uint64_t token = 0;
+  TEST_ASSERT_TRUE(CaptivePortalParsing::parseCommitToken(
+      "CAPTIVE COMMIT a123456789abcdef", token));
+  TEST_ASSERT_EQUAL_UINT64(UINT64_C(0xa123456789abcdef), token);
+  TEST_ASSERT_FALSE(CaptivePortalParsing::parseCommitToken(
+      "CAPTIVE COMMIT 1a123456789abcdef", token));
+  TEST_ASSERT_FALSE(CaptivePortalParsing::parseCommitToken(
+      "CAPTIVE COMMIT ", token));
+}
+
 }  // namespace
 
 void setUp() {}
@@ -181,5 +192,6 @@ int main(int, char **) {
   RUN_TEST(test_capture_json_preserves_false_scalar);
   RUN_TEST(test_variable_comparison_covers_true_false_and_missing);
   RUN_TEST(test_body_equals_trims_only_body_edges);
+  RUN_TEST(test_commit_parser_keeps_the_complete_upload_token);
   return UNITY_END();
 }

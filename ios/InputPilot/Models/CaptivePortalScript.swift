@@ -359,7 +359,7 @@ enum CaptivePortalScriptValidator {
         guard (1 ... 32).contains(ssidData.count), (0 ... 60_000).contains(delayMs) else {
             throw TransportError.failed("Wi-Fi names are limited to 32 bytes and the delay to 60 seconds.")
         }
-        let token = suppliedToken ?? UInt64.random(in: 1 ... UInt64.max)
+        let token = suppliedToken ?? compatibleUploadToken()
         let tokenText = String(format: "%016llx", token)
         let checksum = fnv1a(scriptData)
         let transportLabel = suppliedTransportLabel ?? (binaryRequest == nil ? "Wi-Fi" : "BLE")
@@ -445,6 +445,13 @@ enum CaptivePortalScriptValidator {
 
     private static let maximumScriptSize = CaptivePortalScriptValidator.maximumBytes
 
+    // Firmware through 0.9.3-beta.2 skipped the first character of the
+    // CAPTIVE COMMIT token. A leading zero makes the canonical 16-character
+    // token resolve to the same UInt64 on both affected and corrected builds.
+    static func compatibleUploadToken() -> UInt64 {
+        UInt64.random(in: 1 ... 0x0fff_ffff_ffff_ffff)
+    }
+
     private static func decode<T: Decodable>(_ type: T.Type, from reply: String) throws -> T {
         if reply.hasPrefix("error ") { throw protocolError(reply) }
         do { return try JSONDecoder().decode(type, from: Data(reply.utf8)) }
@@ -495,7 +502,7 @@ enum CaptivePortalScriptValidator {
         let metadata = CaptivePortalScriptMetadata(
             ssid: ssid, delayMs: delayMs, enabled: enabled, size: byteCount
         )
-        let uploadToken = UInt64.random(in: 1 ... UInt64.max)
+        let uploadToken = CaptivePortalDeviceClient.compatibleUploadToken()
         appLog(.control, "CAPTIVE save start ssid=\(ssid) bytes=\(byteCount)")
 
         var bluetoothError: Error

@@ -2,6 +2,7 @@
 #define INPUTPILOT_CAPTIVE_PORTAL_PARSING_H
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,10 @@ enum class VariableComparison {
 
 bool isSimpleName(const std::string &value);
 bool isDotPath(const std::string &value);
+
+// Parses the token from the complete CAPTIVE COMMIT command. Keeping the
+// prefix handling next to the parser avoids offset drift between commands.
+bool parseCommitToken(const std::string &command, uint64_t &token);
 
 CaptureResult captureObjectString(const char *body, size_t bodyLength,
                                   const std::string &key, size_t maximumBytes,

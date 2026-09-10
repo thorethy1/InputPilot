@@ -155,6 +155,16 @@ import XCTest
         XCTAssertTrue(commands.last?.hasPrefix("CAPTIVE COMMIT ") == true)
     }
 
+    func testCompatibleUploadTokenSurvivesAffectedFirmwareCommitOffset() {
+        for _ in 0 ..< 100 {
+            let token = CaptivePortalDeviceClient.compatibleUploadToken()
+            let canonical = String(format: "%016llx", token)
+            XCTAssertEqual(canonical.count, 16)
+            XCTAssertEqual(canonical.first, "0")
+            XCTAssertEqual(UInt64(canonical.dropFirst(), radix: 16), token)
+        }
+    }
+
     func testBLECommitIsSuccessEvenWhenBestEffortRefreshFails() async throws {
         let script = "INPUTPILOT-CAPTIVE/1\n#\(String(repeating: "x", count: 2_000))\nSUCCESS"
         let bluetooth = BinaryCaptiveRecorder()
