@@ -128,6 +128,16 @@ void test_json_first_reports_missing_malformed_and_oversized() {
           oversized.data(), oversized.size(), paths, 1024, value)));
 }
 
+void test_capture_json_preserves_false_scalar() {
+  const std::string body = R"({"loggedIn":false})";
+  std::string value;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(CaptureResult::Found),
+      static_cast<int>(CaptivePortalParsing::captureJsonScalar(
+          body.data(), body.size(), "loggedIn", 1024, value)));
+  TEST_ASSERT_EQUAL_STRING("false", value.c_str());
+}
+
 void test_variable_comparison_covers_true_false_and_missing() {
   TEST_ASSERT_EQUAL(
       static_cast<int>(VariableComparison::Equal),
@@ -168,6 +178,7 @@ int main(int, char **) {
   RUN_TEST(test_json_first_skips_empty_string);
   RUN_TEST(test_json_first_supports_boolean_and_number_scalars);
   RUN_TEST(test_json_first_reports_missing_malformed_and_oversized);
+  RUN_TEST(test_capture_json_preserves_false_scalar);
   RUN_TEST(test_variable_comparison_covers_true_false_and_missing);
   RUN_TEST(test_body_equals_trims_only_body_edges);
   return UNITY_END();

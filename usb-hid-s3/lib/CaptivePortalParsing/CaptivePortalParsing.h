@@ -27,6 +27,10 @@ CaptureResult captureObjectString(const char *body, size_t bodyLength,
                                   const std::string &key, size_t maximumBytes,
                                   std::string &value);
 
+CaptureResult captureJsonScalar(const char *body, size_t bodyLength,
+                                const std::string &path, size_t maximumBytes,
+                                std::string &value);
+
 CaptureResult captureFirstJsonScalar(const char *body, size_t bodyLength,
                                      const std::vector<std::string> &paths,
                                      size_t maximumBytes, std::string &value);

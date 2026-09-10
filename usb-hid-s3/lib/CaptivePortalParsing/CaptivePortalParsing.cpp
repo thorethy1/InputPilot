@@ -235,6 +235,22 @@ CaptureResult captureFirstJsonScalar(const char *body, size_t bodyLength,
   return CaptureResult::Missing;
 }
 
+CaptureResult captureJsonScalar(const char *body, size_t bodyLength,
+                                const std::string &path, size_t maximumBytes,
+                                std::string &value) {
+  value.clear();
+  if (!body || path.empty()) return CaptureResult::Malformed;
+  JsonDocument document;
+  if (deserializeJson(document, body, bodyLength) != DeserializationError::Ok)
+    return CaptureResult::Malformed;
+  const JsonVariantConst variant = variantAtPath(
+      document.as<JsonVariantConst>(), path);
+  if (variant.isNull() || !scalarString(variant, value))
+    return CaptureResult::Missing;
+  if (value.size() > maximumBytes) return CaptureResult::TooLarge;
+  return CaptureResult::Found;
+}
+
 bool bodyEqualsTrimmed(const char *body, size_t bodyLength,
                        const char *expected, size_t expectedLength) {
   if (!body || !expected) return false;

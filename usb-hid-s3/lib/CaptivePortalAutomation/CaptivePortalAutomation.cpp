@@ -4,8 +4,6 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <ArduinoJson.h>
-
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -208,28 +206,6 @@ String expand(const String &input, const std::map<std::string, String> &variable
     cursor = static_cast<size_t>(end + 1);
   }
   return result;
-}
-
-bool jsonValueAtPath(const String &body, const String &path, String &value) {
-  JsonDocument document;
-  if (deserializeJson(document, body) != DeserializationError::Ok) return false;
-  JsonVariant variant = document.as<JsonVariant>();
-  size_t cursor = 0;
-  while (cursor < path.length()) {
-    const int separator = path.indexOf('.', cursor);
-    const String component = separator < 0 ? path.substring(cursor)
-                                           : path.substring(cursor, separator);
-    if (!variant.is<JsonObject>() || !variant[component.c_str()]) return false;
-    variant = variant[component.c_str()];
-    if (separator < 0) break;
-    cursor = static_cast<size_t>(separator + 1);
-  }
-  if (variant.is<const char *>()) value = variant.as<const char *>();
-  else if (variant.is<bool>()) value = variant.as<bool>() ? "true" : "false";
-  else if (variant.is<long>()) value = String(variant.as<long>());
-  else if (variant.is<double>()) value = String(variant.as<double>(), 8);
-  else return false;
-  return true;
 }
 
 struct HTTPResult {
@@ -685,12 +661,19 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
     if (line.startsWith("CAPTURE_JSON ")) {
       const String args = trimmed(line.substring(13));
       const int separator = args.indexOf(' ');
-      String value;
-      if (separator <= 0 || !jsonValueAtPath(last.body, trimmed(args.substring(separator + 1)), value)) {
+      std::string value;
+      const auto result = separator <= 0 ? CaptivePortalParsing::CaptureResult::Malformed
+          : CaptivePortalParsing::captureJsonScalar(
+                last.body.c_str(), last.body.length(),
+                std::string(trimmed(args.substring(separator + 1)).c_str()),
+                kMaxCapturedBytes, value);
+      if (result == CaptivePortalParsing::CaptureResult::TooLarge) {
+        fail("CAPTURE_TOO_LARGE", "A captured JSON value is too large."); return;
+      }
+      if (result != CaptivePortalParsing::CaptureResult::Found) {
         fail("JSON_VALUE_MISSING", "A required JSON value is missing."); return;
       }
-      if (value.length() > kMaxCapturedBytes) { fail("CAPTURE_TOO_LARGE", "A captured JSON value is too large."); return; }
-      variables[std::string(args.substring(0, separator).c_str())] = value;
+      variables[std::string(args.substring(0, separator).c_str())] = String(value.c_str());
       continue;
     }
     if (line.startsWith("CAPTURE_JSON_FIRST ")) {
