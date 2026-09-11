@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cerrno>
 #include <map>
+#include <memory>
 #include <vector>
 
 extern "C" {
@@ -326,6 +327,13 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
     _timeout = timeout;
     LOG_WIFI("CAPTIVE HTTPS ip=%s port=%u host=%s", address_.toString().c_str(),
              port, hostname);
+    // Ask the server for small records so the runtime can shrink the TLS
+    // I/O buffers (requires MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH); HTTPS heap
+    // footprint is measured around the handshake either way.
+    LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    LOG_WARN("CAPTIVE heap max_alloc=%u min=%u",
+             static_cast<unsigned>(ESP.getMaxAllocHeap()),
+             static_cast<unsigned>(ESP.getMinFreeHeap()));
     // Connect the socket to the selected IPv4 address while retaining the
     // original hostname for TLS SNI. Captive HTTPS remains intentionally
     // certificate-insecure, as configured by setInsecure() below.
@@ -343,6 +351,11 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
                static_cast<unsigned>(ESP.getMaxAllocHeap()),
                static_cast<unsigned>(ESP.getMinFreeHeap()));
       tcpProbe(port);
+    } else {
+      LOG_WARN("CAPTIVE heap free=%u max_alloc=%u min=%u",
+               static_cast<unsigned>(ESP.getFreeHeap()),
+               static_cast<unsigned>(ESP.getMaxAllocHeap()),
+               static_cast<unsigned>(ESP.getMinFreeHeap()));
     }
     return connected;
   }
@@ -396,32 +409,36 @@ HTTPResult performRequest(const String &method, String url, const String &body,
       }
     }
     HTTPClient http;
-    WiFiClient plain;
-    WiFiClientSecure secure;
     IPAddress resolvedAddress;
     if (addressFamily == CaptivePortalPolicy::AddressFamily::IPv4 &&
         !resolveIPv4(currentHost, resolvedAddress)) {
       result.error = "NETWORK:DNS failed";
       return result;
     }
-    ResolvedIPv4Client ipv4Plain(resolvedAddress);
-    ResolvedIPv4SecureClient ipv4Secure(resolvedAddress);
-    secure.setInsecure();  // Captive portals are reached before normal PKI is reliable.
-    ipv4Secure.setInsecure();
+    // Only instantiate the client shape this request actually needs: every
+    // WiFiClientSecure instance heap-allocates an sslclient_context, and an
+    // idle second instance next to the connecting one wastes TLS-sized RAM.
     const bool https = url.startsWith("https://");
-    NetworkClient *client = nullptr;
-    if (https) {
-      client = addressFamily == CaptivePortalPolicy::AddressFamily::IPv4
-                   ? static_cast<NetworkClient *>(&ipv4Secure)
-                   : static_cast<NetworkClient *>(&secure);
+    std::unique_ptr<NetworkClient> client;
+    if (addressFamily == CaptivePortalPolicy::AddressFamily::IPv4) {
+      if (https) {
+        auto secure = std::make_unique<ResolvedIPv4SecureClient>(resolvedAddress);
+        secure->setInsecure();  // Captive portals are reached before normal PKI is reliable.
+        client = std::move(secure);
+      } else {
+        client = std::make_unique<ResolvedIPv4Client>(resolvedAddress);
+      }
+    } else if (https) {
+      auto secure = std::make_unique<WiFiClientSecure>();
+      secure->setInsecure();
+      client = std::move(secure);
     } else {
-      client = addressFamily == CaptivePortalPolicy::AddressFamily::IPv4
-                   ? static_cast<NetworkClient *>(&ipv4Plain)
-                   : static_cast<NetworkClient *>(&plain);
+      client = std::make_unique<WiFiClient>();
     }
     LOG_WIFI("CAPTIVE HTTP method=%s host=%s family=%s", currentMethod.c_str(),
              currentHost.c_str(),
              CaptivePortalPolicy::addressFamilyName(addressFamily));
+    LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
     if (!http.begin(*client, url)) {
       result.error = "HTTP_INIT";
       return result;
@@ -724,6 +741,11 @@ void CaptivePortalAutomation::runTask() {
   if (index < 0 || !load(index, record))
     setStatus(State::Failed, ssid, "The configured script is no longer available.", "NOT_FOUND");
   else run(record);
+  // Stack high-water mark at run end: words never touched by the whole run.
+  // Words -> bytes (x4). ~10 KB task stack: reduce only if this stays far
+  // below half of it across several real runs.
+  LOG_WIFI("CAPTIVE task stack hwm=%u bytes",
+           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)) * 4);
   if (index < 0 || record.ssid.isEmpty())
     finishGate(ssid, CaptivePortalPolicy::GateState::Failed);
   running_.store(false);
