@@ -1,6 +1,7 @@
 #include "CaptivePortalAutomation.h"
 
 #include <HTTPClient.h>
+#include <mbedtls/ssl.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -263,6 +264,12 @@ class ResolvedIPv4Client final : public WiFiClient {
   IPAddress address_;
 };
 
+// Variant B of the TLS A/B diagnostic: a plain WiFiClientSecure with normal
+// Arduino hostname resolution (no pre-resolved IPv4, no custom connect
+// overload) against the same host and port. Diagnostic only; the result is
+// logged, never used to carry the actual request.
+void normalHostProbe(const char *hostname, uint16_t port);
+
 class ResolvedIPv4SecureClient final : public WiFiClientSecure {
  public:
   explicit ResolvedIPv4SecureClient(const IPAddress &address) : address_(address) {}
@@ -327,9 +334,6 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
     _timeout = timeout;
     LOG_WIFI("CAPTIVE HTTPS ip=%s port=%u host=%s", address_.toString().c_str(),
              port, hostname);
-    // Ask the server for small records so the runtime can shrink the TLS
-    // I/O buffers (requires MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH); HTTPS heap
-    // footprint is measured around the handshake either way.
     LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
     LOG_WARN("CAPTIVE heap max_alloc=%u min=%u",
              static_cast<unsigned>(ESP.getMaxAllocHeap()),
@@ -344,6 +348,9 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
       LOG_WARN("CAPTIVE HTTPS failed host=%s", hostname);
       LOG_WARN("CAPTIVE HTTPS endpoint=%s:%u",
                address_.toString().c_str(), static_cast<unsigned>(port));
+      char detail[64] = {};
+      const int code = lastError(detail, sizeof(detail) - 1);
+      LOG_WARN("CAPTIVE TLS probe resolved-ipv4 result=failed error=%d", code);
       logTlsDiagnostics();
       LOG_WARN("CAPTIVE socket errno=%d", errno);
       LOG_WARN("CAPTIVE heap free=%u max_alloc=%u min=%u",
@@ -351,7 +358,11 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
                static_cast<unsigned>(ESP.getMaxAllocHeap()),
                static_cast<unsigned>(ESP.getMinFreeHeap()));
       tcpProbe(port);
+      // Variant B of the A/B test: plain Arduino hostname path against the
+      // same host/port. Diagnostic only; never replaces the real request.
+      normalHostProbe(hostname, port);
     } else {
+      LOG_WARN("CAPTIVE TLS probe resolved-ipv4 result=success");
       LOG_WARN("CAPTIVE heap free=%u max_alloc=%u min=%u",
                static_cast<unsigned>(ESP.getFreeHeap()),
                static_cast<unsigned>(ESP.getMaxAllocHeap()),
@@ -363,6 +374,53 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
  private:
   IPAddress address_;
 };
+
+// Variant B of the TLS A/B diagnostic: a plain WiFiClientSecure with normal
+// Arduino hostname resolution (no pre-resolved IPv4, no custom connect
+// overload) against the same host and port. Diagnostic only; the result is
+// logged, never used to carry the actual request.
+void normalHostProbe(const char *hostname, uint16_t port);
+
+// Variant B of the TLS A/B diagnostic: a plain WiFiClientSecure with normal
+// Arduino hostname resolution (no pre-resolved IPv4, no custom connect
+// overload) against the same host and port. Diagnostic only; the result is
+// logged, never used to carry the actual request.
+void normalHostProbe(const char *hostname, uint16_t port) {
+  WiFiClientSecure probe;
+  probe.setInsecure();
+  char detail[64] = {};
+  const int connected = probe.connect(hostname, port);
+  int code = -1;
+  if (!connected) code = probe.lastError(detail, sizeof(detail) - 1);
+  probe.stop();
+  LOG_WARN("CAPTIVE TLS probe normal-host result=%s error=%d",
+           connected ? "success" : "failed", code);
+}
+
+// Log once per boot whether the required conn4 ciphersuite exists in the
+// linked mbedTLS. Uses the public mbedtls_ssl_list_ciphersuites() runtime
+// list; no compile-time configuration is changed.
+void logCiphersuiteSupport() {
+  static bool logged = false;
+  if (logged) return;
+  logged = true;
+  const int *suites = mbedtls_ssl_list_ciphersuites();
+  bool ecDheRsaGcm = false, aes256GcmSha384 = false;
+  int count = 0;
+  for (const int *s = suites; s && *s; ++s, ++count) {
+    const char *name = mbedtls_ssl_get_ciphersuite_name(*s);
+    if (!name) continue;
+    if (strcmp(name, "TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384") == 0)
+      ecDheRsaGcm = true;
+    if (strcmp(name, "TLS-RSA-WITH-AES-256-GCM-SHA384") == 0)
+      aes256GcmSha384 = true;
+  }
+  LOG_WARN("CAPTIVE TLS suites listed=%d", count);
+  LOG_WARN("CAPTIVE TLS ciphersuite ECDHE-RSA-AES256-GCM-SHA384=%s",
+           ecDheRsaGcm ? "available" : "missing");
+  LOG_WARN("CAPTIVE TLS ciphersuite RSA-AES256-GCM-SHA384=%s",
+           aes256GcmSha384 ? "available" : "missing");
+}
 
 class BoundedResponseStream final : public Stream {
  public:
@@ -438,6 +496,7 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     LOG_WIFI("CAPTIVE HTTP method=%s host=%s family=%s", currentMethod.c_str(),
              currentHost.c_str(),
              CaptivePortalPolicy::addressFamilyName(addressFamily));
+    if (https) logCiphersuiteSupport();
     LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
     if (!http.begin(*client, url)) {
       result.error = "HTTP_INIT";
@@ -741,11 +800,13 @@ void CaptivePortalAutomation::runTask() {
   if (index < 0 || !load(index, record))
     setStatus(State::Failed, ssid, "The configured script is no longer available.", "NOT_FOUND");
   else run(record);
-  // Stack high-water mark at run end: words never touched by the whole run.
-  // Words -> bytes (x4). ~10 KB task stack: reduce only if this stays far
-  // below half of it across several real runs.
+  // Stack high-water mark at run end. On ESP-IDF the stack depth type is
+  // bytes, so the raw value already is the minimum free stack in bytes;
+  // no words-to-bytes conversion applies (vanilla FreeRTOS docs differ).
+  // ~10 KB task stack: reduce only if this stays far below half of it
+  // across several real runs.
   LOG_WIFI("CAPTIVE task stack hwm=%u bytes",
-           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)) * 4);
+           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   if (index < 0 || record.ssid.isEmpty())
     finishGate(ssid, CaptivePortalPolicy::GateState::Failed);
   running_.store(false);
