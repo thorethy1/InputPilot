@@ -266,6 +266,62 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
  public:
   explicit ResolvedIPv4SecureClient(const IPAddress &address) : address_(address) {}
 
+  // mbedtls error code + text via lastError(); -1 with an empty buffer means a
+  // plain TCP-level failure, not a TLS one.
+  void logTlsDiagnostics() {
+    char detail[64] = {};
+    const int code = lastError(detail, sizeof(detail) - 1);
+    LOG_WARN("CAPTIVE TLS error=%d", code);
+    for (char *p = detail; *p; ++p) {
+      const unsigned char c = static_cast<unsigned char>(*p);
+      if (c == '"' || c == '\\' || c < 0x20) *p = '?';
+    }
+    LOG_WARN("CAPTIVE TLS detail=\\\"%s\\\"", detail);
+  }
+
+  // One-shot plain TCP check against the same already-resolved IPv4 address,
+  // to separate "TCP reachable but TLS fails" from "endpoint unreachable".
+  void tcpProbe(uint16_t port) {
+    const int probeSocket = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (probeSocket < 0) {
+      LOG_WARN("CAPTIVE TCP probe endpoint=%s:%u result=failed",
+               address_.toString().c_str(), static_cast<unsigned>(port));
+      return;
+    }
+    struct sockaddr_in probeAddress = {};
+    probeAddress.sin_family = AF_INET;
+    probeAddress.sin_addr.s_addr = address_;
+    probeAddress.sin_port = htons(port);
+    int result = -1;
+    for (int attempt = 0; attempt < 50 && result < 0; ++attempt) {
+      result = lwip_connect(probeSocket,
+                            reinterpret_cast<struct sockaddr *>(&probeAddress),
+                            sizeof(probeAddress));
+      if (result < 0 && errno != EINPROGRESS) break;
+      if (result < 0) {
+        fd_set fdset;
+        FD_ZERO(&fdset);
+        FD_SET(probeSocket, &fdset);
+        struct timeval wait = {};
+        wait.tv_sec = 1;
+        result = select(probeSocket + 1, nullptr, &fdset, nullptr, &wait);
+        if (result == 0) {
+          result = -1;
+          break;
+        }
+        if (result < 0) break;
+        int sockerr = 0;
+        socklen_t length = sizeof(sockerr);
+        getsockopt(probeSocket, SOL_SOCKET, SO_ERROR, &sockerr, &length);
+        result = sockerr == 0 ? 1 : -1;
+      }
+    }
+    lwip_close(probeSocket);
+    LOG_WARN("CAPTIVE TCP probe endpoint=%s:%u result=%s",
+             address_.toString().c_str(), static_cast<unsigned>(port),
+             result > 0 ? "success" : "failed");
+  }
+
   int connect(const char *hostname, uint16_t port, int32_t timeout) override {
     _timeout = timeout;
     LOG_WIFI("CAPTIVE HTTPS ip=%s port=%u host=%s", address_.toString().c_str(),
@@ -276,12 +332,17 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
     const int connected = WiFiClientSecure::connect(
         address_, port, hostname, nullptr, nullptr, nullptr);
     if (!connected) {
-      const int savedErrno = errno;
-      char tlsDetail[160] = {};
-      const int tlsError = lastError(tlsDetail, sizeof(tlsDetail));
-      LOG_WARN("CAPTIVE HTTPS connect failed host=%s ip=%s port=%u tls_error=%d detail=\"%s\" errno=%d",
-               hostname, address_.toString().c_str(), port, tlsError,
-               tlsDetail, savedErrno);
+      // Diagnose in short lines; FirmwareLogBuffer keeps only 160 bytes/line.
+      LOG_WARN("CAPTIVE HTTPS failed host=%s", hostname);
+      LOG_WARN("CAPTIVE HTTPS endpoint=%s:%u",
+               address_.toString().c_str(), static_cast<unsigned>(port));
+      logTlsDiagnostics();
+      LOG_WARN("CAPTIVE socket errno=%d", errno);
+      LOG_WARN("CAPTIVE heap free=%u max_alloc=%u min=%u",
+               static_cast<unsigned>(ESP.getFreeHeap()),
+               static_cast<unsigned>(ESP.getMaxAllocHeap()),
+               static_cast<unsigned>(ESP.getMinFreeHeap()));
+      tcpProbe(port);
     }
     return connected;
   }
