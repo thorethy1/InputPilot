@@ -1,6 +1,8 @@
 #include "CaptivePortalAutomation.h"
 
 #include <HTTPClient.h>
+#include <mbedtls/bignum.h>
+#include <mbedtls/rsa.h>
 #include <mbedtls/ssl.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -33,6 +35,59 @@ constexpr size_t kMaxCapturedBytes = 1024;
 constexpr size_t kMaxRequestURLBytes = 2048;
 constexpr size_t kMaxRequestBodyBytes = 4096;
 constexpr size_t kMaxHeaders = 16;
+constexpr unsigned kMaxConnectAttempts = 3;
+constexpr uint32_t kConnectRetryBaseDelayMs = 500;
+constexpr uint32_t kTlsHandshakeTimeoutSeconds = 15;
+constexpr uint32_t kTaskStackBytes = 8192;
+
+void waitBeforeConnectRetry(const char *hostname, uint16_t port,
+                            unsigned failedAttempt) {
+  const uint32_t waitMs = kConnectRetryBaseDelayMs * failedAttempt;
+  LOG_WARN("CAPTIVE connect retry host=%s port=%u attempt=%u/%u wait=%ums",
+           hostname, static_cast<unsigned>(port), failedAttempt + 1,
+           kMaxConnectAttempts, static_cast<unsigned>(waitMs));
+  delay(waitMs);
+}
+
+String networkErrorCode(int error) {
+  switch (error) {
+    case HTTPC_ERROR_CONNECTION_REFUSED: return "NETWORK:REFUSED";
+    case HTTPC_ERROR_SEND_HEADER_FAILED: return "NETWORK:SEND_HEADER";
+    case HTTPC_ERROR_SEND_PAYLOAD_FAILED: return "NETWORK:SEND_PAYLOAD";
+    case HTTPC_ERROR_NOT_CONNECTED: return "NETWORK:NOT_CONNECTED";
+    case HTTPC_ERROR_CONNECTION_LOST: return "NETWORK:CONNECTION_LOST";
+    case HTTPC_ERROR_NO_STREAM: return "NETWORK:NO_STREAM";
+    case HTTPC_ERROR_NO_HTTP_SERVER: return "NETWORK:NO_HTTP_SERVER";
+    case HTTPC_ERROR_TOO_LESS_RAM: return "NETWORK:LOW_MEMORY";
+    case HTTPC_ERROR_ENCODING: return "NETWORK:ENCODING";
+    case HTTPC_ERROR_STREAM_WRITE: return "NETWORK:STREAM_WRITE";
+    case HTTPC_ERROR_READ_TIMEOUT: return "NETWORK:READ_TIMEOUT";
+    default: return String("NETWORK:ERROR_") + String(error);
+  }
+}
+
+String requestErrorCode(int error, bool https, NetworkClient &client) {
+  if (!https || error != HTTPC_ERROR_CONNECTION_REFUSED)
+    return networkErrorCode(error);
+
+  // HTTPClient flattens every failed secure connect -- including mbedTLS
+  // allocation and handshake failures -- to "connection refused". Preserve
+  // the actual TLS result so the app does not misreport another heap failure
+  // as a rejected TCP socket.
+  char detail[64] = {};
+  const int tlsError = static_cast<WiFiClientSecure &>(client).lastError(
+      detail, sizeof(detail) - 1);
+  LOG_WARN("CAPTIVE TLS final error=%d", tlsError);
+  if (tlsError == 0 || tlsError == -1) return "NETWORK:REFUSED";
+  if (tlsError == MBEDTLS_ERR_SSL_ALLOC_FAILED ||
+      tlsError == MBEDTLS_ERR_RSA_PUBLIC_FAILED + MBEDTLS_ERR_MPI_ALLOC_FAILED)
+    return "NETWORK:TLS_MEMORY";
+
+  char code[21] = {};
+  snprintf(code, sizeof(code), "NETWORK:TLS_%04X",
+           static_cast<unsigned>(-tlsError) & 0xffffu);
+  return String(code);
+}
 
 String key(const char *prefix, size_t index) {
   return String(prefix) + String(index);
@@ -252,27 +307,60 @@ class ResolvedIPv4Client final : public WiFiClient {
 
   int connect(const char *hostname, uint16_t port, int32_t timeout) override {
     LOG_WIFI("CAPTIVE TCP ip=%s port=%u", address_.toString().c_str(), port);
-    const int connected = WiFiClient::connect(address_, port, timeout);
-    if (!connected) {
-      LOG_WARN("CAPTIVE TCP failed host=%s ip=%s port=%u", hostname,
-               address_.toString().c_str(), port);
+    for (unsigned attempt = 1; attempt <= kMaxConnectAttempts; ++attempt) {
+      const int connected = WiFiClient::connect(address_, port, timeout);
+      if (connected) return connected;
+      stop();
+      if (attempt < kMaxConnectAttempts)
+        waitBeforeConnectRetry(hostname, port, attempt);
     }
-    return connected;
+    LOG_WARN("CAPTIVE TCP failed host=%s ip=%s port=%u attempts=%u", hostname,
+             address_.toString().c_str(), port, kMaxConnectAttempts);
+    return 0;
   }
 
  private:
   IPAddress address_;
 };
 
-// Variant B of the TLS A/B diagnostic: a plain WiFiClientSecure with normal
-// Arduino hostname resolution (no pre-resolved IPv4, no custom connect
-// overload) against the same host and port. Diagnostic only; the result is
-// logged, never used to carry the actual request.
+class RetryingClient final : public WiFiClient {
+ public:
+  int connect(const char *hostname, uint16_t port, int32_t timeout) override {
+    for (unsigned attempt = 1; attempt <= kMaxConnectAttempts; ++attempt) {
+      const int connected = WiFiClient::connect(hostname, port, timeout);
+      if (connected) return connected;
+      stop();
+      if (attempt < kMaxConnectAttempts)
+        waitBeforeConnectRetry(hostname, port, attempt);
+    }
+    return 0;
+  }
+};
+
+class RetryingSecureClient final : public WiFiClientSecure {
+ public:
+  RetryingSecureClient() { setHandshakeTimeout(kTlsHandshakeTimeoutSeconds); }
+
+  int connect(const char *hostname, uint16_t port, int32_t timeout) override {
+    _timeout = timeout;
+    for (unsigned attempt = 1; attempt <= kMaxConnectAttempts; ++attempt) {
+      const int connected = WiFiClientSecure::connect(hostname, port);
+      if (connected) return connected;
+      if (attempt < kMaxConnectAttempts)
+        waitBeforeConnectRetry(hostname, port, attempt);
+    }
+    return 0;
+  }
+};
+
+// Diagnostic fallback declared before the IPv4 TLS client uses it.
 void normalHostProbe(const char *hostname, uint16_t port);
 
 class ResolvedIPv4SecureClient final : public WiFiClientSecure {
  public:
-  explicit ResolvedIPv4SecureClient(const IPAddress &address) : address_(address) {}
+  explicit ResolvedIPv4SecureClient(const IPAddress &address) : address_(address) {
+    setHandshakeTimeout(kTlsHandshakeTimeoutSeconds);
+  }
 
   // mbedtls error code + text via lastError(); -1 with an empty buffer means a
   // plain TCP-level failure, not a TLS one.
@@ -341,8 +429,14 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
     // Connect the socket to the selected IPv4 address while retaining the
     // original hostname for TLS SNI. Captive HTTPS remains intentionally
     // certificate-insecure, as configured by setInsecure() below.
-    const int connected = WiFiClientSecure::connect(
-        address_, port, hostname, nullptr, nullptr, nullptr);
+    int connected = 0;
+    for (unsigned attempt = 1; attempt <= kMaxConnectAttempts; ++attempt) {
+      connected = WiFiClientSecure::connect(
+          address_, port, hostname, nullptr, nullptr, nullptr);
+      if (connected) break;
+      if (attempt < kMaxConnectAttempts)
+        waitBeforeConnectRetry(hostname, port, attempt);
+    }
     if (!connected) {
       // Diagnose in short lines; FirmwareLogBuffer keeps only 160 bytes/line.
       LOG_WARN("CAPTIVE HTTPS failed host=%s", hostname);
@@ -379,15 +473,10 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
 // Arduino hostname resolution (no pre-resolved IPv4, no custom connect
 // overload) against the same host and port. Diagnostic only; the result is
 // logged, never used to carry the actual request.
-void normalHostProbe(const char *hostname, uint16_t port);
-
-// Variant B of the TLS A/B diagnostic: a plain WiFiClientSecure with normal
-// Arduino hostname resolution (no pre-resolved IPv4, no custom connect
-// overload) against the same host and port. Diagnostic only; the result is
-// logged, never used to carry the actual request.
 void normalHostProbe(const char *hostname, uint16_t port) {
   WiFiClientSecure probe;
   probe.setInsecure();
+  probe.setHandshakeTimeout(kTlsHandshakeTimeoutSeconds);
   char detail[64] = {};
   const int connected = probe.connect(hostname, port);
   int code = -1;
@@ -487,11 +576,11 @@ HTTPResult performRequest(const String &method, String url, const String &body,
         client = std::make_unique<ResolvedIPv4Client>(resolvedAddress);
       }
     } else if (https) {
-      auto secure = std::make_unique<WiFiClientSecure>();
+      auto secure = std::make_unique<RetryingSecureClient>();
       secure->setInsecure();
       client = std::move(secure);
     } else {
-      client = std::make_unique<WiFiClient>();
+      client = std::make_unique<RetryingClient>();
     }
     LOG_WIFI("CAPTIVE HTTP method=%s host=%s family=%s", currentMethod.c_str(),
              currentHost.c_str(),
@@ -527,7 +616,7 @@ HTTPResult performRequest(const String &method, String url, const String &body,
       status = http.POST(currentBody);
     }
     if (status <= 0) {
-      result.error = String("NETWORK:") + HTTPClient::errorToString(status);
+      result.error = requestErrorCode(status, https, *client);
       http.end();
       return result;
     }
@@ -559,7 +648,7 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     if (response.overflowed()) {
       result.error = "RESPONSE_TOO_LARGE";
     } else if (written < 0) {
-      result.error = String("NETWORK:") + HTTPClient::errorToString(written);
+      result.error = networkErrorCode(written);
     } else {
       result.body = response.value();
     }
@@ -780,7 +869,8 @@ bool CaptivePortalAutomation::startForSSID(const String &ssid, bool manual) {
     g_wireGuardManager.stop();
   }
   setStatus(State::Running, ssid, manual ? "Manual run started." : "Captive portal script started.");
-  if (xTaskCreatePinnedToCore(taskEntry, "captive-http", 10240, this, 1, nullptr, 0) != pdPASS) {
+  if (xTaskCreatePinnedToCore(taskEntry, "captive-http", kTaskStackBytes, this,
+                              1, nullptr, 0) != pdPASS) {
     running_.store(false);
     finishGate(ssid, CaptivePortalPolicy::GateState::Failed);
     setStatus(State::Failed, ssid, "Could not start captive portal task.", "TASK_START");
@@ -803,8 +893,9 @@ void CaptivePortalAutomation::runTask() {
   // Stack high-water mark at run end. On ESP-IDF the stack depth type is
   // bytes, so the raw value already is the minimum free stack in bytes;
   // no words-to-bytes conversion applies (vanilla FreeRTOS docs differ).
-  // ~10 KB task stack: reduce only if this stays far below half of it
-  // across several real runs.
+  // The measured real workflow low-water mark left about 5 KB unused in the
+  // former 10 KB allocation. 8 KB retains roughly 3 KB of headroom and makes
+  // another 2 KB available to the allocation-heavy TLS handshake.
   LOG_WIFI("CAPTIVE task stack hwm=%u bytes",
            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   if (index < 0 || record.ssid.isEmpty())

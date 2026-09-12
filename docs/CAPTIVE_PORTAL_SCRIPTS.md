@@ -107,6 +107,9 @@ DNS query and connects TCP to that address. The original hostname remains the
 HTTP `Host` value, the redirect base, and the TLS SNI name for HTTPS. This is
 useful on captive networks that advertise IPv6 but intercept only IPv4 HTTP.
 `AUTO` retains the normal Arduino-ESP32 resolver behavior for existing scripts.
+TCP and TLS setup are retried with a short bounded backoff before a request is
+sent. This tolerates portal endpoints that briefly refuse connections just
+after issuing their discovery redirect without replaying a submitted form.
 
 An enabled script also gates WireGuard for its matching Wi-Fi association.
 WireGuard remains stopped while the script is waiting or running, starts only

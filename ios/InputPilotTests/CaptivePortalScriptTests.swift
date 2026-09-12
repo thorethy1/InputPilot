@@ -61,39 +61,46 @@ import XCTest
         HEADER Referer: ${BASE}/scenes/${SCENE}/
         HEADER Accept: */*
         POST_FORM ${BASE}/wbs/api/v1/create-session/ session_id=&with-tariffs=1&locale=de_DE&authorization=token%3D${url:TOKEN}
+        EXPECT_STATUS 200
         CAPTURE_JSON_FIRST SESSION session || payload.session
         POST_FORM ${BASE}/wbs/api/v1/register/free/ authorization=session%3D${url:SESSION}&registration_type=terms-only&registration%5Bterms%5D=1
-        CAPTURE_JSON REGISTER_OK ok
+        EXPECT_STATUS 200
+        CAPTURE_JSON_FIRST REGISTER_OK ok
         IF_VAR_EQUALS REGISTER_OK true GOTO registered
-        FAIL REGISTER_FAILED Registration failed
+        FAIL REGISTER_FAILED
         LABEL registered
         POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
-        CAPTURE_JSON LOGGED_IN loggedIn
+        EXPECT_STATUS 200
+        CAPTURE_JSON_FIRST LOGGED_IN loggedIn
         IF_VAR_EQUALS LOGGED_IN true GOTO success
         WAIT 1000
         POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
-        CAPTURE_JSON LOGGED_IN loggedIn
+        EXPECT_STATUS 200
+        CAPTURE_JSON_FIRST LOGGED_IN loggedIn
         IF_VAR_EQUALS LOGGED_IN true GOTO success
         WAIT 1000
         POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
-        CAPTURE_JSON LOGGED_IN loggedIn
+        EXPECT_STATUS 200
+        CAPTURE_JSON_FIRST LOGGED_IN loggedIn
         IF_VAR_EQUALS LOGGED_IN true GOTO success
         WAIT 1000
         POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
-        CAPTURE_JSON LOGGED_IN loggedIn
+        EXPECT_STATUS 200
+        CAPTURE_JSON_FIRST LOGGED_IN loggedIn
         IF_VAR_EQUALS LOGGED_IN true GOTO success
         WAIT 1000
         POST_FORM ${BASE}/wbs/api/v1/login/status/ authorization=session%3D${url:SESSION}
-        CAPTURE_JSON LOGGED_IN loggedIn
+        EXPECT_STATUS 200
+        CAPTURE_JSON_FIRST LOGGED_IN loggedIn
         IF_VAR_EQUALS LOGGED_IN true GOTO success
-        FAIL LOGIN_NOT_CONFIRMED Login was not confirmed
+        FAIL LOGIN_NOT_CONFIRMED
         LABEL success
-        SUCCESS WLAN freigeschaltet
+        SUCCESS
         LABEL online
-        ALREADY_CONNECTED Internet already available
+        ALREADY_CONNECTED
         """
 
-        XCTAssertEqual(script.lengthOfBytes(using: .utf8), 2_057)
+        XCTAssertEqual(script.lengthOfBytes(using: .utf8), 2_128)
         XCTAssertNoThrow(try CaptivePortalScriptValidator.validate(script))
     }
 
