@@ -77,7 +77,7 @@ class BuildFlasherSiteTests(unittest.TestCase):
         )
         self.assertTrue((self.output / ".nojekyll").exists())
         self.assertTrue((self.output / "en" / "index.html").exists())
-        self.assertTrue((self.output / "assets" / "inputpilot-logo.svg").exists())
+        self.assertTrue((self.output / "assets" / "inputpilot-mark-v2.svg").exists())
 
     def test_rejects_prerelease(self) -> None:
         with self.assertRaisesRegex(ValueError, "stable release"):
