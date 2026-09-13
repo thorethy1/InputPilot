@@ -24,9 +24,9 @@ class BuildFlasherSiteTests(unittest.TestCase):
         self.source = self.root / "source"
         self.source.mkdir()
         for name in MODULE.STATIC_FILES:
-            (self.source / name).write_text(f"test {name}\n", encoding="utf-8")
-        self.logo = self.root / "logo.svg"
-        self.logo.write_text("<svg/>\n", encoding="utf-8")
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"test {name}\n", encoding="utf-8")
         self.firmware = self.root / MODULE.FIRMWARE_NAME
         self.firmware.write_bytes(b"inputpilot-initial-image")
         self.release_json = self.root / "release.json"
@@ -55,7 +55,7 @@ class BuildFlasherSiteTests(unittest.TestCase):
     def build(self, release: dict) -> None:
         self.release_json.write_text(json.dumps(release), encoding="utf-8")
         MODULE.build_site(
-            self.source, self.output, self.release_json, self.firmware, self.logo
+            self.source, self.output, self.release_json, self.firmware
         )
 
     def test_builds_same_origin_manifest_for_stable_release(self) -> None:
@@ -76,6 +76,8 @@ class BuildFlasherSiteTests(unittest.TestCase):
             self.firmware.read_bytes(),
         )
         self.assertTrue((self.output / ".nojekyll").exists())
+        self.assertTrue((self.output / "en" / "index.html").exists())
+        self.assertTrue((self.output / "assets" / "inputpilot-logo.svg").exists())
 
     def test_rejects_prerelease(self) -> None:
         with self.assertRaisesRegex(ValueError, "stable release"):

@@ -12,7 +12,13 @@ from pathlib import Path
 
 
 TAG_PATTERN = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)$")
-STATIC_FILES = ("index.html", "styles.css", "app.js")
+STATIC_FILES = (
+    "index.html",
+    "styles.css",
+    "app.js",
+    "en/index.html",
+    "assets/inputpilot-logo.svg",
+)
 FIRMWARE_NAME = "InitialFirmware.bin"
 
 
@@ -29,7 +35,6 @@ def build_site(
     output: Path,
     release_json: Path,
     firmware: Path,
-    logo: Path,
 ) -> None:
     release = json.loads(release_json.read_text(encoding="utf-8"))
     if release.get("draft") is not False or release.get("prerelease") is not False:
@@ -62,8 +67,9 @@ def build_site(
     (output / "firmware").mkdir()
 
     for name in STATIC_FILES:
-        shutil.copyfile(source / name, output / name)
-    shutil.copyfile(logo, output / "assets" / "inputpilot-icon.svg")
+        destination = output / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / name, destination)
     shutil.copyfile(firmware, output / "firmware" / FIRMWARE_NAME)
     (output / ".nojekyll").touch()
 
@@ -105,9 +111,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--release-json", type=Path, required=True)
     parser.add_argument("--firmware", type=Path, required=True)
-    parser.add_argument("--logo", type=Path, required=True)
     args = parser.parse_args()
-    build_site(args.source, args.output, args.release_json, args.firmware, args.logo)
+    build_site(args.source, args.output, args.release_json, args.firmware)
 
 
 if __name__ == "__main__":
