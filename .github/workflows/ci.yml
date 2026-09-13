@@ -68,6 +68,7 @@ jobs:
         if: ${{ !inputs.release_only }}
         working-directory: ${{ github.workspace }}
         run: |
+          python .github/scripts/test_build_flasher_site.py
           python .github/scripts/test_package_release_assets.py
           python .github/scripts/test_update_altstore_feed.py
           python .github/scripts/test_versioning.py
