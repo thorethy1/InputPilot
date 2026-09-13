@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
-  <title id="title">InputPilot</title>
-  <rect x="2" y="2" width="44" height="44" rx="12" fill="#ff2438"/>
-  <path d="M9 22.2 39 9 29.8 39 22 28.1 14.3 32l2.8-7.2L9 22.2Z" fill="#fff"/>
-  <path d="m17.1 24.8 21.9-15L22 28.1" fill="none" stroke="#ffb0b8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>

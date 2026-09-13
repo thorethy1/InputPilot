@@ -17,7 +17,7 @@ STATIC_FILES = (
     "styles.css",
     "app.js",
     "en/index.html",
-    "assets/inputpilot-logo.svg",
+    "assets/inputpilot-mark-v2.svg",
 )
 FIRMWARE_NAME = "InitialFirmware.bin"
 
