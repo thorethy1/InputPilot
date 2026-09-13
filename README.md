@@ -22,7 +22,11 @@ WS2812).
 - [Aliexpress listing](https://a.aliexpress.com/_ExnnLN0)
 - [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md)
 
-2. Build & Flash
+### 2. Flash firmware
+
+For the first installation, use the **[InputPilot Web Flasher](https://thorethy1.github.io/InputPilot/)** in Chrome or Edge on a desktop computer. It automatically installs the newest stable `InitialFirmware.bin` release and includes the complete bootloader, partition table, OTA bootstrap data, and InputPilot firmware.
+
+Alternatively, flash the release image from the command line:
 
 ```bash
 # Install dependencies
@@ -42,12 +46,12 @@ esptool --chip esp32s3 \
   --port /dev/ttyACM0 \
   erase-flash
 # Flash the complete InputPilot image
-# initial-flash.bin contains the bootloader, partition table,
+# InitialFirmware.bin contains the bootloader, partition table,
 # OTA boot data, and InputPilot firmware.
 esptool --chip esp32s3 \
   --port /dev/ttyACM0 \
   --baud 460800 \
-  write-flash 0x0 initial-flash.bin
+  write-flash 0x0 InitialFirmware.bin
 # Disconnect and reconnect the USB cable.
 ```
 

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="InputPilot direkt im Browser auf einen Waveshare ESP32-S3-Zero flashen.">
+    <meta name="theme-color" content="#090b10">
+    <title>InputPilot Web-Flasher</title>
+    <link rel="icon" href="assets/inputpilot-icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="app.js"></script>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="site-header shell">
+      <a class="brand" href="./" aria-label="InputPilot Web-Flasher Startseite">
+        <img src="assets/inputpilot-icon.svg" alt="" width="38" height="38">
+        <span>InputPilot</span>
+      </a>
+      <a class="repo-link" href="https://github.com/thorethy1/InputPilot">GitHub Repository</a>
+    </header>
+
+    <main>
+      <section class="hero shell">
+        <div class="hero-copy">
+          <p class="eyebrow">USB-Erstinstallation</p>
+          <h1>InputPilot.<br><span>Einstecken. Flashen. Loslegen.</span></h1>
+          <p class="lede">
+            Installiere die neueste stabile Initial-Firmware direkt aus deinem Browser –
+            ohne Entwicklungsumgebung und ohne Kommandozeile.
+          </p>
+
+          <div class="release-line" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="release-status">Neueste stabile Version wird ermittelt …</span>
+          </div>
+        </div>
+
+        <aside class="installer-card" aria-labelledby="installer-title">
+          <div class="board-mark" aria-hidden="true">
+            <span></span><span></span><span></span><span></span>
+            <strong>S3</strong>
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <p class="card-kicker">Bereit zum Installieren</p>
+          <h2 id="installer-title">Waveshare ESP32-S3-Zero</h2>
+          <p class="card-detail">ESP32-S3FH4R2 · 4 MB Flash</p>
+
+          <esp-web-install-button manifest="manifest.json">
+            <button class="install-button" slot="activate" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 17v2h14v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              Firmware installieren
+            </button>
+            <div class="browser-warning" slot="unsupported">
+              Der Web-Flasher benötigt Chrome oder Edge auf einem Desktop-Computer.
+            </div>
+            <div class="browser-warning" slot="not-allowed">
+              Der serielle Zugriff ist hier blockiert. Öffne diese Seite direkt über HTTPS.
+            </div>
+          </esp-web-install-button>
+
+          <p class="erase-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 4.6 3.2 17a2 2 0 0 0 1.7 3h14.2a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            Die Installation löscht vorhandene Einstellungen auf dem Board.
+          </p>
+        </aside>
+      </section>
+
+      <section class="instructions shell" aria-labelledby="instructions-title">
+        <div class="section-heading">
+          <p class="eyebrow">In drei Schritten</p>
+          <h2 id="instructions-title">So funktioniert’s</h2>
+          <p>Du brauchst das unterstützte Board, ein USB-C-Datenkabel und etwa zwei Minuten.</p>
+        </div>
+
+        <ol class="steps">
+          <li>
+            <span class="step-number">01</span>
+            <div>
+              <h3>Board verbinden</h3>
+              <p>Verbinde den ESP32-S3-Zero mit einem USB-C-<strong>Datenkabel</strong> direkt mit deinem Computer.</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div>
+              <h3>Download-Modus starten</h3>
+              <p>Halte <kbd>BOOT</kbd> gedrückt, drücke kurz <kbd>RESET</kbd> und lasse danach <kbd>BOOT</kbd> los.</p>
+              <details>
+                <summary>Mein Board hat keinen RESET-Taster</summary>
+                <p>USB abziehen, <kbd>BOOT</kbd> gedrückt halten, USB wieder einstecken und anschließend <kbd>BOOT</kbd> loslassen.</p>
+              </details>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div>
+              <h3>Installieren</h3>
+              <p>Klicke oben auf „Firmware installieren“, wähle den ESP32-S3-Port und bestätige die Installation. Ziehe das Board danach einmal ab und stecke es wieder ein.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="aftercare shell" aria-labelledby="aftercare-title">
+        <div>
+          <p class="eyebrow">Nach dem Flashen</p>
+          <h2 id="aftercare-title">Sicher mit der App koppeln</h2>
+        </div>
+        <p>
+          Öffne InputPilot auf deinem iPhone und wähle <strong>„Gerät hinzufügen → Sicher einrichten“</strong>.
+          Zukünftige Firmware-Updates installierst du bequem und authentifiziert über die App – dieser
+          Web-Flasher ist für die Erstinstallation und Wiederherstellung gedacht.
+        </p>
+      </section>
+
+      <section class="support shell" aria-labelledby="support-title">
+        <div>
+          <p class="eyebrow">Gut zu wissen</p>
+          <h2 id="support-title">Browser &amp; Fehlerbehebung</h2>
+        </div>
+        <div class="support-grid">
+          <article>
+            <h3>Welcher Browser?</h3>
+            <p>Nutze Chrome oder Edge unter Windows, macOS oder Linux. Safari, Firefox und Browser auf iPhone/iPad unterstützen Web Serial nicht.</p>
+          </article>
+          <article>
+            <h3>Kein Gerät sichtbar?</h3>
+            <p>Prüfe das Datenkabel, schließe serielle Monitore und wiederhole den Download-Modus. Lade-Only-Kabel funktionieren nicht.</p>
+          </article>
+          <article>
+            <h3>Welche Firmware?</h3>
+            <p>Die Seite veröffentlicht ausschließlich <code>InitialFirmware.bin</code> aus dem neuesten stabilen GitHub Release. Beta-Releases werden ignoriert.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell">
+      <p>InputPilot · Lokale Steuerung, keine Cloud-Verbindung.</p>
+      <div>
+        <a href="https://github.com/thorethy1/InputPilot/blob/main/usb-hid-s3/docs/HARDWARE.md">Hardware-Anleitung</a>
+        <a href="https://github.com/thorethy1/InputPilot/releases/latest">Aktuelles Release</a>
+      </div>
+    </footer>
+  </body>
+</html>

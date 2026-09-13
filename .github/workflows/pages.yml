@@ -1,0 +1,80 @@
+name: Deploy web flasher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/flasher/**
+      - .github/inputpilot-icon.svg
+      - .github/scripts/build_flasher_site.py
+      - .github/workflows/pages.yml
+  workflow_run:
+    workflows: [Attach release assets]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Resolve latest stable firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p flasher-build
+          curl --fail --silent --show-error --location --retry 3 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" \
+            -o flasher-build/latest-release.json
+
+          asset_url="$(jq -er '
+            select(.draft == false and .prerelease == false)
+            | [.assets[] | select(.name == "InitialFirmware.bin" and .state == "uploaded")]
+            | select(length == 1) | .[0].browser_download_url
+          ' flasher-build/latest-release.json)"
+          curl --fail --silent --show-error --location --retry 3 \
+            "$asset_url" -o flasher-build/InitialFirmware.bin
+
+      - name: Build and verify site
+        run: |
+          python3 .github/scripts/build_flasher_site.py \
+            --source docs/flasher \
+            --output flasher-build/site \
+            --release-json flasher-build/latest-release.json \
+            --firmware flasher-build/InitialFirmware.bin \
+            --logo .github/inputpilot-icon.svg
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: flasher-build/site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
