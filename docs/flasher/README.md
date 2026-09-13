@@ -1,6 +1,6 @@
 # InputPilot Web Flasher
 
-The static source for <https://thorethy1.github.io/InputPilot/> lives in this directory. The deployed site is built by [the Pages workflow](../../.github/workflows/pages.yml); generated firmware and manifest files are intentionally not committed.
+The German page at <https://thorethy1.github.io/InputPilot/> and English page at <https://thorethy1.github.io/InputPilot/en/> live in this directory. The deployed site is built by [the Pages workflow](../../.github/workflows/pages.yml); generated firmware and manifest files are intentionally not committed.
 
 ## One-time repository setup
 

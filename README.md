@@ -24,7 +24,7 @@ WS2812).
 
 ### 2. Flash firmware
 
-For the first installation, use the **[InputPilot Web Flasher](https://thorethy1.github.io/InputPilot/)** in Chrome or Edge on a desktop computer. It automatically installs the newest stable `InitialFirmware.bin` release and includes the complete bootloader, partition table, OTA bootstrap data, and InputPilot firmware.
+For the first installation, use the **InputPilot Web Flasher** ([Deutsch](https://thorethy1.github.io/InputPilot/) · [English](https://thorethy1.github.io/InputPilot/en/)) in Chrome or Edge on a desktop computer. It automatically installs the newest stable `InitialFirmware.bin` release and includes the complete bootloader, partition table, OTA bootstrap data, and InputPilot firmware.
 
 Alternatively, flash the release image from the command line:
 

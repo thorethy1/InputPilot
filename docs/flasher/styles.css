@@ -97,6 +97,49 @@ a {
   transition: color 160ms ease;
 }
 
+.header-actions,
+.language-switch {
+  display: flex;
+  align-items: center;
+}
+
+.header-actions {
+  gap: 24px;
+}
+
+.language-switch {
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.language-switch a,
+.language-switch span {
+  min-width: 32px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.language-switch span[aria-current="page"] {
+  background: var(--accent);
+  color: white;
+}
+
+.language-switch a {
+  color: var(--muted);
+}
+
+.language-switch a:hover {
+  color: var(--text);
+}
+
 .repo-link:hover,
 .site-footer a:hover {
   color: var(--text);
@@ -514,12 +557,11 @@ details p {
   }
 
   .repo-link {
-    font-size: 0;
+    display: none;
   }
 
-  .repo-link::after {
-    font-size: 0.82rem;
-    content: "GitHub";
+  .header-actions {
+    gap: 10px;
   }
 
   .hero {
