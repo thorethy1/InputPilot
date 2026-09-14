@@ -434,7 +434,8 @@ HTTPResult performRequest(const String &method, String url, const String &body,
   String currentMethod = method;
   String currentBody = body;
   String currentContentType = contentType;
-  for (int redirects = 0; redirects <= 10; ++redirects) {
+  unsigned readRetries = 0;
+  for (int redirects = 0; redirects <= 10;) {
     const String currentHost = host(url);
     if (requiredHostSuffix.length()) {
       if (!currentHost.endsWith(requiredHostSuffix) ||
@@ -443,7 +444,6 @@ HTTPResult performRequest(const String &method, String url, const String &body,
         return result;
       }
     }
-    HTTPClient http;
     IPAddress resolvedAddress;
     if (addressFamily == CaptivePortalPolicy::AddressFamily::IPv4 &&
         !resolveIPv4(currentHost, resolvedAddress)) {
@@ -470,6 +470,12 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     } else {
       client = std::make_unique<RetryingClient>();
     }
+    // HTTPClient borrows this client, including in its destructor. Declare it
+    // AFTER the owner so it is destroyed first, even on errors/redirects.
+    // end() alone is insufficient: Arduino retains _client for closed sockets
+    // and reusable connections.
+    HTTPClient http;
+    http.setReuse(false);
     LOG_WIFI("CAPTIVE HTTP method=%s host=%s family=%s", currentMethod.c_str(),
              currentHost.c_str(),
              CaptivePortalPolicy::addressFamilyName(addressFamily));
@@ -512,8 +518,18 @@ HTTPResult performRequest(const String &method, String url, const String &body,
       status = http.POST(currentBody);
     }
     if (status <= 0) {
+      LOG_WARN("CAPTIVE request failed phase=headers status=%d hop=%d", status,
+               redirects);
       result.error = requestErrorCode(status, https, *client);
       http.end();
+      if (currentMethod == "GET" && readRetries == 0 &&
+          (status == HTTPC_ERROR_READ_TIMEOUT ||
+           status == HTTPC_ERROR_CONNECTION_LOST)) {
+        ++readRetries;
+        LOG_WARN("CAPTIVE GET read retry=1/1 hop=%d", redirects);
+        // The loop destroys HTTPClient and the transport before reconnecting.
+        continue;
+      }
       return result;
     }
     LOG_WIFI("CAPTIVE HTTP status=%d", status);
@@ -530,6 +546,8 @@ HTTPResult performRequest(const String &method, String url, const String &body,
         currentContentType = "";
       }
       url = next;
+      ++redirects;
+      readRetries = 0;
       continue;
     }
     result.status = status;
@@ -544,8 +562,11 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     if (response.overflowed()) {
       result.error = "RESPONSE_TOO_LARGE";
     } else if (written < 0) {
+      LOG_WARN("CAPTIVE request failed phase=body status=%d hop=%d", written,
+               redirects);
       result.error = networkErrorCode(written);
     } else {
+      result.error = "";
       result.body = response.value();
     }
     http.end();
