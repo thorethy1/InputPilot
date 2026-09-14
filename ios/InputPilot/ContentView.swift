@@ -16,11 +16,44 @@ struct ContentView: View {
     @Query(sort: \StoredDevice.displayName) private var storedDevices: [StoredDevice]
     @StateObject private var viewModel = HomeViewModel()
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
+    @AppStorage("firstRunSetupStatus") private var firstRunSetupStatus = ""
 
     @State private var showAddWizard = false
     @State private var selectedTab = InputPilotTab.devices
+    @State private var deferredFirstRunForSession = false
+    @State private var evaluatedFirstRun = false
 
     var body: some View {
+        Group {
+            if shouldShowFirstRun {
+                AddDeviceWizardView(flow: .firstRun) { completed in
+                    if completed { firstRunSetupStatus = "complete" }
+                    else { deferredFirstRunForSession = true }
+                }
+            } else {
+                mainTabs
+            }
+        }
+        .onAppear {
+            // Existing installations already have a configured device and must
+            // not be sent through first-run setup after upgrading the app.
+            if firstRunSetupStatus.isEmpty, !storedDevices.isEmpty {
+                firstRunSetupStatus = "complete"
+            } else if firstRunSetupStatus.isEmpty {
+                firstRunSetupStatus = "inProgress"
+            }
+            evaluatedFirstRun = true
+        }
+    }
+
+    private var shouldShowFirstRun: Bool {
+        guard evaluatedFirstRun,
+              !deferredFirstRunForSession,
+              firstRunSetupStatus != "complete" else { return false }
+        return storedDevices.isEmpty || firstRunSetupStatus == "inProgress"
+    }
+
+    private var mainTabs: some View {
         TabView(selection: $selectedTab) {
           NavigationStack {
             Group {

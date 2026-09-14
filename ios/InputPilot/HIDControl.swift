@@ -996,6 +996,7 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     private var metadataTimeoutWork: DispatchWorkItem?
     private var invalidHandleRetriesRemaining = 0
     private var reconnectingAfterInvalidHandle = false
+    private var scanRequested = false
     private let otaService = CBUUID(string: "7D9F1001-4F4D-4F56-4552-484944000001")
     private let otaStatus = CBUUID(string: "7D9F1004-4F4D-4F56-4552-484944000001")
 
@@ -1017,8 +1018,19 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
     static func advertisement(_ advertisementData: [String: Any], matches deviceId: String) -> Bool {
         advertisementDeviceId(advertisementData) == deviceId.lowercased()
     }
-    func start() { devices = []; errorMessage = nil; isScanning = true; if central.state == .poweredOn { central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]) } }
-    func stop() { central.stopScan(); isScanning = false }
+    func start() {
+        devices = []
+        scanRequested = true
+        errorMessage = radioError(for: central.state)
+        isScanning = central.state == .poweredOn
+        if central.state == .poweredOn {
+            central.scanForPeripherals(
+                withServices: nil,
+                options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+            )
+        }
+    }
+    func stop() { scanRequested = false; central.stopScan(); isScanning = false }
     func metadata(for device: BLEDiscoveredDevice) async throws -> BLEDeviceMetadata {
         guard let peripheral = peripherals[device.id] else { throw TransportError.unavailable }
         stop(); selected = peripheral
@@ -1032,8 +1044,29 @@ final class BLEDeviceDiscoveryManager: NSObject, ObservableObject, CBCentralMana
         }
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn, isScanning { central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]) }
-        else if central.state != .poweredOn { isScanning = false }
+        errorMessage = radioError(for: central.state)
+        if central.state == .poweredOn, scanRequested {
+            isScanning = true
+            central.scanForPeripherals(
+                withServices: nil,
+                options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+            )
+        } else if central.state != .poweredOn {
+            isScanning = false
+        }
+    }
+
+    private func radioError(for state: CBManagerState) -> String? {
+        switch state {
+        case .unauthorized:
+            "Bluetooth access is disabled for InputPilot. Allow it in Settings, then return here."
+        case .poweredOff:
+            "Bluetooth is off. Turn it on in Control Center or Settings, then retry."
+        case .unsupported:
+            "Bluetooth Low Energy is not supported on this iPhone."
+        default:
+            nil
+        }
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard let deviceId = Self.advertisementDeviceId(advertisementData) else { return }
@@ -2825,7 +2858,15 @@ enum InputPilotWiFiManager {
         }
     }
     func supports(_ capability: String) -> Bool {
-        initialCapabilities.contains(capability) || device?.capabilities.contains(capability) == true
+        let capabilities = initialCapabilities.union(device?.capabilities ?? [])
+        if capabilities.contains(capability) { return true }
+        // BLE discovery intentionally omits fine-grained mouse flags to keep
+        // its GATT metadata below the 512-byte limit. protocol_core guarantees
+        // these operations, so a newly configured BLE-only device must not lose
+        // its pointer controls merely because no Wi-Fi status was merged yet.
+        return capabilities.contains("protocol_core") && [
+            "mouse_move", "mouse_click", "mouse_button_state", "mouse_scroll"
+        ].contains(capability)
     }
     func supports(_ event: HIDEvent) -> Bool { requiredCapability(for: event).map { supports($0) } ?? true }
     var unsupportedControlMessages: [String] {

@@ -1,10 +1,25 @@
 import Foundation
 import SwiftData
 
+enum InputPilotLinks {
+    static let webFlasher = URL(string: "https://thorethy1.github.io/InputPilot/en/")!
+}
+
 enum AddDeviceWizardStep: Equatable {
+    case welcome
+    case hardware
     case securePairing
     case bleScanning
     case confirmBLE(BLEDeviceMetadata)
+    case connectionTest
+    case mouseTest
+    case keyboardTest
+    case complete
+}
+
+enum DeviceSetupFlow: Equatable {
+    case addDevice
+    case firstRun
 }
 
 @MainActor
@@ -15,7 +30,8 @@ final class AddDeviceWizardViewModel: ObservableObject {
         case unavailable
     }
 
-    @Published private(set) var step: AddDeviceWizardStep = .securePairing
+    let flow: DeviceSetupFlow
+    @Published private(set) var step: AddDeviceWizardStep
     @Published private(set) var candidates: [DiscoveredService] = []
     @Published private(set) var isSaving = false
     @Published var errorMessage: String?
@@ -25,12 +41,19 @@ final class AddDeviceWizardViewModel: ObservableObject {
     @Published var configureWiFi = true
     @Published private(set) var mergeMessage: String?
     @Published private(set) var securelyPairedDeviceId: String?
+    @Published private(set) var savedDeviceId: String?
     @Published private(set) var knownDevices = SavedDeviceIndex.empty
 
     private let browser: any BonjourBrowserProtocol
     private let apiClient: any DeviceAPIClientProtocol
 
-    init(browser: any BonjourBrowserProtocol = BonjourBrowser(), apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()) {
+    init(
+        flow: DeviceSetupFlow = .addDevice,
+        browser: any BonjourBrowserProtocol = BonjourBrowser(),
+        apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()
+    ) {
+        self.flow = flow
+        step = flow == .firstRun ? .welcome : .securePairing
         self.browser = browser
         self.apiClient = apiClient
     }
@@ -39,7 +62,40 @@ final class AddDeviceWizardViewModel: ObservableObject {
         if case let .confirmBLE(metadata) = step { metadata } else { nil }
     }
 
-    func updateKnownDevices(_ devices: [StoredDevice]) { knownDevices = SavedDeviceIndex(devices: devices) }
+    var supportsWiFiSetup: Bool {
+        guard let metadata = bleMetadata else { return false }
+        return metadata.capabilities.contains("wifi_transport") &&
+            metadata.capabilities.contains("secure_wifi_setup")
+    }
+
+    func updateKnownDevices(_ devices: [StoredDevice]) {
+        knownDevices = SavedDeviceIndex(devices: devices)
+        // A first-run device is persisted before the physical HID tests. If the
+        // app is terminated there, resume at the non-destructive connection
+        // check instead of asking for USB trust and credentials again.
+        if flow == .firstRun, step == .welcome, let device = devices.first {
+            savedDeviceId = device.deviceId
+            step = .connectionTest
+        }
+    }
+
+    func continueFromWelcome() {
+        guard flow == .firstRun else { return }
+        errorMessage = nil
+        step = .hardware
+    }
+
+    func continueFromHardware() {
+        guard flow == .firstRun else { return }
+        errorMessage = nil
+        step = .securePairing
+    }
+
+    func backToWelcome() {
+        guard flow == .firstRun else { return }
+        errorMessage = nil
+        step = .welcome
+    }
 
     func chooseSecureSetup() {
         browser.stopBrowsing()
@@ -66,10 +122,12 @@ final class AddDeviceWizardViewModel: ObservableObject {
         }
         guard metadata.protocolVersion == 2,
               metadata.capabilities.contains("secure_protocol_v2"),
-              metadata.capabilities.contains("secure_wifi_setup") else {
+              metadata.capabilities.contains("ble_transport") else {
             errorMessage = "This firmware is incompatible. Reflash current InputPilot firmware over USB."
             return
         }
+        configureWiFi = metadata.capabilities.contains("wifi_transport") &&
+            metadata.capabilities.contains("secure_wifi_setup")
         if let existing = knownDevices.match(deviceId: metadata.deviceId) {
             displayName = existing.displayName
             mergeMessage = "The secure transports will be merged with this InputPilot."
@@ -87,6 +145,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
         mergeMessage = nil
         securelyPairedDeviceId = nil
         step = .securePairing
+    }
+
+    func backFromPairing() {
+        if flow == .firstRun {
+            errorMessage = nil
+            step = .hardware
+        }
     }
 
     func backFromConfirm() {
@@ -107,7 +172,37 @@ final class AddDeviceWizardViewModel: ObservableObject {
         configureWiFi = true
         mergeMessage = nil
         securelyPairedDeviceId = nil
-        step = .securePairing
+        savedDeviceId = nil
+        step = flow == .firstRun ? .welcome : .securePairing
+    }
+    func connectionTestPassed() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .mouseTest
+    }
+
+    func mouseTestPassed() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .keyboardTest
+    }
+
+    func keyboardTestPassed() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .complete
+    }
+
+    func backToConnectionTest() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .connectionTest
+    }
+
+    func backToMouseTest() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .mouseTest
     }
 
     func saveDevice(context: ModelContext) async throws {
@@ -129,6 +224,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         if !configureWiFi {
             _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
             browser.stopBrowsing()
+            didSaveDevice(metadata.deviceId)
             return
         }
 
@@ -238,6 +334,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
         _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
         _ = try await repository.addFromDiscovery(status: status, fallbackHost: candidate.host, displayName: trimmedName)
         browser.stopBrowsing()
+        didSaveDevice(metadata.deviceId)
+    }
+
+    private func didSaveDevice(_ deviceId: String) {
+        homeWifiPassword = ""
+        savedDeviceId = deviceId.lowercased()
+        if flow == .firstRun { step = .connectionTest }
     }
 
     private func waitForSecureWiFiAddress(

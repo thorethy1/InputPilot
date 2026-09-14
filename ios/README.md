@@ -4,12 +4,24 @@ The iOS app supports Secure Protocol v2 devices only.
 
 ## Setup lifecycle
 
-1. Discover the InputPilot over BLE.
+On a fresh install, the app guides the user through hardware preparation before
+requesting Bluetooth access. The complete flow is:
+
+1. Review the required ESP32-S3 hardware and USB data cable. If the board has
+   not been prepared yet, open or share the official
+   [InputPilot Web Flasher](https://thorethy1.github.io/InputPilot/en/) for use
+   with Chrome or Edge on a desktop computer.
 2. Establish trust through USB HID pairing.
-3. Authenticate the BLE Secure Protocol session.
-4. Send Wi-Fi credentials through that encrypted session.
-5. Rediscover the same device identity on the home network.
-6. Authenticate its Wi-Fi/TCP Secure Protocol session and save the device.
+3. Discover the same device identity over BLE and authenticate Secure Protocol v2.
+4. Optionally send Wi-Fi credentials through that authenticated BLE session.
+5. If Wi-Fi was selected, rediscover and authenticate the same identity over TCP.
+6. Verify an authenticated control connection, pointer movement, and keyboard output.
+
+Bluetooth-only setup is a complete supported path. Bluetooth is initialized only
+when its setup step becomes visible; Local Network access is explained immediately
+before optional Wi-Fi discovery. If the app exits after the device is saved but
+before the physical HID checks finish, first-run setup resumes at the connection
+test. Existing installations with a saved device skip the first-run experience.
 
 Public HTTP is used only for discovery metadata. HID control, keyboard input,
 presets, keep-awake settings, Wi-Fi configuration, USB identity, diagnostics,
