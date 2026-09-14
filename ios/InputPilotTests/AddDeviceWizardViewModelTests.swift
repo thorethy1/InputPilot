@@ -10,7 +10,7 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
     func testWebFlasherUsesOfficialHTTPSPage() {
         XCTAssertEqual(InputPilotLinks.webFlasher.scheme, "https")
         XCTAssertEqual(InputPilotLinks.webFlasher.host, "thorethy1.github.io")
-        XCTAssertEqual(InputPilotLinks.webFlasher.path, "/InputPilot/en/")
+        XCTAssertEqual(InputPilotLinks.webFlasher.absoluteString, "https://thorethy1.github.io/InputPilot/en/")
     }
 
     func testUSBTrustIsRequiredBeforeBluetoothStep() {
