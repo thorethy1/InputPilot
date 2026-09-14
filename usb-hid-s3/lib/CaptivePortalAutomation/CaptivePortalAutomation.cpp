@@ -235,17 +235,7 @@ String host(const String &url) {
 }
 
 String resolveURL(const String &base, const String &location) {
-  if (location.startsWith("http://") || location.startsWith("https://")) return location;
-  const int schemeEnd = base.indexOf("://");
-  if (location.startsWith("//") && schemeEnd > 0)
-    return base.substring(0, schemeEnd) + ":" + location;
-  const String baseOrigin = origin(base);
-  if (location.startsWith("/")) return baseOrigin + location;
-  const int query = base.indexOf('?');
-  const String withoutQuery = query < 0 ? base : base.substring(0, query);
-  const int slash = withoutQuery.lastIndexOf('/');
-  return (slash > schemeEnd + 2 ? withoutQuery.substring(0, slash + 1)
-                                : baseOrigin + "/") + location;
+  return String(CaptivePortalParsing::resolveRedirect(base.c_str(), location.c_str()).c_str());
 }
 
 String expand(const String &input, const std::map<std::string, String> &variables,
@@ -536,6 +526,14 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     const String location = http.header("Location");
     if (status >= 300 && status < 400 && location.length()) {
       const String next = resolveURL(url, location);
+      if (next.isEmpty() || next.length() > kMaxRequestURLBytes ||
+          next.indexOf('\r') >= 0 || next.indexOf('\n') >= 0) {
+        result.error = "INVALID_REDIRECT";
+        return result;
+      }
+      LOG_WIFI("CAPTIVE redirect hop=%d query_only=%s bytes=%u", redirects,
+               location.startsWith("?") ? "yes" : "no",
+               static_cast<unsigned>(next.length()));
       http.end();
       // Match conventional HTTP client behavior: 301/302/303 turn a POST into
       // a GET, while 307/308 explicitly retain the method and request body.
@@ -576,18 +574,11 @@ HTTPResult performRequest(const String &method, String url, const String &body,
   return result;
 }
 
-std::vector<String> lines(const String &script) {
-  std::vector<String> result;
-  size_t cursor = 0;
-  while (cursor <= script.length()) {
-    const int newline = script.indexOf('\n', cursor);
-    String line = newline < 0 ? script.substring(cursor) : script.substring(cursor, newline);
-    if (line.endsWith("\r")) line.remove(line.length() - 1);
-    result.push_back(line);
-    if (newline < 0) break;
-    cursor = static_cast<size_t>(newline + 1);
-  }
-  return result;
+String scriptLine(std::string_view view) {
+  String line;
+  line.concat(view.data(), view.size());
+  line.trim();
+  return line;
 }
 
 }  // namespace
@@ -822,10 +813,11 @@ void CaptivePortalAutomation::runTask() {
 }
 
 void CaptivePortalAutomation::run(const ScriptRecord &record) {
-  const std::vector<String> program = lines(record.script);
+  const auto program = CaptivePortalParsing::scriptLines(
+      std::string_view(record.script.c_str(), record.script.length()));
   std::map<std::string, size_t> labels;
   for (size_t i = 0; i < program.size(); ++i) {
-    const String line = trimmed(program[i]);
+    const String line = scriptLine(program[i]);
     if (line.startsWith("LABEL ")) labels[std::string(trimmed(line.substring(6)).c_str())] = i;
   }
   std::map<std::string, String> variables;
@@ -839,9 +831,16 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
   size_t pc = 0;
   size_t steps = 0;
   auto fail = [&](const String &code, const String &message) {
-    LOG_WARN("captive ssid=\"%s\" error=%s", record.ssid.c_str(), code.c_str());
+    const bool errorPage = last.status >= 400 &&
+        (code == "CAPTURE_MISSING" || code == "JSON_VALUE_MISSING");
+    const String error = errorPage ? String("HTTP_") + String(last.status) : code;
+    const String detail = errorPage
+        ? String("The portal returned HTTP ") + String(last.status) +
+              " instead of the expected page."
+        : message;
+    LOG_WARN("captive ssid=\"%s\" error=%s", record.ssid.c_str(), error.c_str());
     finishGate(record.ssid, CaptivePortalPolicy::GateState::Failed);
-    setStatus(State::Failed, record.ssid, message, code);
+    setStatus(State::Failed, record.ssid, detail, error);
   };
   auto jump = [&](const String &name) -> bool {
     const auto found = labels.find(std::string(trimmed(name).c_str()));
@@ -855,7 +854,7 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
       fail("WIFI_LOST", "The Wi-Fi connection was lost while the script was running.");
       return;
     }
-    String line = trimmed(program[pc++]);
+    String line = scriptLine(program[pc++]);
     if (!line.length() || line.startsWith("#") || line == "INPUTPILOT-CAPTIVE/1" ||
         line.startsWith("LABEL ")) continue;
 
@@ -937,6 +936,9 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
           fail("HEADER_TOO_LARGE", "An expanded header exceeds the size limit."); return;
         }
       }
+      // Expansion is complete. The previous page can be released before the
+      // next TLS handshake, instead of retaining up to 32 KiB until assignment.
+      last = HTTPResult{};
       last = performRequest(method, target, payload, contentType, expandedHeaders,
                             requiredHostSuffix, cookies, addressFamily);
       if (last.error.length()) { fail(last.error, "A captive portal network request failed."); return; }

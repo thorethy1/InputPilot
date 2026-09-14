@@ -11,6 +11,44 @@ using CaptivePortalParsing::VariableComparison;
 
 namespace {
 
+void test_redirect_keeps_path_for_query_and_resolves_dot_segments() {
+  const std::string base = "https://portal.example/a/login?old=1";
+  const auto resolve = [&](const char *ref) {
+    return CaptivePortalParsing::resolveRedirect(base, ref);
+  };
+  TEST_ASSERT_EQUAL_STRING("https://portal.example/a/login?session=ABC%2F123",
+      resolve("?session=ABC%2F123").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://portal.example/scenes/42/?x=../",
+      resolve("../scenes/42/?x=../#fragment").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://portal.example/a/login?old=1",
+      resolve("#section").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://other.example/b?q=1",
+      resolve("//other.example/a/../b?q=1").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://portal.example/a/%2e%2e/x",
+      resolve("%2e%2e/x").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://portal.example/",
+      resolve("../../..").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://portal.example/?q=1",
+      CaptivePortalParsing::resolveRedirect("https://portal.example", "?q=1").c_str());
+  TEST_ASSERT_EQUAL_STRING("https://other.example/?q=1",
+      resolve("https://other.example?q=1").c_str());
+}
+
+void test_script_lines_borrow_storage_and_preserve_jump_indices() {
+  const std::string script = "INPUTPILOT-CAPTIVE/1\r\n\nLABEL retry\nGET /\n";
+  const auto lines = CaptivePortalParsing::scriptLines(script);
+  TEST_ASSERT_EQUAL_UINT(5, lines.size());
+  TEST_ASSERT_TRUE(lines[0] == "INPUTPILOT-CAPTIVE/1");
+  TEST_ASSERT_TRUE(lines[1].empty());
+  TEST_ASSERT_TRUE(lines[2] == "LABEL retry");
+  TEST_ASSERT_TRUE(lines[3] == "GET /");
+  TEST_ASSERT_TRUE(lines[4].empty());
+  for (const auto line : lines) {
+    TEST_ASSERT_TRUE(line.data() >= script.data());
+    TEST_ASSERT_TRUE(line.data() + line.size() <= script.data() + script.size());
+  }
+}
+
 void assertObjectCapture(const std::string &body, const char *expected) {
   std::string value;
   TEST_ASSERT_EQUAL(
@@ -180,6 +218,8 @@ void tearDown() {}
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_redirect_keeps_path_for_query_and_resolves_dot_segments);
+  RUN_TEST(test_script_lines_borrow_storage_and_preserve_jump_indices);
   RUN_TEST(test_object_string_accepts_supported_whitespace);
   RUN_TEST(test_object_string_reports_missing_key);
   RUN_TEST(test_object_string_rejects_oversized_value);

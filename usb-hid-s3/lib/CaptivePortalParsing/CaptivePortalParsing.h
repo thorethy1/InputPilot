@@ -4,9 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace CaptivePortalParsing {
+
+// Views borrow the original script, which must outlive the returned vector.
+std::vector<std::string_view> scriptLines(std::string_view script);
+std::string resolveRedirect(const std::string &base, const std::string &location);
 
 enum class CaptureResult {
   Found,

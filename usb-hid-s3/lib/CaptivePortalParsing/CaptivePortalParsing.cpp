@@ -7,6 +7,72 @@
 #include <cstring>
 
 namespace CaptivePortalParsing {
+
+std::vector<std::string_view> scriptLines(std::string_view script) {
+  std::vector<std::string_view> result;
+  size_t start = 0;
+  for (;;) {
+    const size_t end = script.find('\n', start);
+    auto line = script.substr(start, end == script.npos ? script.size() - start : end - start);
+    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+    result.push_back(line);
+    if (end == script.npos) break;
+    start = end + 1;
+  }
+  return result;
+}
+
+std::string resolveRedirect(const std::string &base, const std::string &location) {
+  const size_t scheme = base.find("://");
+  if (scheme == base.npos) return {};
+  std::string ref = location.substr(0, location.find('#'));
+  std::string cleanBase = base.substr(0, base.find('#'));
+  if (ref.empty()) return cleanBase;
+  std::string absolute;
+  if (ref.compare(0, 7, "http://") == 0 || ref.compare(0, 8, "https://") == 0) {
+    absolute = ref;
+  } else if (ref.compare(0, 2, "//") == 0) {
+    absolute = base.substr(0, scheme + 1) + ref;
+  } else {
+    const size_t authorityEnd = cleanBase.find_first_of("/?", scheme + 3);
+    const std::string origin = cleanBase.substr(0, authorityEnd);
+    const std::string pathBase = cleanBase.substr(0, cleanBase.find('?'));
+    if (ref.front() == '?') {
+      absolute = pathBase + (pathBase == origin ? "/" : "") + ref;
+    } else if (ref.front() == '/') {
+      absolute = origin + ref;
+    } else {
+      const size_t slash = pathBase.rfind('/');
+      absolute = (pathBase == origin ? origin + "/" : pathBase.substr(0, slash + 1)) + ref;
+    }
+  }
+  const size_t authorityEnd = absolute.find_first_of("/?", absolute.find("://") + 3);
+  const std::string authority = absolute.substr(0, authorityEnd);
+  std::string rest = authorityEnd == absolute.npos ? "/" : absolute.substr(authorityEnd);
+  if (rest.front() == '?') rest.insert(0, "/");
+  const size_t queryStart = rest.find('?');
+  const std::string query = queryStart == rest.npos ? "" : rest.substr(queryStart);
+  std::string input = rest.substr(0, queryStart), output;
+  // RFC 3986 dot-segment removal. Encoded dots/slashes remain untouched.
+  while (!input.empty()) {
+    if (input.compare(0, 3, "../") == 0) input.erase(0, 3);
+    else if (input.compare(0, 2, "./") == 0) input.erase(0, 2);
+    else if (input.compare(0, 3, "/./") == 0) input.erase(0, 2);
+    else if (input == "/.") input = "/";
+    else if (input.compare(0, 4, "/../") == 0 || input == "/..") {
+      input = input == "/.." ? "/" : input.substr(3);
+      const size_t slash = output.rfind('/');
+      output.erase(slash == output.npos ? 0 : slash);
+    } else if (input == "." || input == "..") input.clear();
+    else {
+      const size_t end = input.find('/', input.front() == '/' ? 1 : 0);
+      output += input.substr(0, end);
+      input = end == input.npos ? "" : input.substr(end);
+    }
+  }
+  return authority + output + query;
+}
+
 namespace {
 
 bool isJsonWhitespace(char value) {
