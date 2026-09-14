@@ -12,7 +12,10 @@ struct FirmwareLogEntry {
 
 class FirmwareLogBuffer {
  public:
-  static constexpr size_t Capacity = 64;
+  // RTC storage already preserves the last 20 lines across a panic. Keeping
+  // 32 live entries is sufficient for diagnostics and returns about 5 KiB of
+  // internal RAM to allocation-heavy TLS handshakes.
+  static constexpr size_t Capacity = 32;
   static constexpr size_t LineBytes = sizeof(FirmwareLogEntry::line);
   static constexpr size_t StorageBytes = Capacity * LineBytes;
   static constexpr size_t TotalEntryBytes = Capacity * sizeof(FirmwareLogEntry);

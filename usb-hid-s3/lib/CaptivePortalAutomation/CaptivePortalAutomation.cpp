@@ -9,7 +9,6 @@
 #include <WiFiClientSecure.h>
 #include <algorithm>
 #include <cctype>
-#include <cerrno>
 #include <map>
 #include <memory>
 #include <vector>
@@ -40,7 +39,7 @@ constexpr uint32_t kDnsRetryBaseDelayMs = 500;
 constexpr unsigned kMaxConnectAttempts = 3;
 constexpr uint32_t kConnectRetryBaseDelayMs = 500;
 constexpr uint32_t kTlsHandshakeTimeoutSeconds = 15;
-constexpr uint32_t kTaskStackBytes = 8192;
+constexpr uint32_t kTaskStackBytes = 12288;
 
 void waitBeforeConnectRetry(const char *hostname, uint16_t port,
                             unsigned failedAttempt) {
@@ -371,79 +370,16 @@ class RetryingSecureClient final : public WiFiClientSecure {
   }
 };
 
-// Diagnostic fallback declared before the IPv4 TLS client uses it.
-void normalHostProbe(const char *hostname, uint16_t port);
-
 class ResolvedIPv4SecureClient final : public WiFiClientSecure {
  public:
   explicit ResolvedIPv4SecureClient(const IPAddress &address) : address_(address) {
     setHandshakeTimeout(kTlsHandshakeTimeoutSeconds);
   }
 
-  // mbedtls error code + text via lastError(); -1 with an empty buffer means a
-  // plain TCP-level failure, not a TLS one.
-  void logTlsDiagnostics() {
-    char detail[64] = {};
-    const int code = lastError(detail, sizeof(detail) - 1);
-    LOG_WARN("CAPTIVE TLS error=%d", code);
-    for (char *p = detail; *p; ++p) {
-      const unsigned char c = static_cast<unsigned char>(*p);
-      if (c == '"' || c == '\\' || c < 0x20) *p = '?';
-    }
-    LOG_WARN("CAPTIVE TLS detail=\\\"%s\\\"", detail);
-  }
-
-  // One-shot plain TCP check against the same already-resolved IPv4 address,
-  // to separate "TCP reachable but TLS fails" from "endpoint unreachable".
-  void tcpProbe(uint16_t port) {
-    const int probeSocket = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (probeSocket < 0) {
-      LOG_WARN("CAPTIVE TCP probe endpoint=%s:%u result=failed",
-               address_.toString().c_str(), static_cast<unsigned>(port));
-      return;
-    }
-    struct sockaddr_in probeAddress = {};
-    probeAddress.sin_family = AF_INET;
-    probeAddress.sin_addr.s_addr = address_;
-    probeAddress.sin_port = htons(port);
-    int result = -1;
-    for (int attempt = 0; attempt < 50 && result < 0; ++attempt) {
-      result = lwip_connect(probeSocket,
-                            reinterpret_cast<struct sockaddr *>(&probeAddress),
-                            sizeof(probeAddress));
-      if (result < 0 && errno != EINPROGRESS) break;
-      if (result < 0) {
-        fd_set fdset;
-        FD_ZERO(&fdset);
-        FD_SET(probeSocket, &fdset);
-        struct timeval wait = {};
-        wait.tv_sec = 1;
-        result = select(probeSocket + 1, nullptr, &fdset, nullptr, &wait);
-        if (result == 0) {
-          result = -1;
-          break;
-        }
-        if (result < 0) break;
-        int sockerr = 0;
-        socklen_t length = sizeof(sockerr);
-        getsockopt(probeSocket, SOL_SOCKET, SO_ERROR, &sockerr, &length);
-        result = sockerr == 0 ? 1 : -1;
-      }
-    }
-    lwip_close(probeSocket);
-    LOG_WARN("CAPTIVE TCP probe endpoint=%s:%u result=%s",
-             address_.toString().c_str(), static_cast<unsigned>(port),
-             result > 0 ? "success" : "failed");
-  }
-
   int connect(const char *hostname, uint16_t port, int32_t timeout) override {
     _timeout = timeout;
     LOG_WIFI("CAPTIVE HTTPS ip=%s port=%u host=%s", address_.toString().c_str(),
              port, hostname);
-    LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
-    LOG_WARN("CAPTIVE heap max_alloc=%u min=%u",
-             static_cast<unsigned>(ESP.getMaxAllocHeap()),
-             static_cast<unsigned>(ESP.getMinFreeHeap()));
     // Connect the socket to the selected IPv4 address while retaining the
     // original hostname for TLS SNI. Captive HTTPS remains intentionally
     // certificate-insecure, as configured by setInsecure() below.
@@ -455,79 +391,13 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
       if (attempt < kMaxConnectAttempts)
         waitBeforeConnectRetry(hostname, port, attempt);
     }
-    if (!connected) {
-      // Diagnose in short lines; FirmwareLogBuffer keeps only 160 bytes/line.
-      LOG_WARN("CAPTIVE HTTPS failed host=%s", hostname);
-      LOG_WARN("CAPTIVE HTTPS endpoint=%s:%u",
-               address_.toString().c_str(), static_cast<unsigned>(port));
-      char detail[64] = {};
-      const int code = lastError(detail, sizeof(detail) - 1);
-      LOG_WARN("CAPTIVE TLS probe resolved-ipv4 result=failed error=%d", code);
-      logTlsDiagnostics();
-      LOG_WARN("CAPTIVE socket errno=%d", errno);
-      LOG_WARN("CAPTIVE heap free=%u max_alloc=%u min=%u",
-               static_cast<unsigned>(ESP.getFreeHeap()),
-               static_cast<unsigned>(ESP.getMaxAllocHeap()),
-               static_cast<unsigned>(ESP.getMinFreeHeap()));
-      tcpProbe(port);
-      // Variant B of the A/B test: plain Arduino hostname path against the
-      // same host/port. Diagnostic only; never replaces the real request.
-      normalHostProbe(hostname, port);
-    } else {
-      LOG_WARN("CAPTIVE TLS probe resolved-ipv4 result=success");
-      LOG_WARN("CAPTIVE heap free=%u max_alloc=%u min=%u",
-               static_cast<unsigned>(ESP.getFreeHeap()),
-               static_cast<unsigned>(ESP.getMaxAllocHeap()),
-               static_cast<unsigned>(ESP.getMinFreeHeap()));
-    }
+    if (!connected) LOG_WARN("CAPTIVE HTTPS failed host=%s", hostname);
     return connected;
   }
 
  private:
   IPAddress address_;
 };
-
-// Variant B of the TLS A/B diagnostic: a plain WiFiClientSecure with normal
-// Arduino hostname resolution (no pre-resolved IPv4, no custom connect
-// overload) against the same host and port. Diagnostic only; the result is
-// logged, never used to carry the actual request.
-void normalHostProbe(const char *hostname, uint16_t port) {
-  WiFiClientSecure probe;
-  probe.setInsecure();
-  probe.setHandshakeTimeout(kTlsHandshakeTimeoutSeconds);
-  char detail[64] = {};
-  const int connected = probe.connect(hostname, port);
-  int code = -1;
-  if (!connected) code = probe.lastError(detail, sizeof(detail) - 1);
-  probe.stop();
-  LOG_WARN("CAPTIVE TLS probe normal-host result=%s error=%d",
-           connected ? "success" : "failed", code);
-}
-
-// Log once per boot whether the required conn4 ciphersuite exists in the
-// linked mbedTLS. Uses the public mbedtls_ssl_list_ciphersuites() runtime
-// list; no compile-time configuration is changed.
-void logCiphersuiteSupport() {
-  static bool logged = false;
-  if (logged) return;
-  logged = true;
-  const int *suites = mbedtls_ssl_list_ciphersuites();
-  bool ecDheRsaGcm = false, aes256GcmSha384 = false;
-  int count = 0;
-  for (const int *s = suites; s && *s; ++s, ++count) {
-    const char *name = mbedtls_ssl_get_ciphersuite_name(*s);
-    if (!name) continue;
-    if (strcmp(name, "TLS-ECDHE-RSA-WITH-AES-256-GCM-SHA384") == 0)
-      ecDheRsaGcm = true;
-    if (strcmp(name, "TLS-RSA-WITH-AES-256-GCM-SHA384") == 0)
-      aes256GcmSha384 = true;
-  }
-  LOG_WARN("CAPTIVE TLS suites listed=%d", count);
-  LOG_WARN("CAPTIVE TLS ciphersuite ECDHE-RSA-AES256-GCM-SHA384=%s",
-           ecDheRsaGcm ? "available" : "missing");
-  LOG_WARN("CAPTIVE TLS ciphersuite RSA-AES256-GCM-SHA384=%s",
-           aes256GcmSha384 ? "available" : "missing");
-}
 
 class BoundedResponseStream final : public Stream {
  public:
@@ -603,8 +473,16 @@ HTTPResult performRequest(const String &method, String url, const String &body,
     LOG_WIFI("CAPTIVE HTTP method=%s host=%s family=%s", currentMethod.c_str(),
              currentHost.c_str(),
              CaptivePortalPolicy::addressFamilyName(addressFamily));
-    if (https) logCiphersuiteSupport();
-    LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    if (https) {
+      // Measure outside NetworkClientSecure::connect(), where HTTPClient and
+      // the TLS adapter already add several nested stack frames.
+      LOG_WARN("CAPTIVE TLS resources heap=%u max_alloc=%u stack=%u",
+               static_cast<unsigned>(ESP.getFreeHeap()),
+               static_cast<unsigned>(ESP.getMaxAllocHeap()),
+               static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    } else {
+      LOG_WARN("CAPTIVE heap free=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    }
     if (!http.begin(*client, url)) {
       result.error = "HTTP_INIT";
       return result;
@@ -911,9 +789,9 @@ void CaptivePortalAutomation::runTask() {
   // Stack high-water mark at run end. On ESP-IDF the stack depth type is
   // bytes, so the raw value already is the minimum free stack in bytes;
   // no words-to-bytes conversion applies (vanilla FreeRTOS docs differ).
-  // The measured real workflow low-water mark left about 5 KB unused in the
-  // former 10 KB allocation. 8 KB retains roughly 3 KB of headroom and makes
-  // another 2 KB available to the allocation-heavy TLS handshake.
+  // TLS and firmware logging both have sizeable transient stack frames. Keep
+  // explicit headroom here; RAM recovered from the shorter log history offsets
+  // the larger task allocation.
   LOG_WIFI("CAPTIVE task stack hwm=%u bytes",
            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
   if (index < 0 || record.ssid.isEmpty())
