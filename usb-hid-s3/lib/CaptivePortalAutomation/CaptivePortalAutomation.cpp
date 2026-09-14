@@ -35,6 +35,8 @@ constexpr size_t kMaxCapturedBytes = 1024;
 constexpr size_t kMaxRequestURLBytes = 2048;
 constexpr size_t kMaxRequestBodyBytes = 4096;
 constexpr size_t kMaxHeaders = 16;
+constexpr unsigned kMaxDnsAttempts = 3;
+constexpr uint32_t kDnsRetryBaseDelayMs = 500;
 constexpr unsigned kMaxConnectAttempts = 3;
 constexpr uint32_t kConnectRetryBaseDelayMs = 500;
 constexpr uint32_t kTlsHandshakeTimeoutSeconds = 15;
@@ -284,21 +286,37 @@ bool resolveIPv4(const String &hostname, IPAddress &address) {
   hints.ai_family = CaptivePortalPolicy::resolverFamily(
       CaptivePortalPolicy::AddressFamily::IPv4);
   hints.ai_socktype = SOCK_STREAM;
-  struct addrinfo *resolved = nullptr;
-  const int error = lwip_getaddrinfo(hostname.c_str(), nullptr, &hints, &resolved);
-  if (error != 0 || !resolved || resolved->ai_family != AF_INET ||
-      resolved->ai_addrlen < sizeof(struct sockaddr_in)) {
+  int error = EAI_FAIL;
+  for (unsigned attempt = 1; attempt <= kMaxDnsAttempts; ++attempt) {
+    struct addrinfo *resolved = nullptr;
+    error = lwip_getaddrinfo(hostname.c_str(), nullptr, &hints, &resolved);
+    if (error == 0 && resolved && resolved->ai_family == AF_INET &&
+        resolved->ai_addrlen >= sizeof(struct sockaddr_in)) {
+      const auto *socketAddress =
+          reinterpret_cast<const struct sockaddr_in *>(resolved->ai_addr);
+      address = IPAddress(
+          reinterpret_cast<const uint8_t *>(&socketAddress->sin_addr));
+      lwip_freeaddrinfo(resolved);
+      LOG_WIFI("CAPTIVE DNS host=%s resolved=%s attempts=%u",
+               hostname.c_str(), address.toString().c_str(), attempt);
+      return true;
+    }
+    if (error == 0) error = EAI_FAIL;
     if (resolved) lwip_freeaddrinfo(resolved);
-    LOG_WARN("CAPTIVE DNS failed host=%s error=%d", hostname.c_str(), error);
-    return false;
+    if (attempt < kMaxDnsAttempts) {
+      const uint32_t waitMs = kDnsRetryBaseDelayMs * attempt;
+      LOG_WARN("CAPTIVE DNS retry host=%s error=%d attempt=%u/%u wait=%ums",
+               hostname.c_str(), error, attempt + 1, kMaxDnsAttempts,
+               static_cast<unsigned>(waitMs));
+      delay(waitMs);
+    }
   }
-  const auto *socketAddress =
-      reinterpret_cast<const struct sockaddr_in *>(resolved->ai_addr);
-  address = IPAddress(reinterpret_cast<const uint8_t *>(&socketAddress->sin_addr));
-  lwip_freeaddrinfo(resolved);
-  LOG_WIFI("CAPTIVE DNS host=%s resolved=%s", hostname.c_str(),
-           address.toString().c_str());
-  return true;
+  const String primaryDns = WiFi.dnsIP(0).toString();
+  const String secondaryDns = WiFi.dnsIP(1).toString();
+  LOG_WARN("CAPTIVE DNS failed host=%s error=%d attempts=%u dns=%s/%s",
+           hostname.c_str(), error, kMaxDnsAttempts, primaryDns.c_str(),
+           secondaryDns.c_str());
+  return false;
 }
 
 class ResolvedIPv4Client final : public WiFiClient {
