@@ -454,7 +454,7 @@ private enum SetupValidationKind: Equatable {
 }
 
 private struct SetupValidationView: View {
-    private enum State: Equatable {
+    private enum ValidationState: Equatable {
         case idle
         case running
         case awaitingConfirmation
@@ -467,7 +467,7 @@ private struct SetupValidationView: View {
     let onSuccess: () -> Void
 
     @StateObject private var manager: HIDConnectionManager
-    @State private var state: State = .idle
+    @State private var state: ValidationState = .idle
     @AppStorage("keyboardLayout") private var layoutName = KeyboardLayout.german.rawValue
 
     init(device: StoredDevice, kind: SetupValidationKind, onSuccess: @escaping () -> Void) {
