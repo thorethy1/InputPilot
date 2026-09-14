@@ -5,11 +5,47 @@
 #include <vector>
 
 #include "CaptivePortalParsing.h"
+#include "CaptiveResponseBuffer.h"
 
 using CaptivePortalParsing::CaptureResult;
 using CaptivePortalParsing::VariableComparison;
 
 namespace {
+
+void test_response_blocks_preserve_bytes_and_limit() {
+  CaptiveResponseBuffer buffer(1025);
+  const std::string input(1100, 'x');
+  TEST_ASSERT_EQUAL_UINT(513, buffer.append(
+      reinterpret_cast<const uint8_t *>(input.data()), 513));
+  TEST_ASSERT_EQUAL_UINT(512, buffer.append(
+      reinterpret_cast<const uint8_t *>(input.data()), 587));
+  TEST_ASSERT_EQUAL_UINT(1025, buffer.size());
+  TEST_ASSERT_TRUE(buffer.overflowed());
+  TEST_ASSERT_FALSE(buffer.lowMemory());
+  for (size_t i = 0; i < buffer.size(); ++i)
+    TEST_ASSERT_EQUAL('x', buffer.block(i / 512)[i % 512]);
+  TEST_ASSERT_EQUAL_UINT(0, buffer.append(
+      reinterpret_cast<const uint8_t *>(input.data()), 1));
+}
+
+size_t allocationCalls = 0;
+uint8_t *failSecondAllocation(size_t count) {
+  return ++allocationCalls == 2 ? nullptr : new uint8_t[count];
+}
+
+void test_response_allocation_failure_is_not_reported_as_success() {
+  allocationCalls = 0;
+  CaptiveResponseBuffer buffer(2048, failSecondAllocation);
+  const std::string input(1024, 'a');
+  TEST_ASSERT_EQUAL_UINT(512, buffer.append(
+      reinterpret_cast<const uint8_t *>(input.data()), input.size()));
+  TEST_ASSERT_EQUAL_UINT(512, buffer.size());
+  TEST_ASSERT_TRUE(buffer.lowMemory());
+  TEST_ASSERT_FALSE(buffer.overflowed());
+  TEST_ASSERT_EQUAL_UINT(0, buffer.append(
+      reinterpret_cast<const uint8_t *>(input.data()), 1));
+  TEST_ASSERT_EQUAL_UINT(2, allocationCalls);
+}
 
 void test_redirect_keeps_path_for_query_and_resolves_dot_segments() {
   const std::string base = "https://portal.example/a/login?old=1";
@@ -218,6 +254,8 @@ void tearDown() {}
 
 int main(int, char **) {
   UNITY_BEGIN();
+  RUN_TEST(test_response_blocks_preserve_bytes_and_limit);
+  RUN_TEST(test_response_allocation_failure_is_not_reported_as_success);
   RUN_TEST(test_redirect_keeps_path_for_query_and_resolves_dot_segments);
   RUN_TEST(test_script_lines_borrow_storage_and_preserve_jump_indices);
   RUN_TEST(test_object_string_accepts_supported_whitespace);

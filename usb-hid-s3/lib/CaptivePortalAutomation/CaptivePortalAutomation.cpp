@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #include "CaptivePortalParsing.h"
+#include "CaptiveResponseBuffer.h"
 #include "Logging.h"
 #include "WireGuardManager.h"
 
@@ -391,28 +392,30 @@ class ResolvedIPv4SecureClient final : public WiFiClientSecure {
 
 class BoundedResponseStream final : public Stream {
  public:
-  explicit BoundedResponseStream(size_t limit) : limit_(limit) {
-    value_.reserve(std::min<size_t>(limit, 4096));
-  }
+  explicit BoundedResponseStream(size_t limit) : buffer_(limit) {}
   size_t write(uint8_t byte) override { return write(&byte, 1); }
   size_t write(const uint8_t *buffer, size_t size) override {
-    const size_t available = value_.length() < limit_ ? limit_ - value_.length() : 0;
-    const size_t accepted = std::min(size, available);
-    if (accepted) value_.concat(reinterpret_cast<const char *>(buffer), accepted);
-    if (accepted != size) overflow_ = true;
-    return accepted;
+    return buffer_.append(buffer, size);
   }
   int available() override { return 0; }
   int read() override { return -1; }
   int peek() override { return -1; }
   void flush() override {}
-  bool overflowed() const { return overflow_; }
-  const String &value() const { return value_; }
+  bool overflowed() const { return buffer_.overflowed(); }
+  bool lowMemory() const { return buffer_.lowMemory(); }
+  size_t size() const { return buffer_.size(); }
+  bool assemble(String &value) const {
+    if (!value.reserve(buffer_.size())) return false;
+    for (size_t offset = 0; offset < buffer_.size(); offset += CaptiveResponseBuffer::BlockBytes) {
+      const size_t count = std::min(CaptiveResponseBuffer::BlockBytes, buffer_.size() - offset);
+      if (!value.concat(reinterpret_cast<const char *>(
+              buffer_.block(offset / CaptiveResponseBuffer::BlockBytes)), count)) return false;
+    }
+    return true;
+  }
 
  private:
-  size_t limit_;
-  bool overflow_ = false;
-  String value_;
+  CaptiveResponseBuffer buffer_;
 };
 
 HTTPResult performRequest(const String &method, String url, const String &body,
@@ -556,18 +559,31 @@ HTTPResult performRequest(const String &method, String url, const String &body,
       return result;
     }
     BoundedResponseStream response(kMaxResponseBytes);
+    const int expectedBytes = http.getSize();
     const int written = http.writeToStream(&response);
+    // Release TLS before allocating a contiguous page for the script parser.
+    http.end();
+    client->stop();
+    LOG_WIFI("CAPTIVE body received=%u expected=%d read=%d",
+             static_cast<unsigned>(response.size()), expectedBytes, written);
     if (response.overflowed()) {
       result.error = "RESPONSE_TOO_LARGE";
+    } else if (response.lowMemory()) {
+      result.error = "NETWORK:LOW_MEMORY";
     } else if (written < 0) {
       LOG_WARN("CAPTIVE request failed phase=body status=%d hop=%d", written,
                redirects);
       result.error = networkErrorCode(written);
+    } else if (static_cast<size_t>(written) != response.size() ||
+               (expectedBytes >= 0 &&
+                static_cast<size_t>(expectedBytes) != response.size())) {
+      result.error = "NETWORK:CONNECTION_LOST";
+    } else if (!response.assemble(result.body)) {
+      result.body = "";
+      result.error = "NETWORK:LOW_MEMORY";
     } else {
       result.error = "";
-      result.body = response.value();
     }
-    http.end();
     return result;
   }
   result.error = "TOO_MANY_REDIRECTS";
@@ -1046,6 +1062,9 @@ void CaptivePortalAutomation::run(const ScriptRecord &record) {
         fail("CAPTURE_TOO_LARGE", "A captured portal value is too large."); return;
       }
       if (result != CaptivePortalParsing::CaptureResult::Found) {
+        LOG_WARN("CAPTIVE capture object=%s body_bytes=%u result=%d",
+                 objectKey.c_str(), static_cast<unsigned>(last.body.length()),
+                 static_cast<int>(result));
         fail("CAPTURE_MISSING", "A required portal value could not be extracted."); return;
       }
       variables[std::string(name.c_str())] = String(captured.c_str());
