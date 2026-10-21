@@ -1,70 +1,160 @@
-# Hardware
+# Hardware and initial setup
 
-## Supported board
+This guide expands the hardware overview in the [main README](../../README.md#1-hardware).
 
-**Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2):
+## Choosing a board
 
-![Waveshare ESP32-S3-Zero with USB-C connected](https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp)
+For new builds, choose an **ESP32-S3 with 8 MB flash**, preferably **N8R8
+(8 MB flash, 8 MB PSRAM)**, to leave more room for future firmware development.
+Existing **Waveshare ESP32-S3-Zero / Mini boards with ESP32-S3FH4R2** have
+**4 MB flash and 2 MB PSRAM** and remain the current firmware target.
 
-- Dual-core Xtensa LX7 up to 240 MHz
-- 4 MB flash, 2 MB PSRAM
-- Native USB-OTG (USB-C)
-- Onboard WS2812 RGB LED on **GPIO21**
-- Ceramic antenna (WiFi + BLE)
+| Hardware | Flash | PSRAM | Role |
+|----------|-------|-------|------|
+| ESP32-S3 N8R8 | 8 MB | 8 MB | Recommended for new hardware; match the board to a compatible firmware release |
+| Waveshare ESP32-S3-Zero / Mini, ESP32-S3FH4R2 | 4 MB | 2 MB | Existing firmware target; limited space for future firmware features |
+| ESP32-S3 in a USB flash-drive form factor | Depends on the selected variant | Depends on the selected variant | Verify the chip, memory, native USB connection, and board pin assignments |
 
-Purchase example (3-pack):  
-[Waveshare ESP32-S3 Mini on Aliexpress](https://a.aliexpress.com/_ExnnLN0)
+N8R8 and FH4R2 identify different memory configurations. The FH4R2 board is
+not an 8 MB board. See [Espressif's N8R8 memory table](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.0.html)
+and [Waveshare's ESP32-S3-Zero specifications](https://docs.waveshare.com/ESP32-S3-Zero?variant=ESP32-S3-Zero-M).
 
-Official Waveshare wiki / product page is also fine if you buy elsewhere — match
-**ESP32-S3FH4R2**, **4 MB flash**, and the WS2812 on GPIO21 pinout.
+**Buy ESP32-S3, not ESP32-C3.** InputPilot uses native USB-OTG for its keyboard
+and mouse. A USB connector or a USB-to-UART interface alone does not provide
+that functionality. If a board has separate USB ports, use the **native
+ESP32-S3 USB port** for HID; [Espressif documents the port distinction](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.0.html).
+
+### Purchase examples
+
+These are the same listings as in the main README. Check the selected product
+variant before ordering; one listing may contain multiple chip or memory options.
+
+- [8 MB version — recommended](https://s.click.aliexpress.com/e/_EwoijzC): **select N8R8**.
+- [4 MB version — existing hardware](https://s.click.aliexpress.com/e/_EJBgoCE): select **ESP32-S3**.
+- [USB flash-drive version](https://s.click.aliexpress.com/e/_EulrxZs): verify the ESP32-S3 and memory variant.
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/96cdada5-197d-4781-a58c-be7e480f77f1" alt="Board selection reference for the hardware listings" width="720">
+</p>
+
+### Firmware compatibility
+
+The current repository configuration still targets **4 MB flash**:
+
+- [`platformio.ini`](../platformio.ini) sets flash size to `4MB` and uses [`ota_4MB.csv`](../ota_4MB.csv).
+- [`Config.h`](../include/Config.h) and the release manifests identify the board as `esp32-s3-zero-4mb`.
+- The configured status LED is a **WS2812 on GPIO21**; USB trust uses **BOOT on GPIO0**.
+
+The 8 MB purchase recommendation does not itself introduce an 8 MB firmware
+layout or enable additional PSRAM. Do not treat every ESP32-S3 board as
+interchangeable: check the release's board requirements, native USB wiring,
+BOOT button, and LED pin assignments. Extra physical flash is not used by the
+current 4 MB partition layout. For another board, the firmware configuration
+and validation must match that hardware.
+
+The existing 4 MB Waveshare board looks like this:
+
+<p align="center">
+  <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Existing Waveshare ESP32-S3-Zero board with 4 MB flash" width="360">
+</p>
 
 ## What you need
 
 | Item | Notes |
-|------|--------|
-| ESP32-S3-Zero/Mini board | Above |
-| USB-C data cable | Charge-only cables will not enumerate |
-| Host PC | USB HID target (mouse/keyboard appear here) |
-| iPhone on Wi-Fi/Bluetooth | Secure setup and control after USB trust |
+|------|-------|
+| ESP32-S3 board | Choose the memory variant above and a compatible firmware release |
+| USB data cable or suitable USB adapter | Charge-only cables cannot flash the board or carry USB HID input |
+| Desktop computer with Chrome or Edge | Used for the initial installation with the Web Flasher |
+| Computer to control | InputPilot plugs into its USB port and appears as a keyboard and mouse |
+| iPhone with Bluetooth | Used for USB trust, secure pairing, and local control; a compatible USB adapter may be needed |
+| Wi-Fi network, optional | Bluetooth-only setup works without Wi-Fi; optional Wi-Fi setup uses a 2.4 GHz network |
 
-## Developer build (USB-OTG)
+## First installation: Web Flasher
 
-Auto-reset into download mode usually **fails** in native USB-OTG mode:
+Use the **InputPilot Web Flasher** ([Deutsch](https://thorethy1.github.io/InputPilot/)
+· [English](https://thorethy1.github.io/InputPilot/en/)) in **Chrome or Edge on a
+desktop computer**. No PlatformIO installation or local firmware build is needed.
 
-1. Hold **BOOT**, tap **RESET**, release **BOOT** (or unplug → hold BOOT →
-   replug → release BOOT).
-2. Upload firmware (`pio run -e esp32s3 -t upload` or `./scripts/deploy.sh`).
-3. **Power-cycle** the board (unplug/replug) so the app boots in OTG mode.
+1. Open the flasher and connect the compatible ESP32-S3 board with a USB data cable.
+2. If the board is not detected, hold **BOOT**, press and release **RESET**, then
+   release **BOOT**. Alternatively, unplug the board, hold BOOT while reconnecting,
+   then release BOOT.
+3. Select the board's serial port in the browser and install the latest stable
+   `InitialFirmware.bin`. Wait until installation finishes.
+4. Disconnect and reconnect the board so it boots the InputPilot application.
+5. Open the iOS app and follow the guided setup: connect InputPilot to the iPhone
+   by USB, focus the pairing field, and hold **BOOT for two seconds** to send the
+   trust code. After pairing, move InputPilot to the computer you want to control.
+   Bluetooth is sufficient; Wi-Fi can be added during setup or later.
 
-After power-cycle the host should see USB identity **VID `0xCAFE` / PID `0x4001`**
-(“InputPilot S3”), not Espressif’s JTAG CDC (`0x303A`).
+`InitialFirmware.bin` includes the bootloader, partition table, OTA bootstrap
+image, and application. It is for initial USB installation and recovery.
+It is different from the app-only `firmware.bin` used for later OTA updates.
 
-`scripts/flash_and_verify.sh` waits for that enumeration after you power-cycle.
+## Alternative: install from a GitHub Release
 
-## Installing from a GitHub Release
-
-Release users do not need PlatformIO. Enter download mode as described above and erase the device when installing for the first time or migrating from the old partition layout.
-
-The preferred single-image method is:
+Download `InitialFirmware.bin` from the desired [InputPilot release](https://github.com/thorethy1/InputPilot/releases)
+and enter download mode as described above. For a first installation or a
+required full reflash, erase the old installation and write the complete image:
 
 ```bash
-esptool --chip esp32s3 erase-flash
-esptool --chip esp32s3 write-flash 0x0 InputPilot-v0.8.11-initial-flash.bin
+python3 -m venv ~/esptool-env
+source ~/esptool-env/bin/activate
+python -m pip install esptool
+
+# Replace /dev/ttyACM0 with the board's serial port.
+esptool --chip esp32s3 --port /dev/ttyACM0 erase-flash
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write-flash 0x0 InitialFirmware.bin
 ```
 
-Alternatively, extract the v0.8.11 initial-flash archive and flash the individual images. These offsets are exported from the pinned build and recorded in `initial-flash-manifest.json` and `flash_args`:
+Erasing flash removes saved device settings, including Wi-Fi and USB trust;
+complete secure setup again afterward. Serial ports are typically
+`/dev/ttyACM0` or `/dev/ttyUSB0` on Linux, `/dev/cu.usbmodem…` on macOS, and
+`COM…` on Windows. Use the appropriate Python environment activation command
+on your platform.
+
+Alternatively, extract `InputPilot-Firmware-vX.Y.Z.zip` and use the individual
+images with the offsets recorded in its `initial-flash-manifest.json` and
+`flash_args`. The current 4 MB release layout uses:
 
 ```bash
-esptool --chip esp32s3 write-flash \
+esptool --chip esp32s3 --port /dev/ttyACM0 write-flash \
   0x0000 bootloader.bin \
   0x8000 partitions.bin \
   0xe000 boot_app0.bin \
   0x10000 firmware.bin
 ```
 
-Power-cycle after flashing. Future releases use only `firmware.bin` in the iOS Firmware tab; never use the merged image or the other three `.bin` files for OTA.
+Use the files and manifest from the same release. Disconnect and reconnect the
+board after flashing. For later updates, use the iOS **Firmware** tab, which
+transfers only the app-only `firmware.bin` over authenticated Bluetooth or Wi-Fi.
+Never select `InitialFirmware.bin`, a bootloader, a partition table, or
+`boot_app0.bin` as an OTA update.
 
-### Panic core dump
+## Developer build (USB-OTG)
+
+The current `esp32s3` environment builds the 4 MB target described above.
+From `usb-hid-s3/`:
+
+```bash
+pio run -e esp32s3
+pio run -e esp32s3 -t upload
+# Or use the project's build/upload helper:
+./scripts/deploy.sh
+```
+
+Auto-reset into download mode can fail when native USB-OTG is active. Hold
+**BOOT**, tap **RESET**, and release **BOOT** before retrying the upload.
+Then disconnect and reconnect the board.
+
+With the default USB identity, the running InputPilot application enumerates
+as **VID `0xCAFE` / PID `0x4001`**, product **InputPilot**. The Espressif
+bootloader/debug identity (`0x303A`) is different. The app can customize the
+application's USB identity; those values may therefore differ on a configured
+device. [`flash_and_verify.sh`](../scripts/flash_and_verify.sh) checks the
+default VID after flashing on macOS.
+
+## Panic core dump
 
 Use the release gate in [`../../docs/HARDWARE_E2E.md`](../../docs/HARDWARE_E2E.md).
 

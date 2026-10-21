@@ -7,12 +7,24 @@ for remote control.
 
 ## Hardware
 
-See [`docs/HARDWARE.md`](docs/HARDWARE.md) for the BOM, Amazon purchase link, LED
-legend, and flash procedure.
+For new hardware, prefer an **ESP32-S3 N8R8 (8 MB flash / 8 MB PSRAM)**.
+Existing **Waveshare ESP32-S3-Zero / Mini boards with ESP32-S3FH4R2
+(4 MB flash / 2 MB PSRAM)** remain the current firmware target, with limited
+room for future firmware features. Select **ESP32-S3, not ESP32-C3**, and use
+the native USB-OTG port for keyboard and mouse input.
 
-Summary: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 4 MB flash). Flash
-needs **BOOT+RESET**, then a **power-cycle** so the device enumerates as
-VID `0xCAFE` (not Espressif JTAG `0x303A`).
+The current build uses a **4 MB partition layout** and board identity
+`esp32-s3-zero-4mb`; an 8 MB board still needs a compatible firmware build and
+matching pin assignments. See the [main README](../README.md#1-hardware) for
+the hardware overview and [`docs/HARDWARE.md`](docs/HARDWARE.md) for the same
+purchase links, compatibility notes, initial setup, LED legend, and flash
+procedure.
+
+For initial installation, use the **InputPilot Web Flasher**
+([Deutsch](https://thorethy1.github.io/InputPilot/) · [English](https://thorethy1.github.io/InputPilot/en/))
+or `InitialFirmware.bin` from a GitHub Release. If needed, enter download mode
+with **BOOT + RESET**, then disconnect and reconnect the board after flashing.
+The default application USB identity is **VID `0xCAFE` / PID `0x4001`**.
 
 ## Layout
 
