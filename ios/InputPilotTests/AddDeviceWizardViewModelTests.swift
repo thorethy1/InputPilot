@@ -116,6 +116,37 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
         XCTAssertEqual(model.step, .connectionTest)
     }
 
+    func testSettingsRestartBeginsAtWelcomeWithSavedDevices() {
+        let model = AddDeviceWizardViewModel(
+            flow: .firstRun, resumeSavedDevice: false,
+            browser: MockBonjourBrowser(), apiClient: MockAPIClient()
+        )
+        let devices = [
+            StoredDevice(deviceId: "aabbccddeeff", displayName: "Desk", mdnsHost: ""),
+            StoredDevice(deviceId: "112233445566", displayName: "Laptop", mdnsHost: "")
+        ]
+
+        model.updateKnownDevices(devices)
+        XCTAssertEqual(model.step, .welcome)
+        XCTAssertNil(model.savedDeviceId)
+        XCTAssertEqual(model.knownDevices.match(deviceId: devices[0].deviceId)?.displayName, "Desk")
+
+        model.continueFromWelcome()
+        XCTAssertEqual(model.step, .hardware)
+        model.backToWelcome()
+        model.updateKnownDevices(devices)
+        XCTAssertEqual(model.step, .welcome, "Refreshing saved devices must not skip a manually restarted guide")
+        XCTAssertNil(model.savedDeviceId)
+
+        model.continueFromWelcome()
+        model.continueFromHardware()
+        XCTAssertEqual(model.step, .permissions)
+        model.continueFromPermissions()
+        XCTAssertEqual(model.step, .securePairing)
+        model.continueSecureSetup()
+        XCTAssertEqual(model.step, .securePairing, "Restarted setup still requires USB trust")
+    }
+
     func testRegularAddDeviceFlowStillStartsAtUSBTrust() {
         let model = AddDeviceWizardViewModel(
             browser: MockBonjourBrowser(),

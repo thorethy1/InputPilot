@@ -824,7 +824,7 @@ private struct ConnectionSettingsView: View {
             }
             Section("Support") {
                 Button { showSetup = true } label: {
-                    Label("Setup & Connection Check", systemImage: "list.bullet.clipboard")
+                    Label("Start Setup Again", systemImage: "list.bullet.clipboard")
                 }
                 Link(destination: InputPilotLinks.webFlasher) {
                     Label("InputPilot Web Flasher", systemImage: "safari")
@@ -842,7 +842,7 @@ private struct ConnectionSettingsView: View {
         }
         .inputPilotBackground().navigationTitle("Settings")
         .fullScreenCover(isPresented: $showSetup) {
-            AddDeviceWizardView(flow: .firstRun, preferredDeviceId: selectedDeviceId) { completed in
+            AddDeviceWizardView(flow: .firstRun, resumeSavedDevice: false) { completed in
                 if completed { firstRunSetupStatus = "complete" }
                 showSetup = false
             }

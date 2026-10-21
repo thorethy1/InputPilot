@@ -11,10 +11,19 @@ struct AddDeviceWizardView: View {
     let flow: DeviceSetupFlow
     var onFinished: ((Bool) -> Void)?
 
-    init(flow: DeviceSetupFlow = .addDevice, preferredDeviceId: String? = nil, onFinished: ((Bool) -> Void)? = nil) {
+    init(
+        flow: DeviceSetupFlow = .addDevice,
+        preferredDeviceId: String? = nil,
+        resumeSavedDevice: Bool = true,
+        onFinished: ((Bool) -> Void)? = nil
+    ) {
         self.flow = flow
         self.onFinished = onFinished
-        _viewModel = StateObject(wrappedValue: AddDeviceWizardViewModel(flow: flow, preferredDeviceId: preferredDeviceId))
+        _viewModel = StateObject(wrappedValue: AddDeviceWizardViewModel(
+            flow: flow,
+            preferredDeviceId: preferredDeviceId,
+            resumeSavedDevice: resumeSavedDevice
+        ))
     }
 
     var body: some View {

@@ -79,15 +79,18 @@ final class AddDeviceWizardViewModel: ObservableObject {
     private let browser: any BonjourBrowserProtocol
     private let apiClient: any DeviceAPIClientProtocol
     private let preferredDeviceId: String?
+    private let resumeSavedDevice: Bool
 
     init(
         flow: DeviceSetupFlow = .addDevice,
         preferredDeviceId: String? = nil,
+        resumeSavedDevice: Bool = true,
         browser: any BonjourBrowserProtocol = BonjourBrowser(),
         apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()
     ) {
         self.flow = flow
         self.preferredDeviceId = preferredDeviceId
+        self.resumeSavedDevice = resumeSavedDevice
         step = flow == .firstRun ? .welcome : .securePairing
         self.browser = browser
         self.apiClient = apiClient
@@ -109,7 +112,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         // app is terminated there, resume at the non-destructive connection
         // check instead of asking for USB trust and credentials again.
         let resumeDevice = devices.first { $0.deviceId.lowercased() == preferredDeviceId?.lowercased() } ?? devices.first
-        if flow == .firstRun, step == .welcome, let device = resumeDevice {
+        if flow == .firstRun, resumeSavedDevice, step == .welcome, let device = resumeDevice {
             savedDeviceId = device.deviceId
             step = .connectionTest
         }

@@ -43,7 +43,10 @@ replace this gate.
 - Select Later before pairing, explore without hardware, and resume through
   Guided Setup or Settings. Complete setup, relaunch, and verify the main tabs
   appear. Interrupt after device persistence and verify connection-test resume.
-  With multiple saved devices, Settings must check the selected device.
+  With multiple saved devices, Settings → Start Setup Again must begin at
+  Welcome and include hardware/firmware preparation. Returning to Welcome and
+  refreshing the device list must not jump to the connection test. Canceling
+  the restarted guide must preserve the existing saved devices.
 - Verify German/US keyboard selection before the keyboard test and matching
   layout in Control afterward. Test the guide at accessibility text sizes and
   with VoiceOver; progress and hardware selection must be understandable.

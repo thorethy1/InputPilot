@@ -24,8 +24,10 @@ requesting Bluetooth access. The complete flow is:
 
 An eight-stage progress indicator follows the whole flow. **Later** opens the
 app without marking setup complete; **Guided Setup** on the empty device screen
-and **Settings → Setup & Connection Check** provide a way back. With saved
-devices, the Settings entry checks the selected device. Exploring without a
+and **Settings → Start Setup Again** provide a way back. The Settings entry
+always starts at Welcome, even with saved devices; it keeps those devices and
+their merge information. Only automatic first-run recovery resumes at the
+connection test after a device has already been saved. Exploring without a
 device does not start Bluetooth discovery or Bonjour browsing.
 
 Bluetooth-only setup is a complete supported path. Bluetooth is initialized only
