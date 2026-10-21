@@ -730,7 +730,7 @@ private struct PresetEditorSheet: View {
                     }
                 }
             }
-            .navigationTitle(editingPreset == nil ? "New Preset" : "Edit Preset")
+            .inputPilotBackground().navigationTitle(editingPreset == nil ? "New Preset" : "Edit Preset")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

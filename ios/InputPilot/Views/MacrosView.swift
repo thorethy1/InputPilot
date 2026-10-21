@@ -306,7 +306,7 @@ private struct MacroEditorView: View {
                 }
                 if let errorMessage { Section { Label(errorMessage, systemImage: "exclamationmark.triangle").foregroundStyle(AppColors.error) } }
             }
-            .navigationTitle("Edit Macro")
+            .inputPilotBackground().navigationTitle("Edit Macro")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

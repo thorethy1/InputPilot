@@ -200,22 +200,11 @@ struct DeviceDetailView: View {
             }
 
             Section("Captive Portal") {
-                if device.capabilities.contains("captive_portal_scripts") {
-                    NavigationLink {
-                        CaptivePortalScriptsView(device: device)
-                    } label: {
-                        Label("Wi-Fi Portal Scripts", systemImage: "wifi.exclamationmark")
-                    }
-                    Text("Run a saved HTTP workflow automatically after InputPilot joins its assigned Wi-Fi network.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Label("Firmware update required", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(AppColors.warning)
-                    Text("Captive portal scripts require InputPilot firmware 0.9.2 or newer.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Label("Wi-Fi Portal Scripts are temporarily disabled", systemImage: "pause.circle")
+                    .foregroundStyle(.secondary)
+                Text("Portal scripts are not working reliably yet. Use Bluetooth or a Wi-Fi network without a browser login.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("WireGuard") {
@@ -307,7 +296,7 @@ struct DeviceDetailView: View {
                 }
             }
         }
-        .navigationTitle(displayName.isEmpty ? device.displayName : displayName)
+        .inputPilotBackground().navigationTitle(displayName.isEmpty ? device.displayName : displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             async let bluetoothConnection: Void = bluetooth.connect()

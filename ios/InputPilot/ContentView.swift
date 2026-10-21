@@ -25,7 +25,9 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if shouldShowFirstRun {
+            if !evaluatedFirstRun {
+                ProgressView().inputPilotBackground()
+            } else if shouldShowFirstRun {
                 AddDeviceWizardView(flow: .firstRun) { completed in
                     if completed { firstRunSetupStatus = "complete" }
                     else { deferredFirstRunForSession = true }
@@ -63,7 +65,7 @@ struct ContentView: View {
                     deviceList
                 }
             }
-            .navigationTitle("InputPilot")
+            .inputPilotBackground().navigationTitle("InputPilot")
             .toolbar { toolbarContent }
             .refreshable {
                 await viewModel.refreshAll(devices: storedDevices, context: modelContext)
@@ -92,6 +94,10 @@ struct ContentView: View {
         .environmentObject(viewModel)
         .task(id: storedDevices.map(\.deviceId)) {
             reconcileActiveDevice()
+            guard !storedDevices.isEmpty else {
+                viewModel.stopBonjourMonitoring()
+                return
+            }
             viewModel.monitorBonjour(devices: storedDevices, context: modelContext)
             while !Task.isCancelled {
                 await viewModel.refreshQuietly(devices: storedDevices, context: modelContext)
@@ -153,10 +159,18 @@ struct ContentView: View {
         } description: {
             Text("InputPilot can connect over Bluetooth or Wi-Fi. Bluetooth works nearby without Wi-Fi or an internet connection.")
         } actions: {
+            Button("Guided Setup") {
+                firstRunSetupStatus = "inProgress"
+                deferredFirstRunForSession = false
+            }
+            .buttonStyle(.borderedProminent)
             Button("Add Device") {
                 showAddWizard = true
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
+            ShareLink(item: InputPilotLinks.webFlasher) {
+                Label("Send Web Flasher Link", systemImage: "square.and.arrow.up")
+            }
         }
     }
 
@@ -353,6 +367,7 @@ private struct ControlRootView: View {
                     .id(selected.deviceId)
             } else { ContentUnavailableView("Select an InputPilot device", systemImage: "computermouse", description: Text("Add a device in the Devices tab first.")) }
         }
+        .inputPilotBackground()
         .task(id: devices.map(\.deviceId)) { reconcileSelection() }
     }
 
@@ -379,7 +394,7 @@ private struct FirmwareRootView: View {
             if let selected { FirmwareDeviceView(device: selected, devices: devices, selection: $selectedDeviceId).id(selected.deviceId) }
             else { ContentUnavailableView("Select an InputPilot device", systemImage: "arrow.triangle.2.circlepath", description: Text("Select an InputPilot device to view firmware information and updates.")) }
         }
-        .navigationTitle("Firmware")
+        .inputPilotBackground().navigationTitle("Firmware")
         .task(id: devices.map(\.deviceId)) { reconcileSelection() }
     }
 
@@ -408,6 +423,7 @@ private struct FirmwareDeviceView: View {
     private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
+    @AppStorage("firstRunSetupStatus") private var firstRunSetupStatus = ""
     @AppStorage("developerMode") private var developerMode = false
     @AppStorage("firmwareAllowDowngrade") private var allowDowngrade = false
     @AppStorage("firmwareIgnorePublishedChecksum") private var ignorePublishedChecksum = false
@@ -748,6 +764,7 @@ private struct ConnectionSettingsView: View {
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
+    @State private var showSetup = false
     private var selected: StoredDevice? {
         guard let selectedID = ActiveDeviceSelection.resolve(
             savedID: selectedDeviceId,
@@ -806,6 +823,12 @@ private struct ConnectionSettingsView: View {
                 }
             }
             Section("Support") {
+                Button { showSetup = true } label: {
+                    Label("Setup & Connection Check", systemImage: "list.bullet.clipboard")
+                }
+                Link(destination: InputPilotLinks.webFlasher) {
+                    Label("InputPilot Web Flasher", systemImage: "safari")
+                }
                 NavigationLink("Pair InputPilot by USB") { USBPairingInputTestView() }
                 NavigationLink("Status LED Matrix") { StatusLEDMatrixView() }
                 NavigationLink("Diagnostics & Advanced") {
@@ -817,7 +840,13 @@ private struct ConnectionSettingsView: View {
                 LabeledContent("Build", value: appVersion.build)
             }
         }
-        .navigationTitle("Settings")
+        .inputPilotBackground().navigationTitle("Settings")
+        .fullScreenCover(isPresented: $showSetup) {
+            AddDeviceWizardView(flow: .firstRun, preferredDeviceId: selectedDeviceId) { completed in
+                if completed { firstRunSetupStatus = "complete" }
+                showSetup = false
+            }
+        }
         .task(id: devices.map(\.deviceId)) {
             selectedDeviceId = ActiveDeviceSelection.reconciled(
                 savedID: selectedDeviceId,
@@ -835,6 +864,7 @@ private struct AppearanceSettingsView: View {
     @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
     var body: some View {
         Form {
+            BackgroundSettingsSection()
             Section("Appearance") {
                 Picker("Interface", selection: $appearanceName) {
                     ForEach(AppAppearance.allCases) { appearance in
@@ -858,7 +888,7 @@ private struct AppearanceSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Appearance")
+        .inputPilotBackground().navigationTitle("Appearance")
     }
     private var selectedAccent: AppAccent { AppAccent.resolve(accentName) }
     private var customAccentBinding: Binding<Color> {
@@ -954,7 +984,7 @@ private struct StatusLEDMatrixView: View {
                 Text("During OTA updates, amber blinking takes priority and suppresses the AP pulse. The fallback AP stays active while an iPhone is connected. Bluetooth advertising recovery is automatic and uses no separate LED pattern.")
             }
         }
-        .navigationTitle("Status LED Matrix")
+        .inputPilotBackground().navigationTitle("Status LED Matrix")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -1065,7 +1095,7 @@ private struct DiagnosticsSettingsView: View {
                 LabeledContent("Commit", value: appVersion.commit)
             }
         }
-        .navigationTitle("Diagnostics")
+        .inputPilotBackground().navigationTitle("Diagnostics")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: developerMode) { _, enabled in
             if !enabled {
@@ -1120,7 +1150,7 @@ struct USBPairingInputTestView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle(embedded ? "Secure Setup" : "Secure Pairing")
+        .inputPilotBackground().navigationTitle(embedded ? "Secure Setup" : "Secure Pairing")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -1170,7 +1200,7 @@ private struct AppLogsView: View {
             Picker("Filter", selection: $filter) { ForEach(AppLogCategory.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).padding()
             ScrollViewReader { proxy in ScrollView { LazyVStack(alignment: .leading, spacing: 4) { ForEach(visible) { entry in Text(entry.line).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).id(entry.id) } }.padding() }.onChange(of: visible.count) { _, _ in if !paused, let last = visible.last { proxy.scrollTo(last.id, anchor: .bottom) } } }
         }
-        .navigationTitle("App Logs").navigationBarTitleDisplayMode(.inline)
+        .inputPilotBackground().navigationTitle("App Logs").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItemGroup(placement: .topBarTrailing) { Button(paused ? "Resume" : "Pause") { if !paused { frozen = log.records }; paused.toggle() }; Button { log.clear(); frozen = [] } label: { Image(systemName: "trash") }; Button { UIPasteboard.general.string = text } label: { Image(systemName: "doc.on.doc") }; ShareLink(item: text) { Image(systemName: "square.and.arrow.up") } } }
     }
 }
@@ -1186,7 +1216,7 @@ private struct DiagnosticsExportView: View {
         let hid = metadata?.hid
         return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "BLE connected/advertising: \(metadata?.ble?.connected ?? false)/\(metadata?.ble?.advertising ?? false)", "BLE advertising recoveries/failures: \(metadata?.ble?.advertisingRecoveries ?? 0)/\(metadata?.ble?.advertisingRecoveryFailures ?? 0)", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
     }
-    var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
+    var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.inputPilotBackground().navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
 }
 
 private struct FirmwareLogDocument: FileDocument {
@@ -1219,7 +1249,7 @@ private struct FirmwareLogsView: View {
                     .onChange(of: visible.count) { _, _ in if !manager.paused, let last = visible.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } }
             }
         }
-        .navigationTitle("Firmware Logs").navigationBarTitleDisplayMode(.inline)
+        .inputPilotBackground().navigationTitle("Firmware Logs").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItemGroup(placement: .topBarTrailing) { Button(manager.paused ? "Resume" : "Pause") { manager.setPaused(!manager.paused) }; Button { manager.clear() } label: { Image(systemName: "trash") }; Button { UIPasteboard.general.string = allText } label: { Image(systemName: "doc.on.doc") }.accessibilityLabel("Copy All"); ShareLink(item: allText) { Image(systemName: "square.and.arrow.up") }; Button { exporting = true } label: { Image(systemName: "arrow.down.doc") }.accessibilityLabel("Export text file") } }
         .fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: allText), contentType: .plainText, defaultFilename: "InputPilot-\(device.deviceId)-logs.txt") { _ in }
         .task { manager.start() }

@@ -36,6 +36,24 @@ replace this gate.
 
 ## Recovery matrix
 
+- Fresh app install: verify the eight-stage guide appears before any Bluetooth
+  or Local Network permission prompt. Exercise ready, unflashed, and no-hardware
+  paths. Open/share the Web Flasher, return to the app, and confirm installation
+  explicitly before USB trust. Verify Back preserves preparation choices.
+- Select Later before pairing, explore without hardware, and resume through
+  Guided Setup or Settings. Complete setup, relaunch, and verify the main tabs
+  appear. Interrupt after device persistence and verify connection-test resume.
+  With multiple saved devices, Settings must check the selected device.
+- Verify German/US keyboard selection before the keyboard test and matching
+  layout in Control afterward. Test the guide at accessibility text sizes and
+  with VoiceOver; progress and hardware selection must be understandable.
+- Check ambient backgrounds in all tabs, pushed screens, setup, and editors in
+  light/dark mode. Change accent/palette live, disable backgrounds, and exercise
+  Reduce Motion, Reduce Transparency, and Increased Contrast. Background the
+  app and verify animation resumes without jumping through inactive time.
+- Device Details must show portal scripts as disabled on all firmware versions,
+  with no script editor, run/upload controls, or portal-status polling.
+
 - Cancel USB capture, malformed frame and pairing-secret storage failure.
 - Rotate the credential while BLE/TCP is connected; old sessions and old phone
   credentials must fail immediately, with no plaintext retry.

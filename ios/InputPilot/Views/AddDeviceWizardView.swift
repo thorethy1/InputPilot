@@ -11,10 +11,10 @@ struct AddDeviceWizardView: View {
     let flow: DeviceSetupFlow
     var onFinished: ((Bool) -> Void)?
 
-    init(flow: DeviceSetupFlow = .addDevice, onFinished: ((Bool) -> Void)? = nil) {
+    init(flow: DeviceSetupFlow = .addDevice, preferredDeviceId: String? = nil, onFinished: ((Bool) -> Void)? = nil) {
         self.flow = flow
         self.onFinished = onFinished
-        _viewModel = StateObject(wrappedValue: AddDeviceWizardViewModel(flow: flow))
+        _viewModel = StateObject(wrappedValue: AddDeviceWizardViewModel(flow: flow, preferredDeviceId: preferredDeviceId))
     }
 
     var body: some View {
@@ -23,6 +23,8 @@ struct AddDeviceWizardView: View {
                 switch viewModel.step {
                 case .welcome: welcomeStep
                 case .hardware: hardwareStep
+                case .firmware: firmwareStep
+                case .permissions: permissionsStep
                 case .securePairing: securePairingStep
                 case .bleScanning: bluetoothScanningStep
                 case .confirmBLE: confirmBLEStep
@@ -31,6 +33,10 @@ struct AddDeviceWizardView: View {
                 case .keyboardTest: validationStep(.keyboard)
                 case .complete: completeStep
                 }
+            }
+            .inputPilotBackground()
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if flow == .firstRun { setupProgress }
             }
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
@@ -50,6 +56,8 @@ struct AddDeviceWizardView: View {
         switch viewModel.step {
         case .welcome: "Welcome"
         case .hardware: "Hardware"
+        case .firmware: "Install Firmware"
+        case .permissions: "Before You Connect"
         case .securePairing: "USB Trust"
         case .bleScanning: "Bluetooth"
         case .confirmBLE: "Connection Setup"
@@ -57,6 +65,46 @@ struct AddDeviceWizardView: View {
         case .mouseTest: "Mouse Test"
         case .keyboardTest: "Keyboard Test"
         case .complete: "Setup Complete"
+        }
+    }
+
+    private var setupProgress: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Step \(progressStage) of 8 · \(progressLabel)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ProgressView(value: Double(progressStage), total: 8)
+                .accessibilityLabel("Setup progress")
+                .accessibilityValue("Step \(progressStage) of 8, \(progressLabel)")
+        }
+        .padding(.horizontal, AppTheme.Spacing.section)
+        .padding(.vertical, AppTheme.Spacing.standard)
+        .background(.regularMaterial)
+    }
+
+    private var progressStage: Int {
+        switch viewModel.step {
+        case .welcome: 1
+        case .hardware, .firmware: 2
+        case .permissions: 3
+        case .securePairing: 4
+        case .bleScanning, .confirmBLE: 5
+        case .connectionTest: 6
+        case .mouseTest, .keyboardTest: 7
+        case .complete: 8
+        }
+    }
+
+    private var progressLabel: String {
+        switch progressStage {
+        case 1: "Welcome"
+        case 2: "Prepare your hardware"
+        case 3: "Connections & permissions"
+        case 4: "Establish USB trust"
+        case 5: "Bluetooth & optional Wi-Fi"
+        case 6: "Check the connection"
+        case 7: "Try mouse & keyboard"
+        default: "Ready to go"
         }
     }
 
@@ -86,11 +134,12 @@ struct AddDeviceWizardView: View {
         SetupIntroductionView(
             icon: "cursorarrow.motionlines",
             title: "Control a computer from your iPhone",
-            message: "InputPilot turns an ESP32-S3 into a local, authenticated USB keyboard and mouse. No cloud account or internet connection is required.",
+            message: "Your iPhone becomes a trackpad and keyboard. A small InputPilot board plugs into the computer and sends your input over USB. We will guide you from hardware and firmware to your first connection.",
             points: [
+                ("shippingbox", "No finished InputPilot yet? Start here for the hardware checklist and Web Flasher."),
                 ("lock.shield", "USB establishes trust before Bluetooth or Wi-Fi can control input."),
-                ("bluetooth", "Bluetooth-only setup stays fully supported."),
-                ("wifi", "Wi-Fi is optional and can be added or changed later.")
+                ("wifi", "Bluetooth works locally without Wi-Fi, an account, or a cloud service. Wi-Fi is optional."),
+                ("pause.circle", "Choose Later at any time. Continue from Guided Setup or Settings when you are ready.")
             ],
             actionTitle: "Get Started",
             action: viewModel.continueFromWelcome
@@ -98,24 +147,130 @@ struct AddDeviceWizardView: View {
     }
 
     private var hardwareStep: some View {
-        SetupIntroductionView(
-            icon: "memorychip",
-            title: "Prepare InputPilot",
-            message: "Use an ESP32-S3 Zero with current InputPilot firmware and a USB data cable. Power it on before continuing.",
-            points: [
-                ("cable.connector", "The cable must support data, not charging only."),
-                ("iphone", "First connect InputPilot to this iPhone so it can type its one-time trust code."),
-                ("desktopcomputer", "After pairing, connect its USB output to the computer you want to control for the mouse and keyboard tests.")
-            ],
-            actionTitle: "InputPilot Is Flashed — Continue",
-            externalLinkTitle: "InputPilot is not flashed yet?",
-            externalLinkMessage: "Open the official Web Flasher in Chrome or Edge on a desktop computer. Connect the ESP32-S3 by USB, install the firmware, then return here.",
-            externalLinkURL: InputPilotLinks.webFlasher,
-            action: viewModel.continueFromHardware
-        )
+        Form {
+            Section {
+                Label("Where are you starting?", systemImage: "memorychip")
+                    .font(.title2.bold())
+                Text("Choose what you already have. You can explore the app now and finish setup when your board is ready.")
+                    .foregroundStyle(.secondary)
+                ForEach(SetupHardwareReadiness.allCases) { readiness in
+                    Button { viewModel.hardwareReadiness = readiness } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: readiness.icon).foregroundStyle(Color.accentColor)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(readiness.title).font(.headline).foregroundStyle(.primary)
+                                Text(readiness.detail).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: viewModel.hardwareReadiness == readiness ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .padding(.vertical, 6)
+                        .frame(minHeight: AppTheme.minimumInteractionSize)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(viewModel.hardwareReadiness == readiness ? [.isSelected] : [])
+                }
+            }
+            Section("Your checklist") {
+                Label("Waveshare ESP32-S3-Zero / Mini (ESP32-S3FH4R2, 4 MB flash)", systemImage: "memorychip")
+                Label("USB data cable — a charging-only cable will not work", systemImage: "cable.connector")
+                Label("iPhone with Bluetooth; a compatible USB adapter if needed for USB trust", systemImage: "iphone")
+                Label("Computer with a free USB port to control", systemImage: "desktopcomputer")
+                if viewModel.hardwareReadiness != .ready {
+                    Label("Chrome or Edge on a desktop computer for the first firmware installation", systemImage: "safari")
+                }
+                Link("View Hardware Guide", destination: InputPilotLinks.hardwareGuide)
+            }
+            Section {
+                Button(viewModel.hardwareReadiness == .ready ? "Continue with My InputPilot" : "Show Firmware Preparation") {
+                    viewModel.continueFromHardware()
+                }
+                .buttonStyle(.borderedProminent)
+                if viewModel.hardwareReadiness == .needsHardware {
+                    Button("Explore the App — Set Up Later", action: cancel)
+                }
+            } footer: {
+                Text("The flashed InputPilot board provides the USB keyboard and mouse connection to your computer.")
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .bottomBar) {
                 Button("Back") { viewModel.backToWelcome() }
+            }
+        }
+    }
+
+    private var firmwareStep: some View {
+        Form {
+            if viewModel.hardwareReadiness == .needsHardware {
+                Section {
+                    Label("Get your board first", systemImage: "shippingbox")
+                        .font(.headline)
+                    Text("Use the supported board from the hardware checklist. No soldering or local development environment is needed to install the release firmware with the Web Flasher.")
+                    Link("Hardware & Board Details", destination: InputPilotLinks.hardwareGuide)
+                }
+            }
+            Section {
+                Text("Install InputPilot in your desktop browser")
+                    .font(.title2.bold())
+                Text("The Web Flasher installs the initial firmware. Flashing is done on a desktop computer; this iPhone app handles pairing and control afterward.")
+                    .foregroundStyle(.secondary)
+                Link(destination: InputPilotLinks.webFlasher) {
+                    Label("Open Web Flasher", systemImage: "safari")
+                }
+                ShareLink(item: InputPilotLinks.webFlasher) {
+                    Label("Send Link to Your Computer", systemImage: "square.and.arrow.up")
+                }
+                Text(InputPilotLinks.webFlasher.absoluteString)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+            }
+            Section("On your computer") {
+                Label("1. Open the link in Chrome or Edge on a desktop computer.", systemImage: "desktopcomputer")
+                Label("2. Connect the ESP32-S3 with a USB data cable.", systemImage: "cable.connector")
+                Label("3. Select the board in the flasher and install the current stable firmware. Wait for installation to finish.", systemImage: "arrow.down.circle")
+                Label("4. Unplug and reconnect the board, then return to this app.", systemImage: "arrow.triangle.2.circlepath")
+            }
+            Section("Board not detected?") {
+                Text("Check the data cable and close other apps using the USB port. Hold BOOT, press and release RESET, then release BOOT to enter download mode. Retry the flasher, then unplug and reconnect the board after installation.")
+            }
+            Section {
+                Toggle("Firmware is installed and the board has restarted", isOn: $viewModel.firmwareInstalled)
+                Button("Continue to Pairing Preparation") { viewModel.continueFromFirmware() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!viewModel.firmwareInstalled)
+            } footer: {
+                Text("Opening the link does not confirm installation. Continue once you have prepared the physical board. Future firmware updates are available in the app's Firmware tab.")
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .bottomBar) {
+                Button("Back") { viewModel.backToHardware() }
+            }
+        }
+    }
+
+    private var permissionsStep: some View {
+        SetupIntroductionView(
+            icon: "lock.shield",
+            title: "Connect locally, pair securely",
+            message: "First connect InputPilot to this iPhone by USB. After trust is established, move the board to your computer and control it wirelessly.",
+            points: [
+                ("cable.connector", "USB trust: use a data cable and a compatible adapter if needed. The next screen captures the pairing code; hold BOOT for two seconds to send it."),
+                ("antenna.radiowaves.left.and.right", "Bluetooth: allow access when the discovery screen opens. Keep InputPilot nearby and powered on."),
+                ("wifi", "Local Network: needed only for optional Wi-Fi setup. Use a reachable 2.4 GHz network. You can keep using Bluetooth without configuring Wi-Fi."),
+                ("gearshape", "Permission denied? You can enable Bluetooth and Local Network for InputPilot in iOS Settings."),
+                ("wifi.exclamationmark", "Wi-Fi portal scripts are currently disabled. Use Bluetooth on networks that require a browser login.")
+            ],
+            actionTitle: "Set Up USB Trust",
+            action: viewModel.continueFromPermissions
+        )
+        .toolbar {
+            ToolbarItem(placement: .bottomBar) {
+                Button("Back") { viewModel.backFromPermissions() }
             }
         }
     }
@@ -283,9 +438,6 @@ private struct SetupIntroductionView: View {
     let message: String
     let points: [(String, String)]
     let actionTitle: String
-    let externalLinkTitle: String?
-    let externalLinkMessage: String?
-    let externalLinkURL: URL?
     let action: () -> Void
 
     init(
@@ -294,9 +446,6 @@ private struct SetupIntroductionView: View {
         message: String,
         points: [(String, String)],
         actionTitle: String,
-        externalLinkTitle: String? = nil,
-        externalLinkMessage: String? = nil,
-        externalLinkURL: URL? = nil,
         action: @escaping () -> Void
     ) {
         self.icon = icon
@@ -304,9 +453,6 @@ private struct SetupIntroductionView: View {
         self.message = message
         self.points = points
         self.actionTitle = actionTitle
-        self.externalLinkTitle = externalLinkTitle
-        self.externalLinkMessage = externalLinkMessage
-        self.externalLinkURL = externalLinkURL
         self.action = action
     }
 
@@ -336,29 +482,6 @@ private struct SetupIntroductionView: View {
                     }
                 }
                 .frame(maxWidth: 520, alignment: .leading)
-                if let externalLinkTitle,
-                   let externalLinkMessage,
-                   let externalLinkURL {
-                    VStack(alignment: .leading, spacing: AppTheme.Spacing.standard) {
-                        Label(externalLinkTitle, systemImage: "externaldrive.badge.questionmark")
-                            .font(.headline)
-                        Text(externalLinkMessage)
-                            .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
-                            Link(destination: externalLinkURL) {
-                                Label("Open Web Flasher", systemImage: "safari")
-                            }
-                            .buttonStyle(.bordered)
-                            ShareLink(item: externalLinkURL) {
-                                Label("Send Link", systemImage: "square.and.arrow.up")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-                    .padding(AppTheme.Spacing.spacious)
-                    .frame(maxWidth: 520, alignment: .leading)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: AppTheme.Radius.card))
-                }
                 Button(actionTitle, action: action)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
@@ -484,6 +607,19 @@ private struct SetupValidationView: View {
                     .font(.title2.bold())
                 Text(instructions)
                     .foregroundStyle(.secondary)
+            }
+            if kind == .keyboard {
+                Section {
+                    Picker("Computer Keyboard Layout", selection: $layoutName) {
+                        ForEach(KeyboardLayout.allCases) { layout in
+                            Text(layout.rawValue).tag(layout.rawValue)
+                        }
+                    }
+                    .livePickerAccent()
+                    .disabled(state == .running)
+                } footer: {
+                    Text("Match the keyboard layout configured on the computer you control. This also applies after setup.")
+                }
             }
             Section {
                 switch state {

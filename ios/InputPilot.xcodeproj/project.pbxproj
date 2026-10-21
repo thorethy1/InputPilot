@@ -65,6 +65,8 @@
 		A10000000000000000000083 /* WireGuardConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000083 /* WireGuardConfiguration.swift */; };
 		A10000000000000000000084 /* WireGuardSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000084 /* WireGuardSettingsView.swift */; };
 		A10000000000000000000085 /* WireGuardConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000085 /* WireGuardConfigurationTests.swift */; };
+		A10000000000000000000086 /* AmbientBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000086 /* AmbientBackground.swift */; };
+		A10000000000000000000087 /* AmbientBackgroundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000087 /* AmbientBackgroundTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -140,6 +142,8 @@
 		A20000000000000000000083 /* WireGuardConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfiguration.swift; sourceTree = "<group>"; };
 		A20000000000000000000084 /* WireGuardSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardSettingsView.swift; sourceTree = "<group>"; };
 		A20000000000000000000085 /* WireGuardConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireGuardConfigurationTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000086 /* AmbientBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientBackground.swift; sourceTree = "<group>"; };
+		A20000000000000000000087 /* AmbientBackgroundTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbientBackgroundTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -205,6 +209,7 @@
 				A20000000000000000000019 /* DeviceRepositoryTests.swift */,
 				A20000000000000000000022 /* BonjourDiscoveryFilterTests.swift */,
 				A20000000000000000000023 /* AddDeviceWizardViewModelTests.swift */,
+				A20000000000000000000087 /* AmbientBackgroundTests.swift */,
 				A20000000000000000000024 /* MockBonjourBrowser.swift */,
 				A20000000000000000000027 /* DevicePresenceStatusTests.swift */,
 				A20000000000000000000030 /* SavedDeviceIndexTests.swift */,
@@ -253,6 +258,7 @@
 			children = (
 				A20000000000000000000016 /* DeviceDetailView.swift */,
 				A20000000000000000000020 /* AddDeviceWizardView.swift */,
+				A20000000000000000000086 /* AmbientBackground.swift */,
 				A20000000000000000000056 /* SecretsView.swift */,
 				A20000000000000000000058 /* PresetsView.swift */,
 				A20000000000000000000071 /* MacrosView.swift */,
@@ -402,6 +408,7 @@
 				A10000000000000000000012 /* DeviceRepository.swift in Sources */,
 				A10000000000000000000013 /* DeviceDetailView.swift in Sources */,
 				A10000000000000000000017 /* AddDeviceWizardView.swift in Sources */,
+				A10000000000000000000086 /* AmbientBackground.swift in Sources */,
 				A10000000000000000000018 /* AddDeviceWizardViewModel.swift in Sources */,
 				A10000000000000000000023 /* DevicePresenceStatus.swift in Sources */,
 				A10000000000000000000025 /* SavedDeviceIndex.swift in Sources */,
@@ -439,6 +446,7 @@
 				A10000000000000000000016 /* DeviceRepositoryTests.swift in Sources */,
 				A10000000000000000000019 /* BonjourDiscoveryFilterTests.swift in Sources */,
 				A10000000000000000000020 /* AddDeviceWizardViewModelTests.swift in Sources */,
+				A10000000000000000000087 /* AmbientBackgroundTests.swift in Sources */,
 				A10000000000000000000021 /* MockBonjourBrowser.swift in Sources */,
 				A10000000000000000000024 /* DevicePresenceStatusTests.swift in Sources */,
 				A10000000000000000000027 /* SavedDeviceIndexTests.swift in Sources */,

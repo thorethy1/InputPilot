@@ -33,11 +33,87 @@ final class AddDeviceWizardViewModelTests: XCTestCase {
         model.continueFromWelcome()
         XCTAssertEqual(model.step, .hardware)
         model.continueFromHardware()
+        XCTAssertEqual(model.step, .permissions)
+        model.continueFromPermissions()
         XCTAssertEqual(model.step, .securePairing)
         model.backFromPairing()
+        XCTAssertEqual(model.step, .permissions)
+        model.backFromPermissions()
         XCTAssertEqual(model.step, .hardware)
         model.backToWelcome()
         XCTAssertEqual(model.step, .welcome)
+    }
+
+    func testUnpreparedHardwareRequiresExplicitFirmwareConfirmation() {
+        for readiness in [SetupHardwareReadiness.needsFirmware, .needsHardware] {
+            let model = AddDeviceWizardViewModel(
+                flow: .firstRun, browser: MockBonjourBrowser(), apiClient: MockAPIClient()
+            )
+            model.continueFromWelcome()
+            model.hardwareReadiness = readiness
+            model.continueFromHardware()
+            XCTAssertEqual(model.step, .firmware)
+
+            model.continueFromFirmware()
+            XCTAssertEqual(model.step, .firmware, "Opening the flasher must not imply a flashed board")
+            XCTAssertNil(model.securelyPairedDeviceId)
+
+            model.firmwareInstalled = true
+            model.continueFromFirmware()
+            XCTAssertEqual(model.step, .permissions)
+            model.backFromPermissions()
+            XCTAssertEqual(model.step, .firmware)
+            XCTAssertTrue(model.firmwareInstalled)
+            model.backToHardware()
+            XCTAssertEqual(model.step, .hardware)
+            XCTAssertEqual(model.hardwareReadiness, readiness)
+        }
+    }
+
+    func testFlashingDoesNotBypassUSBTrust() {
+        let model = AddDeviceWizardViewModel(
+            flow: .firstRun, browser: MockBonjourBrowser(), apiClient: MockAPIClient()
+        )
+        model.continueFromWelcome()
+        model.hardwareReadiness = .needsFirmware
+        model.continueFromHardware()
+        model.firmwareInstalled = true
+        model.continueFromFirmware()
+        model.continueFromPermissions()
+        model.continueSecureSetup()
+
+        XCTAssertEqual(model.step, .securePairing)
+        XCTAssertNotNil(model.errorMessage)
+    }
+
+    func testCancellationClearsPreparationAndCredentialsWithoutCompletingSetup() {
+        let model = AddDeviceWizardViewModel(
+            flow: .firstRun, browser: MockBonjourBrowser(), apiClient: MockAPIClient()
+        )
+        model.hardwareReadiness = .needsFirmware
+        model.firmwareInstalled = true
+        model.homeWifiPassword = "temporary-password"
+        model.didPairSecurely(deviceId: "aabbccddeeff")
+        model.cancelWizard()
+
+        XCTAssertEqual(model.step, .welcome)
+        XCTAssertEqual(model.hardwareReadiness, .ready)
+        XCTAssertFalse(model.firmwareInstalled)
+        XCTAssertTrue(model.homeWifiPassword.isEmpty)
+        XCTAssertNil(model.securelyPairedDeviceId)
+        XCTAssertNil(model.savedDeviceId)
+    }
+
+    func testConnectionCheckResumesWithSelectedDevice() {
+        let model = AddDeviceWizardViewModel(
+            flow: .firstRun, preferredDeviceId: "SECOND",
+            browser: MockBonjourBrowser(), apiClient: MockAPIClient()
+        )
+        let first = StoredDevice(deviceId: "first", displayName: "A", mdnsHost: "")
+        let second = StoredDevice(deviceId: "second", displayName: "B", mdnsHost: "")
+        model.updateKnownDevices([first, second])
+        XCTAssertEqual(model.savedDeviceId, "second")
+        XCTAssertEqual(model.step, .connectionTest)
     }
 
     func testRegularAddDeviceFlowStillStartsAtUSBTrust() {

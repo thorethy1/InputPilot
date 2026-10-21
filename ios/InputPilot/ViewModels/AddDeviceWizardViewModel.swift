@@ -3,11 +3,41 @@ import SwiftData
 
 enum InputPilotLinks {
     static let webFlasher = URL(string: "https://thorethy1.github.io/InputPilot/en/")!
+    static let hardwareGuide = URL(string: "https://github.com/thorethy1/InputPilot/blob/main/usb-hid-s3/docs/HARDWARE.md")!
+}
+
+enum SetupHardwareReadiness: String, CaseIterable, Identifiable {
+    case ready, needsFirmware, needsHardware
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .ready: "My InputPilot is ready"
+        case .needsFirmware: "I have an unflashed board"
+        case .needsHardware: "I do not have the hardware yet"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .ready: "Current InputPilot firmware is already installed."
+        case .needsFirmware: "Install InputPilot with the Web Flasher first."
+        case .needsHardware: "See what you need and prepare at your own pace."
+        }
+    }
+    var icon: String {
+        switch self {
+        case .ready: "checkmark.circle"
+        case .needsFirmware: "arrow.down.to.line"
+        case .needsHardware: "shippingbox"
+        }
+    }
 }
 
 enum AddDeviceWizardStep: Equatable {
     case welcome
     case hardware
+    case firmware
+    case permissions
     case securePairing
     case bleScanning
     case confirmBLE(BLEDeviceMetadata)
@@ -39,6 +69,8 @@ final class AddDeviceWizardViewModel: ObservableObject {
     @Published var homeWifiSSID = ""
     @Published var homeWifiPassword = ""
     @Published var configureWiFi = true
+    @Published var hardwareReadiness: SetupHardwareReadiness = .ready
+    @Published var firmwareInstalled = false
     @Published private(set) var mergeMessage: String?
     @Published private(set) var securelyPairedDeviceId: String?
     @Published private(set) var savedDeviceId: String?
@@ -46,13 +78,16 @@ final class AddDeviceWizardViewModel: ObservableObject {
 
     private let browser: any BonjourBrowserProtocol
     private let apiClient: any DeviceAPIClientProtocol
+    private let preferredDeviceId: String?
 
     init(
         flow: DeviceSetupFlow = .addDevice,
+        preferredDeviceId: String? = nil,
         browser: any BonjourBrowserProtocol = BonjourBrowser(),
         apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()
     ) {
         self.flow = flow
+        self.preferredDeviceId = preferredDeviceId
         step = flow == .firstRun ? .welcome : .securePairing
         self.browser = browser
         self.apiClient = apiClient
@@ -73,22 +108,45 @@ final class AddDeviceWizardViewModel: ObservableObject {
         // A first-run device is persisted before the physical HID tests. If the
         // app is terminated there, resume at the non-destructive connection
         // check instead of asking for USB trust and credentials again.
-        if flow == .firstRun, step == .welcome, let device = devices.first {
+        let resumeDevice = devices.first { $0.deviceId.lowercased() == preferredDeviceId?.lowercased() } ?? devices.first
+        if flow == .firstRun, step == .welcome, let device = resumeDevice {
             savedDeviceId = device.deviceId
             step = .connectionTest
         }
     }
 
     func continueFromWelcome() {
-        guard flow == .firstRun else { return }
+        guard flow == .firstRun, step == .welcome else { return }
         errorMessage = nil
         step = .hardware
     }
 
     func continueFromHardware() {
+        guard flow == .firstRun, step == .hardware else { return }
+        errorMessage = nil
+        step = hardwareReadiness == .ready ? .permissions : .firmware
+    }
+
+    func continueFromFirmware() {
+        guard flow == .firstRun, step == .firmware, firmwareInstalled else { return }
+        errorMessage = nil
+        step = .permissions
+    }
+
+    func continueFromPermissions() {
+        guard flow == .firstRun, step == .permissions else { return }
+        step = .securePairing
+    }
+
+    func backToHardware() {
         guard flow == .firstRun else { return }
         errorMessage = nil
-        step = .securePairing
+        step = .hardware
+    }
+
+    func backFromPermissions() {
+        guard flow == .firstRun else { return }
+        step = hardwareReadiness == .ready ? .hardware : .firmware
     }
 
     func backToWelcome() {
@@ -150,7 +208,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
     func backFromPairing() {
         if flow == .firstRun {
             errorMessage = nil
-            step = .hardware
+            step = .permissions
         }
     }
 
@@ -170,6 +228,8 @@ final class AddDeviceWizardViewModel: ObservableObject {
         homeWifiSSID = ""
         homeWifiPassword = ""
         configureWiFi = true
+        hardwareReadiness = .ready
+        firmwareInstalled = false
         mergeMessage = nil
         securelyPairedDeviceId = nil
         savedDeviceId = nil

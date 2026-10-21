@@ -1,5 +1,12 @@
 # Captive Portal Scripts
 
+**App availability:** Portal script management is temporarily disabled because
+the workflows do not work reliably yet. Device Details shows a disabled status;
+the app does not open the editor, poll portal status, upload, or run workflows.
+Use Bluetooth or a Wi-Fi network without a browser login. Existing scripts on
+the firmware are not removed by this app change. The documentation below
+describes the firmware format and the former management UI.
+
 InputPilot 0.9.2 can keep up to five HTTP workflows on the ESP32, each bound to
 an exact Wi-Fi SSID. After joining that network, the firmware waits for the
 configured delay and runs the workflow once. This avoids depending on iOS

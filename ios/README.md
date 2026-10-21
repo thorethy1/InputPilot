@@ -7,15 +7,26 @@ The iOS app supports Secure Protocol v2 devices only.
 On a fresh install, the app guides the user through hardware preparation before
 requesting Bluetooth access. The complete flow is:
 
-1. Review the required ESP32-S3 hardware and USB data cable. If the board has
-   not been prepared yet, open or share the official
+1. Choose whether InputPilot is ready, the board needs firmware, or hardware
+   still needs to be acquired. Review the supported board, USB data cable,
+   iPhone USB adapter, and computer checklist. Unprepared boards get a separate
+   installation guide with troubleshooting and the official
    [InputPilot Web Flasher](https://thorethy1.github.io/InputPilot/en/) for use
-   with Chrome or Edge on a desktop computer.
-2. Establish trust through USB HID pairing.
+   with Chrome or Edge on a desktop computer. The link can be shared with the
+   computer; installation must be explicitly confirmed before continuing.
+2. Review Bluetooth and optional Local Network permissions, then establish
+   trust through USB HID pairing.
 3. Discover the same device identity over BLE and authenticate Secure Protocol v2.
 4. Optionally send Wi-Fi credentials through that authenticated BLE session.
 5. If Wi-Fi was selected, rediscover and authenticate the same identity over TCP.
-6. Verify an authenticated control connection, pointer movement, and keyboard output.
+6. Verify an authenticated control connection, pointer movement, and keyboard
+   output. Choose the computer's keyboard layout before sending test text.
+
+An eight-stage progress indicator follows the whole flow. **Later** opens the
+app without marking setup complete; **Guided Setup** on the empty device screen
+and **Settings → Setup & Connection Check** provide a way back. With saved
+devices, the Settings entry checks the selected device. Exploring without a
+device does not start Bluetooth discovery or Bonjour browsing.
 
 Bluetooth-only setup is a complete supported path. Bluetooth is initialized only
 when its setup step becomes visible; Local Network access is explained immediately
@@ -29,6 +40,22 @@ management and OTA use authenticated BLE or Wi-Fi/TCP sessions.
 
 Older firmware cannot be added. Reflash it over USB with the current merged
 image, then run secure setup.
+
+## Appearance and portal scripts
+
+Lara's animated radial color washes are available throughout the app, including
+setup and presented editors. **Settings → Appearance** controls dynamic
+backgrounds and the Accent Color, Sand, Sage, Rose, Ocean, Lavender, and Graphite
+palettes. A shared clock pauses outside the active scene; hidden backgrounds
+stop requesting animation frames. Reduce Motion shows a static composition;
+Reduce Transparency and Increased Contrast use a plain semantic background.
+
+Wi-Fi portal script management is temporarily disabled because the workflows
+are unreliable. Device Details shows this status instead of opening an editor.
+The former script destination is inert: it creates no transport session and
+does not poll, upload, edit, or run scripts. This app change does not modify
+scripts already stored in firmware. Bluetooth and regular Wi-Fi setup remain
+available.
 
 ## Build and test
 

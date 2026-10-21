@@ -31,7 +31,7 @@ struct WireGuardSettingsView: View {
             policySection
             securitySection
         }
-        .navigationTitle("WireGuard")
+        .inputPilotBackground().navigationTitle("WireGuard")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if isBusy { ToolbarItem(placement: .primaryAction) { ProgressView() } }
