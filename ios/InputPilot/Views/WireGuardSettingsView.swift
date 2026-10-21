@@ -25,7 +25,7 @@ struct WireGuardSettingsView: View {
     }
 
     var body: some View {
-        Form {
+        InputPilotForm {
             statusSection
             configurationSection
             policySection

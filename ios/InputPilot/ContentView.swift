@@ -108,7 +108,7 @@ struct ContentView: View {
     }
 
     private var deviceList: some View {
-        List {
+        InputPilotList {
             ForEach(storedDevices) { device in
                 NavigationLink {
                     DeviceDetailView(device: device, selectedTab: $selectedTab)
@@ -436,7 +436,7 @@ private struct FirmwareDeviceView: View {
         self.transport = transport; _updater = StateObject(wrappedValue: transport.firmwareUpdater)
     }
     var body: some View {
-        Form {
+        InputPilotForm {
             Section("Firmware") {
                 ActiveDevicePicker(devices: devices, selection: $selection)
                 LabeledContent("Update channel", value: updateChannel.rawValue)
@@ -774,7 +774,7 @@ private struct ConnectionSettingsView: View {
     }
     private let appVersion = AppVersionInfo.read()
     var body: some View {
-        Form {
+        InputPilotForm {
             if let selected {
                 Section("Active Device") {
                     ActiveDevicePicker(devices: devices, selection: $selectedDeviceId)
@@ -863,7 +863,7 @@ private struct AppearanceSettingsView: View {
     @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
     var body: some View {
-        Form {
+        InputPilotForm {
             BackgroundSettingsSection()
             Section("Appearance") {
                 Picker("Interface", selection: $appearanceName) {
@@ -965,7 +965,7 @@ private struct StatusLEDMatrixView: View {
     ]
 
     var body: some View {
-        List {
+        InputPilotList {
             Section {
                 ForEach(states) { state in
                     HStack(alignment: .top, spacing: 12) {
@@ -1037,7 +1037,7 @@ private struct DiagnosticsSettingsView: View {
     }
 
     var body: some View {
-        Form {
+        InputPilotForm {
             if let selected {
                 Section("Device") {
                     ActiveDevicePicker(devices: devices, selection: $selection)
@@ -1116,7 +1116,7 @@ struct USBPairingInputTestView: View {
     private enum ResultState: Equatable { case waiting, valid, invalid, storageFailed }
 
     var body: some View {
-        Form {
+        InputPilotForm {
             Section("Secure USB pairing") {
                 Text("Connect InputPilot to this iPhone, wait for it to power on, then hold BOOT for two seconds. InputPilot types a one-time, 128-bit pairing credential into the focused field below.")
                 KeyboardInputBridge(autoFocus: true) { event in
@@ -1216,7 +1216,7 @@ private struct DiagnosticsExportView: View {
         let hid = metadata?.hid
         return ["InputPilot diagnostics", "App Version: \(app.version)", "App Build: \(app.build)", "App Commit: \(app.commit)", "Firmware Version: \(device.firmwareVersion ?? "Unknown")", "Firmware Commit: \(metadata?.firmwareCommit ?? "Unknown")", "Device ID: \(device.deviceId)", "Connection Mode: \(UserDefaults.standard.string(forKey: "connectionMode") ?? ConnectionMode.automatic.rawValue)", "Diagnostics Transport: \(diagnostics.status)", "Capabilities: \(device.capabilities.joined(separator: ","))", "Running Partition: \(device.runningPartition ?? "Unknown")", "Reset Reason: \(metadata?.resetReason ?? "Unknown")", "BLE connected/advertising: \(metadata?.ble?.connected ?? false)/\(metadata?.ble?.advertising ?? false)", "BLE advertising recoveries/failures: \(metadata?.ble?.advertisingRecoveries ?? 0)/\(metadata?.ble?.advertisingRecoveryFailures ?? 0)", "HID decoded/queued/executed/failed: \(hid?.decoded ?? 0)/\(hid?.queued ?? 0)/\(hid?.executed ?? 0)/\(hid?.failed ?? 0)", "USB reports attempted/succeeded/failed: \(hid?.usbReportsAttempted ?? 0)/\(hid?.usbReportsSucceeded ?? 0)/\(hid?.usbReportsFailed ?? 0)", "Last HID source/type/sequence/phase: \(hid?.lastSource ?? "Unknown")/\(hid?.lastType ?? "Unknown")/\(hid?.lastSequence ?? 0)/\(hid?.lastPhase ?? "Unknown")", "Previous HID breadcrumb valid/sequence/source/phase: \(hid?.previousBreadcrumbValid ?? false)/\(hid?.previousSequence ?? 0)/\(hid?.previousSource ?? "Unknown")/\(hid?.previousPhase ?? 0)", "", "App Logs:", AppLog.shared.records.map(\.line).joined(separator: "\n"), "", "Firmware Logs:", diagnostics.lines.map(\.raw).joined(separator: "\n")].joined(separator: "\n")
     }
-    var body: some View { Form { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.inputPilotBackground().navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
+    var body: some View { InputPilotForm { Section { LabeledContent("Status", value: diagnostics.status); Text("The export excludes pairing secrets, Wi-Fi passwords, and typed text.").foregroundStyle(.secondary); Button("Export inputpilot-diagnostics.txt") { exporting = true } } }.inputPilotBackground().navigationTitle("Export Diagnostics").fileExporter(isPresented: $exporting, document: FirmwareLogDocument(text: text), contentType: .plainText, defaultFilename: "inputpilot-diagnostics.txt") { _ in }.task { diagnostics.start() }.onDisappear { diagnostics.stop() } }
 }
 
 private struct FirmwareLogDocument: FileDocument {
@@ -1237,7 +1237,7 @@ private struct FirmwareLogsView: View {
     private var allText: String { manager.lines.map(\.raw).joined(separator: "\n") }
     var body: some View {
         VStack(spacing: 0) {
-            Form {
+            InputPilotForm {
                 if devices.count > 1 { ActiveDevicePicker(devices: devices, selection: $selection) }
                 LabeledContent("Connection", value: manager.status)
                 if let metadata = manager.metadata { LabeledContent("Firmware Commit", value: metadata.firmwareCommit ?? "Unknown"); LabeledContent("Reset Reason", value: metadata.resetReason ?? "Unknown") }
@@ -1245,7 +1245,7 @@ private struct FirmwareLogsView: View {
             }.frame(maxHeight: devices.count > 1 ? 170 : 125)
             ScrollViewReader { proxy in
                 ScrollView { LazyVStack(alignment: .leading, spacing: 4) { ForEach(visible) { line in Text(line.raw).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(line.level == "ERROR" ? .red : line.level == "WARN" ? .orange : .primary).frame(maxWidth: .infinity, alignment: .leading).id(line.id) } }.padding() }
-                    .background(Color(uiColor: .secondarySystemBackground))
+                    .inputPilotSurface(cornerRadius: AppTheme.Radius.control)
                     .onChange(of: visible.count) { _, _ in if !manager.paused, let last = visible.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } } }
             }
         }

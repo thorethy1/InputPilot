@@ -51,6 +51,13 @@ replace this gate.
   light/dark mode. Change accent/palette live, disable backgrounds, and exercise
   Reduce Motion, Reduce Transparency, and Increased Contrast. Background the
   app and verify animation resumes without jumping through inactive time.
+- On iOS 26, verify Lara-style glass on device rows, firmware/settings sections,
+  the trackpad, keyboard panels, and setup/editor forms. The ambient colors must
+  remain visible through the surfaces in both light and dark mode. Verify
+  opaque surfaces with Reduce Transparency/Increased Contrast, and the system
+  material fallback on older iOS versions. Repeat trackpad move, scroll, pinch,
+  drag, taps, and gesture-help opening to confirm decoration does not intercept
+  input. Exercise list swipes, navigation, reordering, and form controls.
 - Device Details must show portal scripts as disabled on all firmware versions,
   with no script editor, run/upload controls, or portal-status polling.
 

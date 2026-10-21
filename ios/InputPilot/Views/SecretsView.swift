@@ -74,7 +74,7 @@ struct SecretsView: View {
                         .buttonStyle(.borderedProminent)
                 }
             } else {
-                List {
+                InputPilotList {
                     ForEach(secrets) { secret in
                         row(secret)
                     }
@@ -301,7 +301,7 @@ private struct NewSecretSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     TextField("Name", text: $name, prompt: Text("work-password"))
                         .textInputAutocapitalization(.never)
@@ -358,7 +358,7 @@ private struct RenameSecretSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.never)
@@ -402,7 +402,7 @@ private struct ReplaceSecretValueSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     SecureField("New value", text: $value)
                         .privacySensitive()

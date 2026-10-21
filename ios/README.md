@@ -50,6 +50,14 @@ palettes. A shared clock pauses outside the active scene; hidden backgrounds
 stop requesting animation frames. Reduce Motion shows a static composition;
 Reduce Transparency and Increased Contrast use a plain semantic background.
 
+Content surfaces use Lara's glass treatment as well: native Liquid Glass on
+iOS 26, with a subtle light/dark scrim and border for the trackpad and keyboard
+panels. Lists and forms apply glass to their individual rows so device cards,
+firmware sections, settings, setup, and editors reveal the ambient background.
+The UIKit trackpad view is transparent; its SwiftUI background is decorative
+and does not intercept gestures. Older iOS versions use a system material;
+Reduce Transparency and Increased Contrast use an opaque semantic surface.
+
 Wi-Fi portal script management is temporarily disabled because the workflows
 are unreliable. Device Details shows this status instead of opening an editor.
 The former script destination is inert: it creates no transport session and

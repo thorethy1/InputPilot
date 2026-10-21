@@ -3469,6 +3469,7 @@ struct TrackpadView: View {
         .accessibilityLabel("Remote trackpad")
         .accessibilityValue(gestureState.overlayTitle)
         .accessibilityHint("Swipe left with two fingers to open Keyboard.")
+        .inputPilotSurface(cornerRadius: AppTheme.Radius.trackpad)
         .overlay {
             Text(gestureState.overlayTitle)
                 .foregroundStyle(.secondary)
@@ -3490,7 +3491,7 @@ struct TrackpadView: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(8)
-                .background(.ultraThinMaterial, in: Circle())
+                .background { InputPilotSurface(cornerRadius: 22) }
         }
         .buttonStyle(.plain)
         .padding(6)

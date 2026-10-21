@@ -23,7 +23,7 @@ struct MacrosView: View {
     }
 
     var body: some View {
-        List {
+        InputPilotList {
             if controller.state != .ready {
                 Section {
                     VStack(alignment: .leading, spacing: AppTheme.Spacing.compact) {
@@ -266,7 +266,7 @@ private struct MacroEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section("Macro") {
                     TextField("Name", text: $name)
                     TextField("Description", text: $notes, axis: .vertical)

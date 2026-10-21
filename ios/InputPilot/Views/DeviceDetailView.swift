@@ -48,7 +48,7 @@ struct DeviceDetailView: View {
     }
 
     var body: some View {
-        Form {
+        InputPilotForm {
             Section("Live Connection") {
                 if selectedDeviceId == device.deviceId {
                     Label("Active Device", systemImage: "checkmark.circle.fill")

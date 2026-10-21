@@ -79,7 +79,7 @@ struct AddDeviceWizardView: View {
         }
         .padding(.horizontal, AppTheme.Spacing.section)
         .padding(.vertical, AppTheme.Spacing.standard)
-        .background(.regularMaterial)
+        .background { InputPilotSurface(cornerRadius: 0) }
     }
 
     private var progressStage: Int {
@@ -147,7 +147,7 @@ struct AddDeviceWizardView: View {
     }
 
     private var hardwareStep: some View {
-        Form {
+        InputPilotForm {
             Section {
                 Label("Where are you starting?", systemImage: "memorychip")
                     .font(.title2.bold())
@@ -204,7 +204,7 @@ struct AddDeviceWizardView: View {
     }
 
     private var firmwareStep: some View {
-        Form {
+        InputPilotForm {
             if viewModel.hardwareReadiness == .needsHardware {
                 Section {
                     Label("Get your board first", systemImage: "shippingbox")
@@ -305,7 +305,7 @@ struct AddDeviceWizardView: View {
 
     @ViewBuilder private var confirmBLEStep: some View {
         if let metadata = viewModel.bleMetadata {
-            Form {
+            InputPilotForm {
                 if let message = viewModel.mergeMessage {
                     Section { Label(message, systemImage: "link.badge.plus") }
                 }
@@ -601,7 +601,7 @@ private struct SetupValidationView: View {
     }
 
     var body: some View {
-        Form {
+        InputPilotForm {
             Section {
                 Label(title, systemImage: icon)
                     .font(.title2.bold())
