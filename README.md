@@ -12,15 +12,34 @@ No cloud relay, telemetry, computer-input capture, or Internet remote control is
 
 ### 1. Hardware
 
-Supported board: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 4 MB flash,
-WS2812).
+For new builds, choose an **ESP32-S3 with 8 MB flash**, preferably the
+**N8R8 variant (8 MB flash, 8 MB PSRAM)**. Existing **Waveshare ESP32-S3-Zero /
+Mini boards with ESP32-S3FH4R2 (4 MB flash, 2 MB PSRAM)** remain the current
+firmware target, but have limited space for future firmware features.
+
+**Select ESP32-S3, not ESP32-C3.** InputPilot needs the S3's native USB-OTG
+interface for its USB keyboard and mouse. On boards with separate USB ports,
+use the native USB port for HID rather than a USB-to-UART port.
+
+| Option | Purchase link | What to select |
+|--------|---------------|----------------|
+| **8 MB — recommended for new hardware** | [AliExpress 8 MB listing](https://s.click.aliexpress.com/e/_EwoijzC) | **N8R8**, ESP32-S3, 8 MB flash / 8 MB PSRAM |
+| **4 MB — existing hardware** | [AliExpress 4 MB listing](https://s.click.aliexpress.com/e/_EJBgoCE) | ESP32-S3; the FH4R2 variant has 4 MB flash / 2 MB PSRAM |
+| **USB flash-drive form factor** | [AliExpress USB-stick listing](https://s.click.aliexpress.com/e/_EulrxZs) | Check the ESP32-S3 variant, memory size, and native USB connection |
 
 <p align="center">
-  <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
+  <img src="https://github.com/user-attachments/assets/96cdada5-197d-4781-a58c-be7e480f77f1" alt="Board selection reference for the hardware listings" width="720">
 </p>
 
-- [Aliexpress listing](https://a.aliexpress.com/_ExnnLN0)
-- [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md)
+The current build still uses a **4 MB partition layout** and the board identity
+`esp32-s3-zero-4mb`. The 8 MB purchase recommendation does not add an 8 MB
+firmware layout; check the release's board compatibility before flashing a
+different board. Board pin assignments must also match the firmware.
+
+You also need a USB data cable, an iPhone with Bluetooth and a suitable USB
+adapter if necessary, and the computer you want to control. Wi-Fi is optional.
+See the [hardware guide](usb-hid-s3/docs/HARDWARE.md) for compatibility details,
+the checklist, flashing instructions, and status LEDs.
 
 ### 2. Flash firmware
 
@@ -175,7 +194,7 @@ Authenticated Wi-Fi or BLE OTA
 
 ## Firmware updates over Wi-Fi and Bluetooth
 
-Firmware v0.8.7 uses OTA schema 1 on the 4 MB Waveshare ESP32-S3-Zero: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
+The current 4 MB firmware target uses OTA schema 1: NVS and OTA metadata, two 1,966,080-byte application slots, and coredump storage. PlatformIO checks every image against the real slot size. BLE OTA reuses the authenticated InputPilot NimBLE session; it transfers offset-framed chunks, uses ACK/window flow control, and verifies the complete SHA-256 digest before changing the boot partition. SHA-256 is an integrity check, not a cryptographic signature.
 
 The Firmware tab can check GitHub Releases and validates product, board, protocol, OTA schema, size, and SHA-256 from `firmware-manifest.json`. For a manual `.bin`, the app validates the ESP32 image and embedded InputPilot product/board/version metadata; it never substitutes the installed version as the target. Firmware downgrades are rejected in both the app and current firmware. Developer Mode exposes confirmed downgrade and published-checksum overrides; even then, the device verifies the complete transfer hash and all embedded compatibility metadata. Foreign ESP32-S3 images, bootloaders, partition tables, invalid images, and oversized files are rejected before transfer. A cancellation, timeout, invalid offset, checksum failure, or Bluetooth disconnect aborts the pending slot and leaves the installed firmware active. After finalization, a disconnect is treated as the expected reboot; the app reconnects and verifies device identity, target version, and OTA schema before reporting success.
 
@@ -241,10 +260,10 @@ Current checked-in screenshots document the retained device list/detail flow. Ne
 ## Docs
 
 - [`CHANGELOG.md`](CHANGELOG.md) — version history
-- [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md) — BOM & flash dance
+- [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md) — hardware selection, compatibility, initial setup, and status LEDs
 - [`usb-hid-s3/docs/KNOWN_LIMITATIONS.md`](usb-hid-s3/docs/KNOWN_LIMITATIONS.md)
 - [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — BLE, TCP and REST HID control protocol
-- [`docs/UBUNTU_HARDWARE_TEST.md`](docs/UBUNTU_HARDWARE_TEST.md) — automated headless Ubuntu REST/TCP-to-USB proof
+- [`docs/HARDWARE_E2E.md`](docs/HARDWARE_E2E.md) — secure pairing, HID, and OTA hardware validation plan
 - [`docs/IOS_CICD.md`](docs/IOS_CICD.md) — signing and IPA builds without a local Mac
 
 ## Secrets
