@@ -423,7 +423,6 @@ private struct FirmwareDeviceView: View {
     private let appVersion = AppVersionInfo.read().version
     @AppStorage("connectionMode") private var connectionModeRaw = ConnectionMode.automatic.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
-    @AppStorage("firstRunSetupStatus") private var firstRunSetupStatus = ""
     @AppStorage("developerMode") private var developerMode = false
     @AppStorage("firmwareAllowDowngrade") private var allowDowngrade = false
     @AppStorage("firmwareIgnorePublishedChecksum") private var ignorePublishedChecksum = false
@@ -764,6 +763,7 @@ private struct ConnectionSettingsView: View {
     @AppStorage("selectedDeviceId") private var selectedDeviceId = ""
     @AppStorage("connectionMode") private var mode = ConnectionMode.automatic.rawValue
     @AppStorage("updateChannel") private var updateChannelName = UpdateChannel.buildDefault.rawValue
+    @AppStorage("firstRunSetupStatus") private var firstRunSetupStatus = ""
     @State private var showSetup = false
     private var selected: StoredDevice? {
         guard let selectedID = ActiveDeviceSelection.resolve(
