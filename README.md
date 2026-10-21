@@ -19,14 +19,15 @@ WS2812).
   <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
 </p>
 
-- [Aliexpress listing]
-8MB Version (Recomended)
-(https://s.click.aliexpress.com/e/_EwoijzC)
-4MB Version (Supported as of 1.0 but not much Memory left for furter developement): 
-(https://s.click.aliexpress.com/e/_EJBgoCE)
-Flash Drive Version
-(https://s.click.aliexpress.com/e/_EulrxZs)
-- [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md)
+Aliexpress listings:
+-  [8MB Version (Recomended)] (https://s.click.aliexpress.com/e/_EwoijzC)
+**Please select N8R8 Version!**
+-  [4MB Version (Supported as of 1.0 but not much Memory left for furter developement)](https://s.click.aliexpress.com/e/_EJBgoCE)
+- [Flash Drive Version](https://s.click.aliexpress.com/e/_EulrxZs)
+
+<img width="1320" height="692" alt="image" src="https://github.com/user-attachments/assets/96cdada5-197d-4781-a58c-be7e480f77f1" />
+
+[Hardware Docs](usb-hid-s3/docs/HARDWARE.md)
 
 ### 2. Flash firmware
 
