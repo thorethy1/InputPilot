@@ -12,14 +12,20 @@ No cloud relay, telemetry, computer-input capture, or Internet remote control is
 
 ### 1. Hardware
 
-Supported board: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 4 MB flash,
+Supported board: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 8 MB Flash (4 MB flash supported as of 1.0),
 WS2812).
 
 <p align="center">
   <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
 </p>
 
-- [Aliexpress listing](https://a.aliexpress.com/_ExnnLN0)
+- [Aliexpress listing]
+8MB Version (Recomended)
+(https://s.click.aliexpress.com/e/_EwoijzC)
+4MB Version (Supported as of 1.0 but not much Memory left for furter developement): 
+(https://s.click.aliexpress.com/e/_EJBgoCE)
+Flash Drive Version
+(https://s.click.aliexpress.com/e/_EulrxZs)
 - [`usb-hid-s3/docs/HARDWARE.md`](usb-hid-s3/docs/HARDWARE.md)
 
 ### 2. Flash firmware
