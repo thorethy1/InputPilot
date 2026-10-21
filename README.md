@@ -15,12 +15,15 @@ No cloud relay, telemetry, computer-input capture, or Internet remote control is
 Supported board: **Waveshare ESP32-S3-Zero / Mini** (ESP32-S3FH4R2, 8 MB Flash (4 MB flash supported as of 1.0),
 WS2812).
 
+
+Please make sure you are selecting an ESP32 **S3** and **NOT** the C3. Only the S3 has the Hardware for USB HID.
+
 <p align="center">
   <img src="https://docs.waveshare.com/assets/images/ESP32-S3-Zero-M-dc5172b1f2c465b7927cc20a567c6322.webp" alt="Waveshare ESP32-S3-Zero with USB-C connected" width="360">
 </p>
 
 Aliexpress listings:
--  [8MB Version (Recomended)] (https://s.click.aliexpress.com/e/_EwoijzC)
+-  [8MB Version (Recomended)](https://s.click.aliexpress.com/e/_EwoijzC)
 **Please select N8R8 Version!**
 -  [4MB Version (Supported as of 1.0 but not much Memory left for furter developement)](https://s.click.aliexpress.com/e/_EJBgoCE)
 - [Flash Drive Version](https://s.click.aliexpress.com/e/_EulrxZs)
