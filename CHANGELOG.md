@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Start the 1.0 first-run experience with welcome and hardware preparation,
+  point-of-use Bluetooth and Local Network explanations, the existing
+  USB-trusted secure setup, optional Wi-Fi, an authenticated connection check,
+  guided mouse and keyboard tests, retryable failures, and resume after the
+  configured device has already been saved. Existing installations bypass the
+  new first-run flow. The hardware step links to the official GitHub Pages Web
+  Flasher and can share that link to a desktop running Chrome or Edge when the
+  ESP32-S3 has not been flashed yet.
+
+- Add an ESP32-side WireGuard client for 0.9.3. The iOS device settings import and validate a `.conf`, transfer it transactionally over authenticated Secure Protocol v2, show live tunnel state, and optionally restrict tunnel startup to up to five Wi-Fi SSIDs. The app remembers the tunnel IPv4 address as a secure TCP endpoint; private and preshared keys are never returned by discovery, status, or diagnostics.
+
+- Add persistent, SSID-bound captive portal HTTP workflows. The iOS device settings provide an editor, validation, upload, enable/disable controls, manual testing and live run status; the ESP32 waits for the configured Wi-Fi path, then runs the matching workflow once per association without requiring the app to stay open. Portal-specific scripts are never bundled with InputPilot.
+- Fix captive portal saves being rejected after a successful BLE upload because the firmware dropped the first digit of the commit token. The app also emits backward-compatible tokens so saving works immediately with affected 0.9.3 beta firmware instead of waiting for a Wi-Fi fallback timeout.
+- Make captive-portal HTTPS reliable under Wi-Fi+BLE memory pressure by allocating only the active client, returning 2 KiB of overprovisioned task stack to the heap, bounding TLS handshakes, and retrying a refused TCP/TLS connection before failing the run. Network failures now use complete compact codes instead of truncating messages such as `NETWORK:connection refus`, and TLS allocation failures remain distinguishable from an actual refused TCP socket.
+
+- Fix Wi-Fi handoff and fallback recovery: AP+STA joins no longer make iOS cache the temporary `192.168.4.1` gateway, Device Settings persist an MRU history of authenticated station addresses (including iPhone Personal Hotspot leases), Wi-Fi management works without BLE, stale endpoints may self-heal from an already authenticated BLE session, and an enabled fallback AP remains available while saved networks are retried.
+- Reduce interactive transport latency with a 15 ms BLE connection request, 20 ms advertising, best-effort 2M PHY/data-length extension, dynamically negotiated ATT write sizes, faster pointer/scroll coalescing and OTA flow-control polling, TCP no-delay, and disabled Wi-Fi modem sleep while USB-powered.
 - Execute complete presets autonomously on the ESP32 after an acknowledged, resumable and checksummed BLE/Wi-Fi upload. Long delays continue when iOS or Shortcuts exits, the app restores device-side run status, and Stop Preset aborts on the firmware and releases all input.
 - Finalize 0.9.0 with a single Control connection summary plus live Bluetooth/Wi-Fi badges, Device Details routing into the shared Control tab, Settings-only transport selection, pointer sensitivity above the trackpad, and the established Devices and Control tab iconography.
 - Persist app diagnostics across relaunches and crashes and retain the firmware log tail in checksum-protected RTC memory across software, panic and watchdog resets.

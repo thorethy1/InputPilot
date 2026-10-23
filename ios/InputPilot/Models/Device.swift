@@ -48,7 +48,10 @@ struct Device: Identifiable, Codable, Equatable, Sendable {
     init(status: DeviceStatus, deviceId: String, endpointHost: String) {
         id = deviceId
         displayName = status.name
-        mdnsHost = status.mdns ?? endpointHost
+        mdnsHost = status.mdns ?? (
+            DeviceEndpointResolver.sanitizeHost(endpointHost) == DeviceEndpointResolver.softAPHost
+                ? "" : endpointHost
+        )
         staIP = DeviceEndpointResolver.directAddress(reportedSTAIP: status.staIp, fallbackHost: endpointHost)
         jiggleEnabled = status.jiggle
         moveIntervalMs = status.jiggleIntervalMs
@@ -72,6 +75,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
     let clickEnabled: Bool
     let clickIntervalMs: Int
     let staIp: String?
+    let wireGuardIP: String?
     let mdns: String?
     let protocolVersion: Int
     let capabilities: [String]
@@ -88,6 +92,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         case clickEnabled = "click_enabled"
         case clickIntervalMs = "click_interval_ms"
         case staIp = "sta_ip"
+        case wireGuardIP = "wireguard_ip"
         case mdns
         case protocolVersion = "protocol_version"
         case capabilities
@@ -105,6 +110,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         clickEnabled: Bool = false,
         clickIntervalMs: Int = 60_000,
         staIp: String? = nil,
+        wireGuardIP: String? = nil,
         mdns: String? = nil,
         protocolVersion: Int = 0,
         capabilities: [String] = [],
@@ -120,6 +126,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         self.clickEnabled = clickEnabled
         self.clickIntervalMs = clickIntervalMs
         self.staIp = staIp
+        self.wireGuardIP = wireGuardIP
         self.mdns = mdns
         self.protocolVersion = protocolVersion
         self.capabilities = capabilities
@@ -138,6 +145,7 @@ struct DeviceStatus: Codable, Equatable, Sendable {
         clickEnabled = try container.decodeIfPresent(Bool.self, forKey: .clickEnabled) ?? false
         clickIntervalMs = try container.decodeIfPresent(Int.self, forKey: .clickIntervalMs) ?? 60_000
         staIp = try container.decodeIfPresent(String.self, forKey: .staIp)
+        wireGuardIP = try container.decodeIfPresent(String.self, forKey: .wireGuardIP)
         mdns = try container.decodeIfPresent(String.self, forKey: .mdns)
         protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
@@ -157,5 +165,48 @@ struct KeepAwakeSettings: Codable, Equatable, Sendable {
         case moveIntervalMs = "move_interval_ms"
         case clickEnabled = "click_enabled"
         case clickIntervalMs = "click_interval_ms"
+    }
+}
+
+struct SecureWiFiStatus: Decodable, Equatable, Sendable {
+    struct Provisioning: Decodable, Equatable, Sendable {
+        let state: String
+        let error: String
+    }
+
+    let state: String
+    let ip: String
+    let deviceId: String
+    let provisioning: Provisioning?
+    let radioMode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state, ip, provisioning
+        case deviceId = "device_id"
+        case radioMode = "radio_mode"
+    }
+}
+
+enum SecureWiFiHandoffState: Equatable {
+    case connecting
+    case station(String)
+    case softAP
+    case failed(String)
+}
+
+extension SecureWiFiStatus {
+    func handoffState(expectedDeviceId: String) -> SecureWiFiHandoffState? {
+        guard deviceId.caseInsensitiveCompare(expectedDeviceId) == .orderedSame else { return nil }
+        let stationHost = DeviceEndpointResolver.sanitizeHost(ip)
+        if state == "connected", !stationHost.isEmpty {
+            return .station(stationHost)
+        }
+        if let provisioning, provisioning.state == "failed" {
+            return .failed(provisioning.error)
+        }
+        if state == "soft_ap", provisioning?.state != "connecting" {
+            return .softAP
+        }
+        return .connecting
     }
 }

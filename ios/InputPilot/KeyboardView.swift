@@ -260,24 +260,8 @@ private extension View {
         }
     }
 
-    @ViewBuilder
     func keyboardPanelSurface() -> some View {
-        if #available(iOS 26.0, *) {
-            glassEffect(
-                .regular,
-                in: RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
-            )
-        } else {
-            self
-                .background(
-                    .thinMaterial,
-                    in: RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: AppTheme.Radius.card, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-                )
-        }
+        inputPilotSurface()
     }
 
     @ViewBuilder

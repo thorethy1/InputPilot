@@ -34,6 +34,8 @@
 #include "SecureReplySizing.h"
 #include "USBIdentityConfig.h"
 #include "WifiManagement.h"
+#include "CaptivePortalAutomation.h"
+#include "WireGuardManager.h"
 
 RadioManager g_radio;
 
@@ -245,6 +247,31 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     sendSecureReply(source, session, reply);
     return true;
   }
+  if (message.rfind("CAPTIVE ", 0) == 0) {
+    std::string reply;
+    if (g_otaEngine.active() && message != "CAPTIVE STATUS" &&
+        message != "CAPTIVE LIST" && message.rfind("CAPTIVE GET ", 0) != 0 &&
+        message.rfind("CAPTIVE READ ", 0) != 0) {
+      reply = "error ota_busy";
+    } else if (!g_captivePortalAutomation.handleCommand(message, reply)) {
+      reply = "error captive_invalid";
+    }
+    sendSecureReply(source, session, reply);
+    return true;
+  }
+  if (message.rfind("WIREGUARD ", 0) == 0) {
+    std::string reply;
+    const bool readOnly = message == "WIREGUARD STATUS" ||
+                          message == "WIREGUARD PEER" ||
+                          message.rfind("WIREGUARD SSID ", 0) == 0;
+    if (g_otaEngine.active() && !readOnly) {
+      reply = "error ota_busy";
+    } else if (!g_wireGuardManager.handleCommand(message, reply)) {
+      reply = "error wireguard_invalid";
+    }
+    sendSecureReply(source, session, reply);
+    return true;
+  }
   if (message == "DIAGNOSTICS INFO") {
     sendSecureReply(source, session, strcmp(source, "ble") == 0
                                          ? g_bleDiagnostics.compactInfoJson()
@@ -427,6 +454,10 @@ bool dispatchProtocolCommand(const std::string &message, const char *source,
     return true;
   }
   if (message.rfind("START ", 0) == 0) {
+    if (g_captivePortalAutomation.active()) {
+      sendSecureReply(source, session, "error captive_in_progress");
+      return true;
+    }
     if (devicePresetActive()) {
       sendSecureReply(source, session, "error preset_in_progress");
       return true;
@@ -714,6 +745,76 @@ void processBLEControlFrames(size_t budget = 8) {
     if (frame.length > 1 && frame.bytes[0] == 0xFE)
       frame.bytes[0] = 0xFD;
     if (frame.length > 1 && frame.bytes[0] == 0xFD) {
+      // Binary captive workflow BEGIN keeps maximum-length UTF-8 SSIDs within
+      // the bounded ATT frame: marker, op, token, delay, size, checksum,
+      // enabled, SSID length, SSID bytes.
+      if (frame.bytes[1] == 7 && frame.length >= 23) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t delayMs = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                 (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                 (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                 static_cast<uint32_t>(frame.bytes[13]);
+        const size_t size = (static_cast<size_t>(frame.bytes[14]) << 8) |
+                            static_cast<size_t>(frame.bytes[15]);
+        const uint32_t checksum = (static_cast<uint32_t>(frame.bytes[16]) << 24) |
+                                  (static_cast<uint32_t>(frame.bytes[17]) << 16) |
+                                  (static_cast<uint32_t>(frame.bytes[18]) << 8) |
+                                  static_cast<uint32_t>(frame.bytes[19]);
+        const bool enabled = frame.bytes[20] == 1;
+        const size_t ssidLength = frame.bytes[21];
+        std::string reply;
+        if (frame.length != 22 + ssidLength || ssidLength == 0 ||
+            frame.bytes[20] > 1 || g_otaEngine.active()) {
+          reply = g_otaEngine.active() ? "error ota_busy" : "error captive_invalid";
+        } else {
+          const String ssid(reinterpret_cast<const char *>(frame.bytes + 22), ssidLength);
+          g_captivePortalAutomation.beginUpload(token, ssid, delayMs, size,
+                                                checksum, enabled, reply);
+        }
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
+      // Binary captive DATA: marker, op, token, 32-bit offset, raw UTF-8 bytes.
+      if (frame.bytes[1] == 8 && frame.length > 14) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t offset = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                static_cast<uint32_t>(frame.bytes[13]);
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else g_captivePortalAutomation.writeUpload(token, offset, frame.bytes + 14,
+                                                   frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
+      // Binary WireGuard DATA: marker, op, token, 32-bit offset, raw .conf.
+      if (frame.bytes[1] == 9 && frame.length > 14) {
+        uint64_t token = 0;
+        for (size_t i = 0; i < 8; ++i) token = (token << 8) | frame.bytes[2 + i];
+        const uint32_t offset = (static_cast<uint32_t>(frame.bytes[10]) << 24) |
+                                (static_cast<uint32_t>(frame.bytes[11]) << 16) |
+                                (static_cast<uint32_t>(frame.bytes[12]) << 8) |
+                                static_cast<uint32_t>(frame.bytes[13]);
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else g_wireGuardManager.writeUpload(token, offset, frame.bytes + 14,
+                                            frame.length - 14, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
+      // Binary WireGuard policy SSID: marker, op, length, raw UTF-8 SSID.
+      if (frame.bytes[1] == 10 && frame.length >= 3) {
+        const size_t ssidLength = frame.bytes[2];
+        std::string reply;
+        if (g_otaEngine.active()) reply = "error ota_busy";
+        else if (frame.length != 3 + ssidLength) reply = "error wireguard_policy";
+        else g_wireGuardManager.addPolicySSID(frame.bytes + 3, ssidLength, reply);
+        sendSecureReply("ble", s_bleSecureSession, reply);
+        continue;
+      }
       // Binary preset data: marker, operation, 64-bit token, 32-bit offset,
       // then raw bytecode. Every BLE chunk receives an encrypted app-level ACK.
       if (frame.bytes[1] == 6 && frame.length > 14) {
@@ -902,12 +1003,33 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     uint32_t generation = s_bleConnectionGeneration + 1;
     if (generation == 0) generation = 1;
     s_bleConnectionGeneration = generation;
-    // Ask iOS for a low-latency, zero-slave-latency link. The peer remains free
-    // to choose compatible values; these bounds improve sustained OTA writes
-    // without making reconnection depend on an aggressive single interval.
-    server->updateConnParams(handle, 12, 24, 0, 400);
+    // Apple permits a fixed 15 ms interval and remains free to scale it when
+    // radio conditions require. Zero peripheral latency keeps interactive HID
+    // traffic responsive; the 6 s supervision timeout follows current Apple
+    // accessory guidance. DLE and 2M PHY are best-effort and transparently
+    // remain at the peer-selected values when unsupported.
+    server->updateConnParams(handle, 12, 12, 0, 600);
+    server->setDataLen(handle, 251);
+    const bool requested2M = server->updatePhy(
+        handle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
+    LOG_BLE("performance requested handle=%u interval=15ms latency=0 data_len=251 phy_2m=%s",
+            handle, requested2M ? "yes" : "no");
     LOG_BLE("central connected handle=%u; secure authentication starts on protocol traffic timeout=%lums",
             handle, static_cast<unsigned long>(BLE_SECURE_AUTH_TIMEOUT_MS));
+  }
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo &info) override {
+    LOG_BLE("mtu negotiated handle=%u mtu=%u att_payload=%u",
+            info.getConnHandle(), mtu, mtu > 3 ? mtu - 3 : 0);
+  }
+  void onConnParamsUpdate(NimBLEConnInfo &info) override {
+    LOG_BLE("connection parameters handle=%u interval_x1.25ms=%u latency=%u timeout_x10ms=%u",
+            info.getConnHandle(), info.getConnInterval(), info.getConnLatency(),
+            info.getConnTimeout());
+  }
+  void onPhyUpdate(NimBLEConnInfo &info, uint8_t txPhy,
+                   uint8_t rxPhy) override {
+    LOG_BLE("phy updated handle=%u tx=%u rx=%u", info.getConnHandle(), txPhy,
+            rxPhy);
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &info, int reason) override {
     const uint16_t handle = info.getConnHandle();
@@ -1000,12 +1122,12 @@ bool RadioManager::setMode(RadioMode m) {
 // ---------------------------------------------------------------------------
 // WiFi (STA with NVS creds, or Soft-AP setup portal)
 // ---------------------------------------------------------------------------
-void RadioManager::startSoftAp() {
+void RadioManager::startSoftAp(bool markProvisioningFailure) {
   staConnecting_ = false;
   staRetryPreservesSoftAp_ = false;
   softAp_ = true;
   softApStartedMs_ = millis();
-  if (provisioningState_ == "connecting") {
+  if (markProvisioningFailure && provisioningState_ == "connecting") {
     provisioningState_ = "failed";
     provisioningError_ = "network_unreachable";
   }
@@ -1053,6 +1175,22 @@ bool RadioManager::softApInterfaceReady() const {
   return ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0;
 }
 
+void RadioManager::startStaWithFallback(const String &ssid, const String &pass,
+                                        size_t credentialIndex) {
+  if (WifiCredentials::fallbackApEnabled()) {
+    // Make the recovery path available immediately, including after a live
+    // station connection disappears. AP+STA keeps it up while every saved
+    // credential is tried asynchronously.
+    startSoftAp(false);
+    if (softAp_) {
+      startSta(ssid, pass, credentialIndex, true);
+      return;
+    }
+    LOG_WIFI("fallback AP unavailable during station connect; continuing with STA only");
+  }
+  startSta(ssid, pass, credentialIndex);
+}
+
 void RadioManager::startSta(const String &ssid, const String &pass,
                             size_t credentialIndex, bool preserveSoftAp) {
   fallbackWaiting_ = false;
@@ -1060,6 +1198,10 @@ void RadioManager::startSta(const String &ssid, const String &pass,
   if (!staRetryPreservesSoftAp_) softAp_ = false;
   staCredentialIndex_ = credentialIndex;
   WiFi.mode(staRetryPreservesSoftAp_ ? WIFI_AP_STA : WIFI_STA);
+  // USB power removes the energy trade-off. Disabling station modem sleep
+  // avoids DTIM-sized receive latency; the ESP32 coexistence scheduler still
+  // reserves BLE radio time while both transports are enabled.
+  WiFi.setSleep(false);
   WiFi.begin(ssid.c_str(), pass.c_str());
   LOG_WIFI("connecting to %s (candidate %u/%u ap_preserved=%s) ...", ssid.c_str(),
            static_cast<unsigned>(credentialIndex + 1),
@@ -1173,7 +1315,7 @@ void RadioManager::serviceStaConnection() {
     const size_t next = (staCredentialIndex_ + 1) % count;
     const WifiCreds candidate = WifiCredentials::get(next);
     staDisconnectedSinceMs_ = 0;
-    startSta(candidate.ssid, candidate.pass, next);
+    startStaWithFallback(candidate.ssid, candidate.pass, next);
     return;
   }
   if (WiFi.status() == WL_CONNECTED) {
@@ -1220,7 +1362,7 @@ void RadioManager::startWifi() {
     startSoftAp();
     return;
   }
-  startSta(c.ssid, c.pass, 0);
+  startStaWithFallback(c.ssid, c.pass, 0);
 }
 
 void RadioManager::stopWifiServices() {
@@ -1238,6 +1380,7 @@ void RadioManager::stopWifiServices() {
 }
 
 void RadioManager::stopWifi() {
+  g_wireGuardManager.stop();
   stopWifiServices();
   staConnecting_ = false;
   staRetryPreservesSoftAp_ = false;
@@ -1285,16 +1428,11 @@ void RadioManager::applyFallbackApPreference() {
 }
 
 std::string RadioManager::wifiStatusJson() const {
-  const char *state = "disconnected";
+  const bool stationConnected = WiFi.status() == WL_CONNECTED;
+  const char *state = WifiFallbackPolicy::connectionState(
+      staConnecting_, stationConnected, softAp_, wifiEnabled(), fallbackWaiting_);
   String ip;
-  if (softAp_) {
-    state = "soft_ap";
-  } else if (WiFi.status() == WL_CONNECTED) {
-    state = "connected";
-    ip = WiFi.localIP().toString();
-  } else if (wifiEnabled() && !fallbackWaiting_) {
-    state = "connecting";
-  }
+  if (stationConnected && !staConnecting_) ip = WiFi.localIP().toString();
   return "{\"state\":\"" + std::string(state) + "\",\"ip\":\"" +
          std::string(ip.c_str()) + "\",\"device_id\":\"" +
          std::string(DeviceIdentity::deviceId()) +
@@ -1398,6 +1536,9 @@ void RadioManager::startBle() {
                            adv->setAdvertisementData(advData) &&
                            adv->setScanResponseData(scanData);
     adv->enableScanResponse(true);
+    // Apple's fastest recommended discovery interval for a connectable BLE
+    // accessory is exactly 20 ms (32 * 0.625 ms).
+    adv->setAdvertisingInterval(32);
     LOG_BLE("advertising payload bytes=%u scan-response bytes=%u",
             static_cast<unsigned>(advData.getPayload().size()),
             static_cast<unsigned>(scanData.getPayload().size()));

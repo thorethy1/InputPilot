@@ -279,7 +279,8 @@ struct TrackpadInputBridge: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
-        view.backgroundColor = .secondarySystemBackground
+        view.backgroundColor = .clear
+        view.isOpaque = false
         view.layer.cornerRadius = AppTheme.Radius.trackpad
         view.accessibilityLabel = "Remote trackpad"
 

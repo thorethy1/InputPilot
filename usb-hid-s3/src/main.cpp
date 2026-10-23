@@ -29,8 +29,10 @@
 #include "RadioMode.h"
 #include "RadioManager.h"
 #include "StatusLed.h"
+#include "CaptivePortalAutomation.h"
 #include "USBIdentityConfig.h"
 #include "WifiCredentials.h"
+#include "WireGuardManager.h"
 #include "BLEOTA.h"
 #include "OTAEngine.h"
 #include "FirmwareMetadata.h"
@@ -1071,6 +1073,8 @@ void setup() {
 
   // NVS WiFi creds (seed from compile-time WIFI_SSID on first boot).
   WifiCredentials::begin();
+  g_captivePortalAutomation.begin();
+  g_wireGuardManager.begin();
 
   // Bring up the default radio (compile-time selectable; runtime via `radio`).
   RadioMode initial = RadioMode::None;
@@ -1089,6 +1093,8 @@ void loop() {
   serviceSerialCommands();
   servicePairingButton();
   g_radio.loop();
+  g_captivePortalAutomation.loop();
+  g_wireGuardManager.loop();
   servicePresetEngine();
   processHIDQueue(6);
   g_statusLed.loop();
@@ -1102,5 +1108,7 @@ void loop() {
              g_jiggle.isClickEnabled() ? "on" : "off",
              g_radio.statusStr());
   }
-  delay(2);
+  // Keep the cooperative Arduino task responsive to freshly queued BLE/TCP
+  // input while still yielding to the radio and USB stacks every iteration.
+  delay(1);
 }

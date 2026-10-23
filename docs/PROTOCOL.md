@@ -61,6 +61,12 @@ characteristics remain for BLE flow control, but every OTA control/data write
 is an encrypted record from that same session. Diagnostics are encrypted
 commands and responses on Control/Status rather than separate characteristics.
 
+The peripheral requests an ATT MTU up to 517, but the central selects the
+negotiated value. Clients therefore use CoreBluetooth's per-connection maximum
+write length instead of assuming a fixed iOS MTU. For example, an ATT MTU of
+185 exposes 182 bytes for a normal ATT value; secure framing and the OTA offset
+reduce the firmware bytes in that write further.
+
 ## Wi-Fi mapping
 
 TCP port 3333 carries the handshake and encrypted records on both SoftAP and
@@ -154,6 +160,57 @@ while a preset is active, and preset start/upload is rejected during OTA.
 - Automatic transport selection considers only authenticated ready sessions.
   It never introduces a less secure transport.
 
+## Captive portal workflows
+
+Firmware advertising `captive_portal_scripts` accepts authenticated `CAPTIVE`
+commands over BLE or Wi-Fi Secure Protocol v2. Workflows are associated with an
+exact saved SSID, persisted in NVS, and executed by the firmware once per new
+station association after the configured delay. Uploads use FNV-1a checksums and
+become active only after a complete `COMMIT`.
+
+- `CAPTIVE LIST` and `CAPTIVE GET <index>` enumerate metadata.
+- `CAPTIVE READ <index> <offset> <length>` retrieves editor content in bounded
+  hexadecimal chunks of at most 60 bytes.
+- `CAPTIVE BEGIN <token> <ssid-hex> <delay-ms> <size> <checksum> <enabled>`,
+  `CAPTIVE DATA <token> <offset> <hex>`, and `CAPTIVE COMMIT <token>` form the
+  transactional upload.
+- BLE may carry BEGIN as binary management operation `0x07` and DATA as `0x08`
+  after the authenticated `0xFE` marker; integers are big-endian and DATA keeps
+  the script bytes unexpanded. `CAPTIVE ABORT <token>` safely clears only the
+  matching incomplete upload.
+- `CAPTIVE REMOVE <ssid-hex>` removes one workflow.
+- `CAPTIVE RUN <ssid-hex>` tests a workflow only while that exact SSID is live.
+- `CAPTIVE STATUS` reports `idle`, `waiting`, `running`, `success`,
+  `already_connected`, or `failed`, plus the SSID, message, stable error code,
+  and device-uptime timestamp.
+
+The DSL and its security boundaries are documented in
+[Captive Portal Scripts](CAPTIVE_PORTAL_SCRIPTS.md). No POSIX shell source or
+portal-specific workflow is shipped in the app or firmware.
+
+## WireGuard client
+
+Firmware advertising `wireguard_client` accepts authenticated `WIREGUARD`
+commands over BLE or Wi-Fi Secure Protocol v2. A profile is installed by
+`WIREGUARD BEGIN <token> <size> <fnv1a32> <enabled>`, ordered `DATA` chunks,
+and `COMMIT`; `ABORT` drops an incomplete upload. BLE binary operation `0x09`
+carries the token, big-endian offset, and raw configuration bytes after the
+authenticated `0xFE` marker.
+
+`WIREGUARD POLICY BEGIN|ANY`, zero to five `POLICY ADD <ssid-hex>` commands,
+and `POLICY COMMIT` update the exact-SSID allow-list transactionally. BLE
+binary operation `0x0A` carries one length-prefixed raw SSID. `ENABLE 0|1` and
+`REMOVE` control or erase the profile. `STATUS` returns compact JSON with keys
+`c` (configured), `e` (enabled), `s` (state), `ip`, `r` (restricted), `n`
+(SSID count), and `x` (error). `PEER` returns the non-secret endpoint in `p`,
+and `SSID <index>` returns one non-secret allow-list entry. Keys are never
+returned. Separate bounded queries keep every response within common BLE MTUs.
+
+The tunnel is an additional ESP32 lwIP interface. TCP 3333 remains protected
+by the same device identity and USB-established trust secret when reached at
+the tunnel address. Format, routing limitations, setup, and storage behavior
+are documented in [ESP32 WireGuard client](WIREGUARD.md).
+
 ## Wi-Fi provisioning
 
 Wi-Fi is optional. A trusted device can be added and controlled entirely over
@@ -192,6 +249,11 @@ The same command core is available to TCP sessions with `WIFI SETHEX
 state plus a `provisioning` object with `state` and `error`. A failed
 join is therefore reported as `network_unreachable` without changing the
 authentication state of the transport used to query it.
+While an enabled fallback AP is kept alive during a station join, the reported
+state remains `connecting`; `soft_ap` denotes a settled fallback state and must
+not be cached as the final station endpoint. Clients may retain identity-verified
+station addresses across networks and try them directly before mDNS; the shared
+Soft-AP gateway remains a final, identity-checked fallback only.
 
 The `capabilities` array describes protocol features and transports supported
 by this firmware/device; `ble_transport` and `wifi_transport` remain static for

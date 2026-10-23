@@ -1,39 +1,68 @@
 import Foundation
 import SwiftData
 
+enum InputPilotLinks {
+    static let webFlasher = URL(string: "https://thorethy1.github.io/InputPilot/en/")!
+    static let hardwareGuide = URL(string: "https://github.com/thorethy1/InputPilot/blob/main/usb-hid-s3/docs/HARDWARE.md")!
+    static let recommendedBoard = URL(string: "https://s.click.aliexpress.com/e/_EwoijzC")!
+}
+
+enum SetupHardwareReadiness: String, CaseIterable, Identifiable {
+    case ready, needsFirmware, needsHardware
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .ready: "My InputPilot is ready"
+        case .needsFirmware: "I have an unflashed board"
+        case .needsHardware: "I do not have the hardware yet"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .ready: "Current InputPilot firmware is already installed."
+        case .needsFirmware: "Install InputPilot with the Web Flasher first."
+        case .needsHardware: "See what you need and prepare at your own pace."
+        }
+    }
+    var icon: String {
+        switch self {
+        case .ready: "checkmark.circle"
+        case .needsFirmware: "arrow.down.to.line"
+        case .needsHardware: "shippingbox"
+        }
+    }
+}
+
 enum AddDeviceWizardStep: Equatable {
+    case welcome
+    case hardware
+    case firmware
+    case permissions
     case securePairing
     case bleScanning
     case confirmBLE(BLEDeviceMetadata)
+    case connectionTest
+    case mouseTest
+    case keyboardTest
+    case complete
+}
+
+enum DeviceSetupFlow: Equatable {
+    case addDevice
+    case firstRun
 }
 
 @MainActor
 final class AddDeviceWizardViewModel: ObservableObject {
-    private struct SecureWiFiStatus: Decodable {
-        struct Provisioning: Decodable {
-            let state: String
-            let error: String
-        }
-        let state: String
-        let ip: String
-        let deviceId: String
-        let provisioning: Provisioning?
-        let radioMode: String?
-
-        enum CodingKeys: String, CodingKey {
-            case state, ip, provisioning
-            case deviceId = "device_id"
-            case radioMode = "radio_mode"
-        }
-    }
-
     private enum WiFiHandoff {
         case connected(String)
         case failed(String)
         case unavailable
     }
 
-    @Published private(set) var step: AddDeviceWizardStep = .securePairing
+    let flow: DeviceSetupFlow
+    @Published private(set) var step: AddDeviceWizardStep
     @Published private(set) var candidates: [DiscoveredService] = []
     @Published private(set) var isSaving = false
     @Published var errorMessage: String?
@@ -41,14 +70,29 @@ final class AddDeviceWizardViewModel: ObservableObject {
     @Published var homeWifiSSID = ""
     @Published var homeWifiPassword = ""
     @Published var configureWiFi = true
+    @Published var hardwareReadiness: SetupHardwareReadiness = .ready
+    @Published var firmwareInstalled = false
     @Published private(set) var mergeMessage: String?
     @Published private(set) var securelyPairedDeviceId: String?
+    @Published private(set) var savedDeviceId: String?
     @Published private(set) var knownDevices = SavedDeviceIndex.empty
 
     private let browser: any BonjourBrowserProtocol
     private let apiClient: any DeviceAPIClientProtocol
+    private let preferredDeviceId: String?
+    private let resumeSavedDevice: Bool
 
-    init(browser: any BonjourBrowserProtocol = BonjourBrowser(), apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()) {
+    init(
+        flow: DeviceSetupFlow = .addDevice,
+        preferredDeviceId: String? = nil,
+        resumeSavedDevice: Bool = true,
+        browser: any BonjourBrowserProtocol = BonjourBrowser(),
+        apiClient: any DeviceAPIClientProtocol = DeviceAPIClient()
+    ) {
+        self.flow = flow
+        self.preferredDeviceId = preferredDeviceId
+        self.resumeSavedDevice = resumeSavedDevice
+        step = flow == .firstRun ? .welcome : .securePairing
         self.browser = browser
         self.apiClient = apiClient
     }
@@ -57,7 +101,63 @@ final class AddDeviceWizardViewModel: ObservableObject {
         if case let .confirmBLE(metadata) = step { metadata } else { nil }
     }
 
-    func updateKnownDevices(_ devices: [StoredDevice]) { knownDevices = SavedDeviceIndex(devices: devices) }
+    var supportsWiFiSetup: Bool {
+        guard let metadata = bleMetadata else { return false }
+        return metadata.capabilities.contains("wifi_transport") &&
+            metadata.capabilities.contains("secure_wifi_setup")
+    }
+
+    func updateKnownDevices(_ devices: [StoredDevice]) {
+        knownDevices = SavedDeviceIndex(devices: devices)
+        // A first-run device is persisted before the physical HID tests. If the
+        // app is terminated there, resume at the non-destructive connection
+        // check instead of asking for USB trust and credentials again.
+        let resumeDevice = devices.first { $0.deviceId.lowercased() == preferredDeviceId?.lowercased() } ?? devices.first
+        if flow == .firstRun, resumeSavedDevice, step == .welcome, let device = resumeDevice {
+            savedDeviceId = device.deviceId
+            step = .connectionTest
+        }
+    }
+
+    func continueFromWelcome() {
+        guard flow == .firstRun, step == .welcome else { return }
+        errorMessage = nil
+        step = .hardware
+    }
+
+    func continueFromHardware() {
+        guard flow == .firstRun, step == .hardware else { return }
+        errorMessage = nil
+        step = hardwareReadiness == .ready ? .permissions : .firmware
+    }
+
+    func continueFromFirmware() {
+        guard flow == .firstRun, step == .firmware, firmwareInstalled else { return }
+        errorMessage = nil
+        step = .permissions
+    }
+
+    func continueFromPermissions() {
+        guard flow == .firstRun, step == .permissions else { return }
+        step = .securePairing
+    }
+
+    func backToHardware() {
+        guard flow == .firstRun else { return }
+        errorMessage = nil
+        step = .hardware
+    }
+
+    func backFromPermissions() {
+        guard flow == .firstRun else { return }
+        step = hardwareReadiness == .ready ? .hardware : .firmware
+    }
+
+    func backToWelcome() {
+        guard flow == .firstRun else { return }
+        errorMessage = nil
+        step = .welcome
+    }
 
     func chooseSecureSetup() {
         browser.stopBrowsing()
@@ -84,10 +184,12 @@ final class AddDeviceWizardViewModel: ObservableObject {
         }
         guard metadata.protocolVersion == 2,
               metadata.capabilities.contains("secure_protocol_v2"),
-              metadata.capabilities.contains("secure_wifi_setup") else {
+              metadata.capabilities.contains("ble_transport") else {
             errorMessage = "This firmware is incompatible. Reflash current InputPilot firmware over USB."
             return
         }
+        configureWiFi = metadata.capabilities.contains("wifi_transport") &&
+            metadata.capabilities.contains("secure_wifi_setup")
         if let existing = knownDevices.match(deviceId: metadata.deviceId) {
             displayName = existing.displayName
             mergeMessage = "The secure transports will be merged with this InputPilot."
@@ -107,6 +209,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
         step = .securePairing
     }
 
+    func backFromPairing() {
+        if flow == .firstRun {
+            errorMessage = nil
+            step = .permissions
+        }
+    }
+
     func backFromConfirm() {
         browser.stopBrowsing()
         candidates = []
@@ -123,9 +232,41 @@ final class AddDeviceWizardViewModel: ObservableObject {
         homeWifiSSID = ""
         homeWifiPassword = ""
         configureWiFi = true
+        hardwareReadiness = .ready
+        firmwareInstalled = false
         mergeMessage = nil
         securelyPairedDeviceId = nil
-        step = .securePairing
+        savedDeviceId = nil
+        step = flow == .firstRun ? .welcome : .securePairing
+    }
+    func connectionTestPassed() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .mouseTest
+    }
+
+    func mouseTestPassed() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .keyboardTest
+    }
+
+    func keyboardTestPassed() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .complete
+    }
+
+    func backToConnectionTest() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .connectionTest
+    }
+
+    func backToMouseTest() {
+        guard flow == .firstRun, savedDeviceId != nil else { return }
+        errorMessage = nil
+        step = .mouseTest
     }
 
     func saveDevice(context: ModelContext) async throws {
@@ -147,6 +288,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         if !configureWiFi {
             _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
             browser.stopBrowsing()
+            didSaveDevice(metadata.deviceId)
             return
         }
 
@@ -181,7 +323,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
         var lastVerificationFailure: String?
         var loggedFailures = Set<String>()
         while Date() < deadline, verified == nil {
-            var verificationCandidates = candidates
+            var verificationCandidates: [DiscoveredService] = []
             if let directHost {
                 verificationCandidates.append(DiscoveredService(
                     id: "secure-ble-handoff-\(metadata.deviceId)",
@@ -191,6 +333,7 @@ final class AddDeviceWizardViewModel: ObservableObject {
                     port: 80
                 ))
             }
+            verificationCandidates.append(contentsOf: candidates)
             verificationCandidates.append(DiscoveredService(
                 id: "soft-ap-fallback-\(metadata.deviceId)",
                 deviceId: metadata.deviceId,
@@ -198,8 +341,11 @@ final class AddDeviceWizardViewModel: ObservableObject {
                 host: DeviceEndpointResolver.softAPHost,
                 port: 80
             ))
-            for candidate in BonjourDiscoveryFilter.deduplicate(verificationCandidates) where
+            var attemptedEndpoints = Set<String>()
+            for candidate in verificationCandidates where
                 candidate.deviceId?.lowercased() == metadata.deviceId.lowercased() {
+                let endpointKey = "\(DeviceEndpointResolver.sanitizeHost(candidate.host).lowercased()):\(candidate.port)"
+                guard attemptedEndpoints.insert(endpointKey).inserted else { continue }
                 sawMatchingDiscovery = true
                 guard let baseURL = DeviceEndpointResolver.baseURL(host: candidate.host, port: candidate.port) else {
                     lastVerificationFailure = "The discovered network address was invalid."
@@ -252,6 +398,13 @@ final class AddDeviceWizardViewModel: ObservableObject {
         _ = try repository.addOrMergeBluetooth(metadata: metadata, displayName: trimmedName)
         _ = try await repository.addFromDiscovery(status: status, fallbackHost: candidate.host, displayName: trimmedName)
         browser.stopBrowsing()
+        didSaveDevice(metadata.deviceId)
+    }
+
+    private func didSaveDevice(_ deviceId: String) {
+        homeWifiPassword = ""
+        savedDeviceId = deviceId.lowercased()
+        if flow == .firstRun { step = .connectionTest }
     }
 
     private func waitForSecureWiFiAddress(
@@ -264,22 +417,22 @@ final class AddDeviceWizardViewModel: ObservableObject {
             do {
                 let reply = try await bluetooth.request("WIFI STATUS", timeout: 2)
                 let status = try JSONDecoder().decode(SecureWiFiStatus.self, from: Data(reply.utf8))
-                guard status.deviceId.lowercased() == expectedDeviceId.lowercased() else {
+                guard let handoffState = status.handoffState(expectedDeviceId: expectedDeviceId) else {
                     AppLog.shared.write(.errors, "BLE Wi-Fi handoff returned a different device identity")
                     return .failed("InputPilot returned a different secure device identity.")
                 }
-                if status.state == "connected", !status.ip.isEmpty {
-                    AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(status.ip)")
-                    return .connected(DeviceEndpointResolver.sanitizeHost(status.ip))
-                }
-                if status.state == "soft_ap" {
+                switch handoffState {
+                case let .station(host):
+                    AppLog.shared.write(.control, "BLE Wi-Fi handoff connected host=\(host)")
+                    return .connected(host)
+                case let .failed(error):
+                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(error)")
+                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
+                case .softAP:
                     AppLog.shared.write(.control, "BLE Wi-Fi handoff is using authenticated Soft-AP fallback host=\(DeviceEndpointResolver.softAPHost)")
                     return .connected(DeviceEndpointResolver.softAPHost)
-                }
-                if let provisioning = status.provisioning,
-                   provisioning.state == "failed" {
-                    AppLog.shared.write(.errors, "BLE Wi-Fi provisioning failed code=\(provisioning.error)")
-                    return .failed("InputPilot saved the network, but could not connect to it. Check the Wi-Fi name, password, and signal, then retry.")
+                case .connecting:
+                    break
                 }
             } catch {
                 AppLog.shared.write(.errors, "BLE Wi-Fi handoff status failed: \(error.localizedDescription)")

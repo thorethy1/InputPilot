@@ -74,14 +74,14 @@ struct SecretsView: View {
                         .buttonStyle(.borderedProminent)
                 }
             } else {
-                List {
+                InputPilotList {
                     ForEach(secrets) { secret in
                         row(secret)
                     }
                 }
             }
         }
-        .navigationTitle("Secrets")
+        .inputPilotBackground().navigationTitle("Secrets")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -301,7 +301,7 @@ private struct NewSecretSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     TextField("Name", text: $name, prompt: Text("work-password"))
                         .textInputAutocapitalization(.never)
@@ -327,7 +327,7 @@ private struct NewSecretSheet: View {
                     Text("The value is stored in the iOS Keychain. Presets reference it by name with [SECRET name].")
                 }
             }
-            .navigationTitle("New Secret")
+            .inputPilotBackground().navigationTitle("New Secret")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -358,7 +358,7 @@ private struct RenameSecretSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.never)
@@ -371,7 +371,7 @@ private struct RenameSecretSheet: View {
                     }
                 }
             }
-            .navigationTitle("Rename Secret")
+            .inputPilotBackground().navigationTitle("Rename Secret")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismissSheet() }
@@ -402,7 +402,7 @@ private struct ReplaceSecretValueSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     SecureField("New value", text: $value)
                         .privacySensitive()
@@ -412,7 +412,7 @@ private struct ReplaceSecretValueSheet: View {
                     Text("The old value is replaced immediately. The previous value is not shown.")
                 }
             }
-            .navigationTitle("Replace Value")
+            .inputPilotBackground().navigationTitle("Replace Value")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

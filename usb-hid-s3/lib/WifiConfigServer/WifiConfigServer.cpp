@@ -6,6 +6,7 @@
 #include "DeviceIdentity.h"
 #include "Logging.h"
 #include "ProtocolCapabilities.h"
+#include "WireGuardManager.h"
 
 extern bool deviceBleTransportEnabled();
 extern bool deviceWifiTransportEnabled();
@@ -24,6 +25,7 @@ String statusJson() {
                 String(DeviceIdentity::deviceId()) + "\",\"protocol_version\":2,";
   json += "\"ota_schema\":" + String(OTA_SCHEMA_VERSION) + ",";
   json += "\"secure_port\":" + String(WIFI_CONTROL_PORT) + ",";
+  json += "\"wireguard_ip\":\"" + String(g_wireGuardManager.tunnelIP()) + "\",";
   json += "\"trust_required\":";
   json += "true";
   json += ",\"capabilities\":";

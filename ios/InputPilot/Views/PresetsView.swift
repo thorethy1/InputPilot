@@ -413,7 +413,7 @@ struct PresetsView: View {
     }
 
     private var reorderList: some View {
-        List {
+        InputPilotList {
             ForEach(presets) { preset in
                 HStack {
                     Image(systemName: preset.icon)
@@ -659,7 +659,7 @@ private struct PresetEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            InputPilotForm {
                 Section {
                     TextField("Name", text: $name)
                     Picker("Icon", selection: $icon) {
@@ -730,7 +730,7 @@ private struct PresetEditorSheet: View {
                     }
                 }
             }
-            .navigationTitle(editingPreset == nil ? "New Preset" : "Edit Preset")
+            .inputPilotBackground().navigationTitle(editingPreset == nil ? "New Preset" : "Edit Preset")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

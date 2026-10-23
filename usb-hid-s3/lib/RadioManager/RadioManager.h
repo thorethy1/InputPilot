@@ -68,7 +68,9 @@ private:
   void stopBle();
   bool serviceBleDisconnect();
   void serviceBleAdvertising(bool immediate = false);
-  void startSoftAp();
+  void startSoftAp(bool markProvisioningFailure = true);
+  void startStaWithFallback(const String &ssid, const String &pass,
+                            size_t credentialIndex);
   void startSta(const String &ssid, const String &pass, size_t credentialIndex,
                 bool preserveSoftAp = false);
   void finishStaConnection();

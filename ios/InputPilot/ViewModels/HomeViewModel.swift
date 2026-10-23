@@ -95,7 +95,12 @@ final class HomeViewModel: ObservableObject {
     func refreshDevice(_ device: StoredDevice, context: ModelContext) async {
         wifiStates[device.deviceId] = .checking
         let repository = DeviceRepository(context: context)
-        let failed = await repository.refreshAll(devices: [device], api: apiClient)
+        var failed = await repository.refreshAll(devices: [device], api: apiClient)
+        if failed.contains(device.deviceId),
+           await recoverEndpointFromReadyBluetooth(device, context: context),
+           await repository.refresh(device: device, api: apiClient) {
+            failed.remove(device.deviceId)
+        }
         wifiStates[device.deviceId] = failed.contains(device.deviceId) ? .offline : .reachable
     }
 
@@ -123,10 +128,36 @@ final class HomeViewModel: ObservableObject {
         for deviceId in deviceIds where wifiStates[deviceId] == nil {
             wifiStates[deviceId] = .checking
         }
-        let failed = await repository.refreshAll(devices: devices, api: apiClient)
+        var failed = await repository.refreshAll(devices: devices, api: apiClient)
+        for device in devices where failed.contains(device.deviceId) {
+            if await recoverEndpointFromReadyBluetooth(device, context: context),
+               await repository.refresh(device: device, api: apiClient) {
+                failed.remove(device.deviceId)
+            }
+        }
         for deviceId in deviceIds {
             wifiStates[deviceId] = failed.contains(deviceId) ? .offline : .reachable
         }
+    }
+
+    /// BLE is an opportunistic discovery source, never a prerequisite: only an
+    /// already-authenticated session is queried after all saved IP/mDNS probes
+    /// failed.
+    private func recoverEndpointFromReadyBluetooth(
+        _ device: StoredDevice,
+        context: ModelContext
+    ) async -> Bool {
+        let bluetooth = InputPilotBluetoothManager.session(deviceId: device.deviceId)
+        guard bluetooth.state == .ready,
+              let reply = try? await bluetooth.request("WIFI STATUS", timeout: 2),
+              let status = try? JSONDecoder().decode(SecureWiFiStatus.self, from: Data(reply.utf8)),
+              let handoff = status.handoffState(expectedDeviceId: device.deviceId)
+        else { return false }
+        guard case let .station(host) = handoff else { return false }
+        device.promoteWiFiHost(host)
+        try? context.save()
+        await InputPilotWiFiManager.removeSessions(deviceId: device.deviceId)
+        return true
     }
 
     func setJiggle(device: StoredDevice, enabled: Bool, context: ModelContext) async {

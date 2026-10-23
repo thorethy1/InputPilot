@@ -36,6 +36,34 @@ replace this gate.
 
 ## Recovery matrix
 
+- Fresh app install: verify the eight-stage guide appears before any Bluetooth
+  or Local Network permission prompt. Exercise ready, unflashed, and no-hardware
+  paths. Open/share the Web Flasher, return to the app, and confirm installation
+  explicitly before USB trust. Verify Back preserves preparation choices.
+- Select Later before pairing, explore without hardware, and resume through
+  Guided Setup or Settings. Complete setup, relaunch, and verify the main tabs
+  appear. Interrupt after device persistence and verify connection-test resume.
+  With multiple saved devices, Settings → Start Setup Again must begin at
+  Welcome and include hardware/firmware preparation. Returning to Welcome and
+  refreshing the device list must not jump to the connection test. Canceling
+  the restarted guide must preserve the existing saved devices.
+- Verify German/US keyboard selection before the keyboard test and matching
+  layout in Control afterward. Test the guide at accessibility text sizes and
+  with VoiceOver; progress and hardware selection must be understandable.
+- Check ambient backgrounds in all tabs, pushed screens, setup, and editors in
+  light/dark mode. Change accent/palette live, disable backgrounds, and exercise
+  Reduce Motion, Reduce Transparency, and Increased Contrast. Background the
+  app and verify animation resumes without jumping through inactive time.
+- On iOS 26, verify Lara-style glass on device rows, firmware/settings sections,
+  the trackpad, keyboard panels, and setup/editor forms. The ambient colors must
+  remain visible through the surfaces in both light and dark mode. Verify
+  opaque surfaces with Reduce Transparency/Increased Contrast, and the system
+  material fallback on older iOS versions. Repeat trackpad move, scroll, pinch,
+  drag, taps, and gesture-help opening to confirm decoration does not intercept
+  input. Exercise list swipes, navigation, reordering, and form controls.
+- Device Details must show portal scripts as disabled on all firmware versions,
+  with no script editor, run/upload controls, or portal-status polling.
+
 - Cancel USB capture, malformed frame and pairing-secret storage failure.
 - Rotate the credential while BLE/TCP is connected; old sessions and old phone
   credentials must fail immediately, with no plaintext retry.

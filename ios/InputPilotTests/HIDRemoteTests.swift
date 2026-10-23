@@ -204,6 +204,23 @@ final class HIDRemoteTests: XCTestCase {
         XCTAssertEqual(manager.activeTransport, .tcp)
     }
 
+    @MainActor func testProtocolCoreRestoresMouseCapabilitiesOmittedFromBLEMetadata() async {
+        let ble = MockTransport(kind: .bluetooth, available: true)
+        let manager = HIDConnectionManager(
+            ble: ble,
+            tcp: MockTransport(kind: .tcp, available: false),
+            capabilities: ["secure_protocol_v2", "protocol_core", "ble_transport"]
+        )
+
+        XCTAssertTrue(manager.supports("mouse_move"))
+        XCTAssertTrue(manager.supports("mouse_click"))
+        XCTAssertTrue(manager.supports("mouse_button_state"))
+        XCTAssertTrue(manager.supports("mouse_scroll"))
+        let sent = await manager.send(.mouseMove(12, -4))
+        XCTAssertTrue(sent)
+        XCTAssertEqual(ble.events, [.mouseMove(12, -4)])
+    }
+
     @MainActor func testUnavailableWiFiAuthenticationDoesNotMaskReadyBluetooth() {
         let ble = MockTransport(kind: .bluetooth, state: .ready)
         let tcp = MockTransport(kind: .tcp, state: .authenticationFailed)

@@ -217,6 +217,8 @@ extension View {
 
 @main
 struct InputPilotApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var ambientClock = InputPilotAmbientClock()
     @AppStorage("appAppearance") private var appearanceName = AppAppearance.system.rawValue
     @AppStorage("appAccent") private var accentName = AppAccent.inputPilot.rawValue
     @AppStorage("customAccentHex") private var customAccentHex = AccentColorCodec.defaultCustomHex
@@ -226,9 +228,11 @@ struct InputPilotApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(ambientClock)
                 .tint(accent.color(customHex: customAccentHex))
                 .preferredColorScheme(appearance.colorScheme)
                 .onAppear {
+                    ambientClock.setActive(scenePhase == .active)
                     applyUIKitTint()
                     appLog(.diagnostics, "App launched")
                 }
@@ -237,6 +241,9 @@ struct InputPilotApp: App {
                 }
                 .onChange(of: accentName) { _, _ in applyUIKitTint() }
                 .onChange(of: customAccentHex) { _, _ in applyUIKitTint() }
+                .onChange(of: scenePhase) { _, phase in
+                    ambientClock.setActive(phase == .active)
+                }
         }
         .modelContainer(container)
     }
