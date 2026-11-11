@@ -1,5 +1,7 @@
 # InputPilot
 
+**Current stable release: [1.0.0](https://github.com/thorethy1/InputPilot/releases/tag/v1.0.0)** — iOS app and ESP32-S3 firmware.
+
 [![CI](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![Firmware + unit tests](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=Native%20unit%20tests%20%2B%20firmware%20build&label=firmware%20%2B%20unit%20tests)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
 [![iOS](https://img.shields.io/github/actions/workflow/status/thorethy1/InputPilot/ci.yml?branch=main&job=iOS%20build%20%2B%20unit%20tests&label=iOS)](https://github.com/thorethy1/InputPilot/actions/workflows/ci.yml)
@@ -126,7 +128,7 @@ Use the beta source to receive InputPilot prereleases:
 https://github.com/thorethy1/InputPilot/raw/main/app-repo-beta.json
 ```
 
-Add the desired URL as a source in AltStore Classic or another compatible sideloading app. Stable releases update `app-repo.json`; prereleases update `app-repo-beta.json`. The source metadata points to the matching validated unsigned IPA in GitHub Releases.
+Add the desired URL as a source in AltStore Classic or another compatible sideloading app. Stable releases update `app-repo.json`; prereleases update `app-repo-beta.json`. InputPilot 1.0.0 is available in both sources, using the same stable build. The source metadata points to the matching validated unsigned IPA in GitHub Releases.
 
 ## Layout
 

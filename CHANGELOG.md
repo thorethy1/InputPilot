@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## [1.0.0] — 2026-11-11
+
+- Publish the first stable 1.0 release with one shared version for the iOS app
+  and ESP32-S3 firmware. Stable and beta AltStore sources offer the same 1.0.0
+  release, including all features already integrated from the development branches.
+- Include the guided first-run setup, Lara-inspired native surfaces, autonomous
+  presets, Keychain Secrets, macros, Apple Shortcuts and ESP32-side WireGuard.
+- Captive portal script management remains disabled in the iOS app while its
+  workflows are unreliable; use Bluetooth or Wi-Fi without a browser login.
+
+### Changes carried forward from the 0.9 development series
 
 - Start the 1.0 first-run experience with welcome and hardware preparation,
   point-of-use Bluetooth and Local Network explanations, the existing
